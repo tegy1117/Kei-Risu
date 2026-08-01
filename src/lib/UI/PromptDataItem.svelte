@@ -10,6 +10,7 @@
     import TextInput from "./GUI/TextInput.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { RISU_PROMPT_DRAG_TYPE } from "src/ts/dragTypes";
+    import { v4 } from "uuid";
     
     interface Props {
         promptItem: PromptItem;
@@ -54,7 +55,7 @@
     }
 
     const hasPromptBlockRole = (promptItem: PromptItem): promptItem is PromptItem & { role2?: PromptRole } => {
-        return promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory'
+        return promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory' || promptItem.type === 'agentInfo'
     }
 
     const isPromptRole = (role: unknown): role is PromptRole => {
@@ -90,6 +91,9 @@
         }
         if(promptItem.type === 'memory'){
             return language.formating.memory
+        }
+        if(promptItem.type === 'agentInfo'){
+            return language.agentInfo ?? 'Agent Info'
         }
         if(promptItem.type === 'postEverything'){
             return language.formating.postEverything
@@ -262,6 +266,11 @@
                 promptItem.rangeStart = -1000
                 promptItem.rangeEnd = 'end'
             }
+            if(promptItem.type === 'agentInfo'){
+                promptItem.id ||= v4()
+                promptItem.role2 = 'system'
+                promptItem.innerFormat = '<AgentInfo name="{{agent_name}}">\n{{slot}}\n</AgentInfo>'
+            }
             if(hasPromptBlockRole(promptItem) && !isPromptRole(promptItem.role2)){
                 promptItem.role2 = 'system'
             }
@@ -274,6 +283,7 @@
             <OptionInput value="authornote">{language.formating.authorNote}</OptionInput>
             <OptionInput value="lorebook">{language.formating.lorebook}</OptionInput>
             <OptionInput value="memory">{language.formating.memory}</OptionInput>
+            <OptionInput value="agentInfo">{language.agentInfo ?? 'Agent Info'}</OptionInput>
             <OptionInput value="postEverything">{language.formating.postEverything}</OptionInput>
             <OptionInput value="chatML">{"chatML"}</OptionInput>
             <OptionInput value="cache">{language.cachePoint}</OptionInput>
@@ -344,10 +354,10 @@
             <span class="mt-2">{language.defaultPrompt}</span>
             <TextInput className="mt-2" bind:value={promptItem.defaultText} />
         {/if}
-        {#if promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory'}
+        {#if promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory' || promptItem.type === 'agentInfo'}
             {#if !promptItem.innerFormat}
                 <CheckInput name={language.customInnerFormat} check={false} className="mt-2" onChange={() => {
-                    if(promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory'){
+                    if(promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory' || promptItem.type === 'agentInfo'){
                         promptItem.innerFormat = "{{slot}}"
                     }
                 }} />
@@ -355,7 +365,7 @@
                 <span class="mt-2">{language.innerFormat}</span>
                 <TextAreaInput className="mt-2 mb-4" highlight bind:value={promptItem.innerFormat}/>
                 <CheckInput name={language.customInnerFormat} check={true} className="mt-2" onChange={() => {
-                    if(promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory'){
+                    if(promptItem.type === 'persona' || promptItem.type === 'description' || promptItem.type === 'authornote' || promptItem.type === 'memory' || promptItem.type === 'agentInfo'){
                         promptItem.innerFormat = null
                     }
                 }} />

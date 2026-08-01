@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { AccessibilityIcon, ActivityIcon, PackageIcon, BotIcon, CodeIcon, CogIcon, ContactIcon, FlaskConicalIcon, ImageIcon, LanguagesIcon, MonitorIcon, MonitorSmartphoneIcon, Sailboat, ScrollTextIcon, SearchIcon, UserIcon, CircleXIcon, KeyboardIcon, TruckIcon, FileBoxIcon, Volume2Icon, WrenchIcon } from "@lucide/svelte";
+    import { AccessibilityIcon, ActivityIcon, PackageIcon, BotIcon, CodeIcon, CogIcon, ContactIcon, FlaskConicalIcon, ImageIcon, LanguagesIcon, MonitorIcon, MonitorSmartphoneIcon, Sailboat, ScrollTextIcon, SearchIcon, UserIcon, CircleXIcon, KeyboardIcon, TruckIcon, FileBoxIcon, Volume2Icon, WrenchIcon, WorkflowIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import DisplaySettings from "./Pages/DisplaySettings.svelte";
     import NotificationSoundSettings from "./Pages/NotificationSoundSettings.svelte";
@@ -30,6 +30,7 @@
     import DevPanel from "src/lib/_dev/DevPanel.svelte";
     import SettingsSearch from "./SettingsSearch.svelte";
     import ToolSettings from "./Pages/Tool/ToolSettings.svelte";
+    import AgentPresetSettings from "./Pages/AgentPresetSettings.svelte";
 
     // Dev panel is opt-in via localStorage['risu-dev-panel']='1' in devtools.
     // Read once on mount — flag changes require reload. Gates both the menu
@@ -89,6 +90,13 @@
                     }}>
                         <ScrollTextIcon />
                         <span>{language.promptPresetMenu}</span>
+                    </button>
+                    <button class="flex gap-2 items-center hover:text-textcolor"
+                        class:text-textcolor={$SettingsMenuIndex === 19}
+                        class:text-textcolor2={$SettingsMenuIndex !== 19}
+                        onclick={() => { $SettingsMenuIndex = 19 }}>
+                        <WorkflowIcon />
+                        <span>{language.agent.menu}</span>
                     </button>
                     <button class="flex gap-2 items-center hover:text-textcolor"
                         class:text-textcolor={$SettingsMenuIndex === 12}
@@ -305,6 +313,8 @@
                             <PromptPresetSettings/>
                         {:else if $SettingsMenuIndex === 18}
                             <ToolSettings/>
+                        {:else if $SettingsMenuIndex === 19}
+                            <AgentPresetSettings/>
                         {:else if $SettingsMenuIndex === 23}
                             <InlayImageGallery/>
                         {:else if $SettingsMenuIndex === 21}

@@ -22,6 +22,7 @@ vi.mock('src/ts/util', () => ({ selectSingleFile: vi.fn() }))
 import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
 import {
     createToolExportPayload,
+    createMemoryToolResult,
     parseToolExport,
     resolveActiveToolPackages,
     toolWireName,
@@ -74,6 +75,19 @@ describe('built-in tool packages', () => {
             await new AsyncFunction('risuai', tool.plugin.source)(risuai)
             expect([...handlers.keys()]).toEqual(tool.functions.map((fn) => fn.name))
         }
+    })
+})
+
+describe('memory tool results', () => {
+    test('returns a structured-cloneable tag array when stored state is reactive', () => {
+        const reactiveTags = new Proxy(['character', 'plot'], {})
+        const result = createMemoryToolResult('chat', {
+            id: 'memory-1', title: 'Title', content: 'Content', tags: reactiveTags,
+            importance: 3, createdAt: 1, updatedAt: 2,
+        })
+
+        expect(result.tags).toEqual(['character', 'plot'])
+        expect(() => structuredClone(result)).not.toThrow()
     })
 })
 

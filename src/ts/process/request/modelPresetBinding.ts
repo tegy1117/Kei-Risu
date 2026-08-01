@@ -1,4 +1,4 @@
-import { getDatabase, type Chat, type Database } from 'src/ts/storage/database.svelte'
+import { getDatabase, type botPreset, type Chat, type Database } from 'src/ts/storage/database.svelte'
 import type { AdapterCredential } from 'src/ts/preset/adapter'
 import type { ModelPreset } from 'src/ts/preset/types'
 import type { ModelModeExtended } from './shared'
@@ -274,6 +274,29 @@ export function applyPromptPresetParams(
     // Shallow copy on purpose: the stored preset (db state) must not be mutated,
     // and adapters only read. profileSnapshot stays shared by reference.
     return { ...preset, userValues: { ...(preset.userValues ?? {}), ...overrides } }
+}
+
+export function applyExplicitPromptPresetParams(
+    preset: ModelPreset,
+    promptPreset: botPreset,
+    enabled: boolean,
+): ModelPreset {
+    if(!enabled) return preset
+    const schema = preset.profileSnapshot?.schema
+    if(!schema || schema.length === 0) return preset
+    const source = { ...getDatabase(), ...promptPreset } as Database
+    const overrides: Record<string, unknown> = {}
+    for(const field of schema){
+        if(field.mapsTo?.target !== 'body') continue
+        const read = PROMPT_PARAM_READERS[field.key]
+        if(!read) continue
+        const value = read(source)
+        if(value === undefined || value === null || Number.isNaN(value) || value === -1000) continue
+        overrides[field.key] = value
+    }
+    return Object.keys(overrides).length === 0
+        ? preset
+        : { ...preset, userValues: { ...(preset.userValues ?? {}), ...overrides } }
 }
 
 /**

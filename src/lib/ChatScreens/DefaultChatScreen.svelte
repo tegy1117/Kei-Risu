@@ -455,6 +455,11 @@ import { isMobile } from 'src/ts/platform'
 
         // Save existing swipes before clone replaces the array
         const savedSwipes = lastMsg.swipes ? [...lastMsg.swipes] : [lastMsg.data]
+        const savedAgentStates = lastMsg.agentSwipeStates
+            ? safeStructuredClone(lastMsg.agentSwipeStates)
+            : Array.from({ length: savedSwipes.length }, (_, index) => index === (lastMsg.swipeId ?? 0)
+                ? { displayData: lastMsg.displayData, agentRun: lastMsg.agentRun ? safeStructuredClone(lastMsg.agentRun) : undefined }
+                : {})
 
         // Generate new response
         // Preserve trailing comment/disabled messages (e.g. branch comments)
@@ -501,7 +506,22 @@ import { isMobile } from 'src/ts/platform'
         if (newLastMsg && !newLastMsg.swipes) {
             newLastMsg.swipes = [...savedSwipes, newLastMsg.data]
             newLastMsg.swipeId = newLastMsg.swipes.length - 1
+            newLastMsg.agentSwipeStates = [
+                ...savedAgentStates,
+                {
+                    displayData: newLastMsg.displayData,
+                    agentRun: newLastMsg.agentRun ? safeStructuredClone(newLastMsg.agentRun) : undefined,
+                },
+            ]
         }
+    }
+
+    function restoreAgentSwipeState(message: NonNullable<ReturnType<typeof getLastCharMsg>>) {
+        const state = message.agentSwipeStates?.[message.swipeId ?? 0]
+        if (state?.displayData !== undefined) message.displayData = state.displayData
+        else delete message.displayData
+        if (state?.agentRun) message.agentRun = safeStructuredClone(state.agentRun)
+        else delete message.agentRun
     }
 
     async function unReroll() {
@@ -511,6 +531,7 @@ import { isMobile } from 'src/ts/platform'
 
         lastMsg.swipeId = lastMsg.swipeId <= 0 ? lastMsg.swipes.length - 1 : lastMsg.swipeId - 1
         lastMsg.data = lastMsg.swipes[lastMsg.swipeId]
+        restoreAgentSwipeState(lastMsg)
         DBState.db.characters[$selectedCharID].reloadKeys += 1
     }
 
@@ -520,6 +541,7 @@ import { isMobile } from 'src/ts/platform'
 
         lastMsg.swipeId = lastMsg.swipeId >= lastMsg.swipes.length - 1 ? 0 : lastMsg.swipeId + 1
         lastMsg.data = lastMsg.swipes[lastMsg.swipeId]
+        restoreAgentSwipeState(lastMsg)
         DBState.db.characters[$selectedCharID].reloadKeys += 1
     }
 
@@ -529,15 +551,18 @@ import { isMobile } from 'src/ts/platform'
 
         const idx = lastMsg.swipeId ?? 0
         lastMsg.swipes.splice(idx, 1)
+        lastMsg.agentSwipeStates?.splice(idx, 1)
 
         if (idx >= lastMsg.swipes.length) {
             lastMsg.swipeId = lastMsg.swipes.length - 1
         }
         lastMsg.data = lastMsg.swipes[lastMsg.swipeId]
+        restoreAgentSwipeState(lastMsg)
 
         if (lastMsg.swipes.length === 1) {
             delete lastMsg.swipes
             delete lastMsg.swipeId
+            delete lastMsg.agentSwipeStates
         }
         DBState.db.characters[$selectedCharID].reloadKeys += 1
     }

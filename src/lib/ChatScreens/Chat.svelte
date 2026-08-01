@@ -130,8 +130,16 @@
     async function edit(){
         const msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         msg.data = message
+        delete msg.displayData
+        if (msg.agentRun) {
+            msg.agentRun.status = 'superseded'
+            msg.agentRun.supersededByEditAt = Date.now()
+        }
         if (msg.swipes && msg.swipeId !== undefined) {
             msg.swipes[msg.swipeId] = message
+            if (msg.agentSwipeStates?.[msg.swipeId]) {
+                msg.agentSwipeStates[msg.swipeId] = { agentRun: msg.agentRun }
+            }
         }
     }
 
@@ -140,8 +148,16 @@
             message = e.detail.newData
             const msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
             msg.data = e.detail.newData
+            delete msg.displayData
+            if (msg.agentRun) {
+                msg.agentRun.status = 'superseded'
+                msg.agentRun.supersededByEditAt = Date.now()
+            }
             if (msg.swipes && msg.swipeId !== undefined) {
                 msg.swipes[msg.swipeId] = e.detail.newData
+                if (msg.agentSwipeStates?.[msg.swipeId]) {
+                    msg.agentSwipeStates[msg.swipeId] = { agentRun: msg.agentRun }
+                }
             }
             displaya(e.detail.newData)
         }
@@ -340,6 +356,24 @@
 
 {#snippet genInfo()}
     <div class="flex flex-col items-end">
+        {#if idx >= 0 && DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage]?.message?.[idx]?.agentRun}
+            {@const run = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[idx].agentRun!}
+            <details class="text-xs text-textcolor2 border border-darkborderc rounded-md mr-2 my-1 max-w-[min(80vw,28rem)]">
+                <summary class="cursor-pointer p-2 text-textcolor">{language.agent.runDetails} · {run.agentPresetName} · {run.status}</summary>
+                <div class="px-2 pb-2 flex flex-col gap-2">
+                    {#each run.nodes as node (node.nodeId)}
+                        <div class="border-t border-darkborderc pt-2">
+                            <div class="text-textcolor">{node.nodeName} · {node.status}</div>
+                            {#if node.promptPresetName}<div>{language.agent.promptPreset}: {node.promptPresetName}</div>{/if}
+                            {#if node.modelPresetName}<div>{language.agent.modelPreset}: {node.modelPresetName}</div>{/if}
+                            {#if node.error}<div class="text-draculared whitespace-pre-wrap">{node.error}</div>{/if}
+                            {#if node.output}<pre class="mt-1 whitespace-pre-wrap max-h-40 overflow-auto text-textcolor2">{node.output}</pre>{/if}
+                        </div>
+                    {/each}
+                    {#each run.warnings as warning}<div class="text-yellow-400">{warning}</div>{/each}
+                </div>
+            </details>
+        {/if}
         {#if messageGenerationInfo && (DBState.db.requestInfoInsideChat || aiLawApplies())}
             <button class="text-sm p-1 text-textcolor2 border-darkborderc float-end mr-2 my-1
                     hover:ring-darkbutton hover:ring-3 rounded-md hover:text-textcolor transition-all flex justify-center items-center" 

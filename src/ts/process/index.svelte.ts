@@ -29,6 +29,7 @@ import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
+import { runAgentPipeline, type AgentMainPromptContext } from "../agent/runtime";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -59,14 +60,27 @@ export let requestTokenParts:{[key:string]:requestTokenPart[]} = {}
 export let previewFormated:OpenAIChat[] = []
 export let previewBody:string = ''
 
-export async function sendChat(chatProcessIndex = -1,arg:{
+export interface SendChatArgs {
     chatAdditonalTokens?:number,
     signal?:AbortSignal,
     continue?:boolean,
     usedContinueTokens?:number,
     preview?:boolean
     previewPrompt?:boolean
-} = {}):Promise<boolean> {
+    agentContext?: AgentMainPromptContext
+}
+
+export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): Promise<boolean> {
+    return runAgentPipeline({
+        signal: arg.signal,
+        continue: arg.continue,
+        preview: arg.preview,
+        previewPrompt: arg.previewPrompt,
+        runMain: (agentContext) => sendChatCore(chatProcessIndex, { ...arg, agentContext }),
+    })
+}
+
+async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise<boolean> {
 
     chatProcessStage.set(0)
     const abortSignal = arg.signal ?? (new AbortController()).signal
@@ -179,7 +193,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     const realChatId = guardChar?.chats?.[guardChar.chatPage]?.id
     const genKey = chatGenKey(realChatId)
 
-    if(isChatGenerating(genKey)){
+    if(isChatGenerating(genKey) && !arg.agentContext){
         if(chatProcessIndex === -1){
             return false
         }
@@ -1328,6 +1342,33 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     pushPrompts(pmt)
                     break
                 }
+                case 'agentInfo':{
+                    const context = arg.agentContext
+                    const activePromptId = DBState.db.botPresets[DBState.db.botPresetsId]?.id ?? ''
+                    const sourceIds = [...(context?.node.agentInfoBindings?.[activePromptId]?.[card.id] ?? [])]
+                        .sort((a, b) => (context?.outputOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (context?.outputOrder.get(b) ?? Number.MAX_SAFE_INTEGER))
+                    if(sourceIds.length === 0){
+                        if(context) context.warnings.push(`Agent info card "${card.name || card.id}" has no connected output.`)
+                        break
+                    }
+                    const values:string[] = []
+                    for(const sourceId of sourceIds){
+                        const source = context?.outputs.get(sourceId)
+                        if(!source){
+                            context?.warnings.push(`Agent info source "${sourceId}" is unavailable.`)
+                            continue
+                        }
+                        const format = card.innerFormat ?? '<AgentInfo name="{{agent_name}}">\n{{slot}}\n</AgentInfo>'
+                        values.push(format
+                            .replaceAll('{{agent_name}}', source.nodeName)
+                            .replaceAll('{{slot}}', source.output))
+                    }
+                    pushPrompts([{
+                        role: convertPromptRole[card.role2 ?? 'system'],
+                        content: values.join('\n\n'),
+                    }])
+                    break
+                }
                 case 'cache':{
                     let pointer = formated.length - 1
                     let depthRemaining = card.depth
@@ -1673,7 +1714,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             currentChat.message[msgIndex].data = t
             DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
         }
-        if(DBState.db.ttsAutoSpeech){
+        if(DBState.db.ttsAutoSpeech && !arg.agentContext){
             await sayTTS(currentChar, result)
         }
     }
@@ -1737,7 +1778,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 mrerolls.push(result)
             }
             DBState.db.characters[selectedChar].reloadKeys += 1
-            if(DBState.db.ttsAutoSpeech){
+            if(DBState.db.ttsAutoSpeech && !arg.agentContext){
                 await sayTTS(currentChar, result)
             }
         }
@@ -1767,7 +1808,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
     if(needsAutoContinue){
         endGeneration(genKey, { keepPendingAbort: true })
-        return await sendChat(chatProcessIndex, {
+        return await sendChatCore(chatProcessIndex, {
             chatAdditonalTokens: arg.chatAdditonalTokens,
             continue: true,
             signal: abortSignal,
@@ -1811,12 +1852,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
         
         endGeneration(genKey, { keepPendingAbort: true })
-        return await sendChat(chatProcessIndex, {
+        return await sendChatCore(chatProcessIndex, {
             signal: abortSignal
         })
     }
 
-    if(DBState.db.notification){
+    if(DBState.db.notification && !arg.agentContext){
         try {
             const permission = await Notification.requestPermission()
             if(permission === 'granted'){

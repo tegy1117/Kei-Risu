@@ -207,6 +207,12 @@ export const searchManifestEntries: ManualSearchEntry[] = [
         route: SettingsRoute.ModelPreset,
     },
     {
+        id: 'manual.page.agentPreset',
+        label: () => language.agent.menu,
+        keywords: ['agent preset', 'agent pipeline', 'parallel agents', '에이전트', '에이전트 프리셋', '파이프라인'],
+        route: SettingsRoute.AgentPreset,
+    },
+    {
         // Tab-name entry. The tab's settings are indexed declaratively
         // (moduleModelBindingItems), but a tab label is only breadcrumb text
         // there — without this, searching the name shown on the tab finds nothing.

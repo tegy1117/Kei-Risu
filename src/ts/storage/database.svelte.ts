@@ -22,6 +22,7 @@ import { emptyModelBinding } from '../preset/types';
 import { isChatStub } from './chatStub';
 import { reconcileBuiltinTools } from '../process/tools/builtins';
 import { emptyToolPromptPolicy, type RisuToolPackage, type ToolPromptPolicy, type ToolStateStore } from '../process/tools/types';
+import type { AgentMessageVariantState, AgentPreset, AgentRunRecord } from '../agent/types';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
 export let appVer = "2026.2.291" //<APP_VERSION_POINT>
@@ -200,6 +201,33 @@ export function setDatabase(data:Database){
                 preset.id = uuidv4()
             }
         }
+    }
+    if(!Array.isArray(data.agentPresets)){
+        data.agentPresets = []
+    }
+    for(const preset of data.agentPresets){
+        preset.id ||= uuidv4()
+        preset.name ||= 'Agent Preset'
+        preset.maxParallel = Math.min(16, Math.max(1, Number.isFinite(preset.maxParallel) ? Math.floor(preset.maxParallel) : 3))
+        if(!Array.isArray(preset.stages)) preset.stages = []
+        for(const stage of preset.stages){
+            stage.id ||= uuidv4()
+            if(!Array.isArray(stage.nodes)) stage.nodes = []
+            for(const node of stage.nodes){
+                node.id ||= uuidv4()
+                node.name ||= node.kind === 'main' ? 'Main Output' : 'Agent'
+                node.agentInfoBindings ??= {}
+                if(node.kind === 'agent'){
+                    node.promptPresetId ??= ''
+                    node.modelPresetId ??= ''
+                    node.usePromptPresetParams ??= false
+                    node.post ??= { placement: 'append', includeInHistory: true }
+                }
+            }
+        }
+    }
+    if(data.defaultAgentPresetId !== undefined && typeof data.defaultAgentPresetId !== 'string'){
+        data.defaultAgentPresetId = undefined
     }
     if(checkNullish(data.botPresetsId)){
         data.botPresetsId = 0
@@ -872,11 +900,13 @@ export function setCurrentChat(chat:Chat){
  * literals. Do NOT call for hydration placeholders or chats being restored with
  * their own mode.
  */
-export function newChatModelDefaults(): Partial<Pick<Chat, 'useModelPreset' | 'modelBinding'>> {
+export function newChatModelDefaults(): Partial<Pick<Chat, 'useModelPreset' | 'modelBinding' | 'boundAgentPresetId'>> {
     const db = getDatabase()
-    if (!db.useModelPresetByDefault) return {}
+    const agentDefaults = db.defaultAgentPresetId ? { boundAgentPresetId: db.defaultAgentPresetId } : {}
+    if (!db.useModelPresetByDefault) return agentDefaults
     const def = db.defaultModelBinding
     return {
+        ...agentDefaults,
         useModelPreset: true,
         modelBinding: def ? structuredClone($state.snapshot(def)) : emptyModelBinding(),
     }
@@ -1453,6 +1483,8 @@ export interface Database{
         flags: LLMFlags[]
     }[]
     modelPresets: ModelPreset[]
+    agentPresets: AgentPreset[]
+    defaultAgentPresetId?: string
     // P4 dual-regime global default binding (plan v6 §7). Copied into new chats
     // (seeding); useModelPresetByDefault seeds the new-chat regime toggle.
     useModelPresetByDefault?: boolean
@@ -2172,6 +2204,7 @@ export interface Chat{
      * (temperature, top_p, penalties, ...). Off (or absent) => preset params only.
      * No effect in classic mode, where prompt-preset params already apply. */
     usePromptPresetParams?: boolean
+    boundAgentPresetId?: string
     /** Runtime-only: true while awaiting hydration from server. Never persisted. */
     _placeholder?: boolean
 }
@@ -2205,6 +2238,9 @@ export interface Message{
     isComment?:boolean
     swipes?: string[]
     swipeId?: number
+    displayData?: string
+    agentRun?: AgentRunRecord
+    agentSwipeStates?: Array<AgentMessageVariantState|null>
 }
 
 export interface MessageGenerationInfo{
@@ -3211,6 +3247,12 @@ function normalizePromptTemplate(template: PromptItem[]|null|undefined): PromptI
                 if(item.role2 !== undefined && item.role2 !== null){
                     item.role2 = normalizePromptRole(item.role2) ?? 'system'
                 }
+                break
+            }
+            case 'agentInfo':{
+                item.id ||= uuidv4()
+                item.role2 = normalizePromptRole(item.role2) ?? 'system'
+                item.innerFormat ??= '<AgentInfo name="{{agent_name}}">\n{{slot}}\n</AgentInfo>'
                 break
             }
             case 'cache':{

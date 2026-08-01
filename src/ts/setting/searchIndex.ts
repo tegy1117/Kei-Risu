@@ -126,6 +126,7 @@ function routeLabel(route: SettingsRouteValue): string {
         case SettingsRoute.Hotkey: return language.hotkey;
         case SettingsRoute.ModelPreset: return language.modelPresetMenu;
         case SettingsRoute.PromptPreset: return language.promptPresetMenu;
+        case SettingsRoute.AgentPreset: return language.agent.menu;
         case SettingsRoute.RemoteAccess: return language.remoteAccess;
         case SettingsRoute.System: return language.system;
         case SettingsRoute.InlayImageGallery: return language.playground.inlayImageGallery;

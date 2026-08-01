@@ -1048,6 +1048,26 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     }
 }
 
+export async function requestAgentModelPreset(
+    arg: RequestDataArgumentExtended,
+    preset: ModelPreset,
+    abortSignal: AbortSignal = null,
+): Promise<{ ok: true, text: string, model?: string } | { ok: false, error: string, model?: string }> {
+    const response = await requestModelPreset({ ...arg, tools: arg.tools ?? await getTools() }, preset, abortSignal, 'otherAx')
+    if(response.type === 'success') return { ok: true, text: response.result, model: response.model }
+    if(response.type === 'streaming'){
+        try {
+            return { ok: true, text: await collectStreamingText(response.result), model: response.model }
+        } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : String(error), model: response.model }
+        }
+    }
+    if(response.type === 'multiline'){
+        return { ok: true, text: response.result.map((entry) => entry[1]).join('\n'), model: response.model }
+    }
+    return { ok: false, error: response.result, model: response.model }
+}
+
 // One-shot test request for the preset editor's "Test" tab. Sends a single
 // user-supplied message through requestModelPreset so the credential resolution,
 // adapter dispatch and error handling are byte-identical to a real chat request —

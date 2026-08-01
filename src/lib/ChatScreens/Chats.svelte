@@ -116,7 +116,7 @@
             const reloadPointer = reloadPointerMap[i] ?? 0;
             const isRerollTarget = i === lastRealCharIdx;
             const activeStreamingMessage = i === activeStreamingIndex && message.role === 'char';
-            const hashMessageData = activeStreamingMessage ? '' : message.data;
+            const hashMessageData = activeStreamingMessage ? '' : (message.displayData ?? message.data);
             let hashd = hashMessageData + (message.chatId ?? '') + i.toString() + messageLargePortrait.toString() + message.disabled?.toString() + reloadPointer.toString() + (message.swipeId ?? 0).toString() + (message.swipes?.length ?? 0).toString() + isRerollTarget.toString();
             const currentHash = hashCode(hashd);
             currentHashes.add(currentHash);
@@ -129,7 +129,7 @@
                 const inst = mount(Chat, {
                     target: b,
                     props: {
-                        message: message.data,
+                        message: message.displayData ?? message.data,
                         isLastMemory: false,
                         idx: i,
                         totalLength: messages.length,

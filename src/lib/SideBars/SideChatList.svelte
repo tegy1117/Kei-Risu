@@ -24,6 +24,7 @@
     import PersonaBind from "./PersonaBind.svelte";
     import PromptBind from "./PromptBind.svelte";
     import ModelBind from "./ModelBind.svelte";
+    import AgentBind from "./AgentBind.svelte";
     import { changeChatTo, createChatCopyName, requestImmediateSave } from "src/ts/globalApi.svelte";
 
     interface Props {
@@ -488,6 +489,7 @@
             {#if DBState.db.showPresetInSidebar}
                 <PromptBind />
             {/if}
+            <AgentBind />
             {#if DBState.db.showPersonaInSidebar}
                 <PersonaBind />
             {/if}

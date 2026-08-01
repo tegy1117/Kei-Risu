@@ -394,9 +394,22 @@ function memoryEntries(tool: RisuToolPackage, scope: ToolScope) {
     return state.memories
 }
 
+export function createMemoryToolResult(scope: ToolScope, entry: ToolMemoryEntry): ToolMemoryEntry & { scope: ToolScope } {
+    return {
+        scope,
+        id: entry.id,
+        title: entry.title,
+        content: entry.content,
+        tags: [...entry.tags],
+        importance: entry.importance,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+    }
+}
+
 function memoryList(tool: RisuToolPackage, args: Record<string, unknown>) {
     const limit = Math.max(1, Math.min(100, Number(args.limit) || 20))
-    return validReadScopes(args.scope).flatMap((scope) => memoryEntries(tool, scope).map((entry) => ({ scope, ...entry })))
+    return validReadScopes(args.scope).flatMap((scope) => memoryEntries(tool, scope).map((entry) => createMemoryToolResult(scope, entry)))
         .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit)
 }
 
@@ -412,7 +425,7 @@ function memoryRead(tool: RisuToolPackage, args: Record<string, unknown>) {
     const id = String(args.id ?? '')
     for (const scope of validReadScopes(args.scope)) {
         const found = memoryEntries(tool, scope).find((entry) => entry.id === id)
-        if (found) return { scope, ...found }
+        if (found) return createMemoryToolResult(scope, found)
     }
     throw new Error(`Memory ${id} was not found.`)
 }

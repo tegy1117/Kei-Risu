@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { alertError, notifySuccess } from "../alert";
 import type { OobaChatCompletionRequestParams } from "../model/ooba";
 
-export type PromptItem = PromptItemPlain|PromptItemTyped|PromptItemChat|PromptItemAuthorNote|PromptItemChatML|PromptItemCache
+export type PromptItem = PromptItemPlain|PromptItemTyped|PromptItemChat|PromptItemAuthorNote|PromptItemChatML|PromptItemCache|PromptItemAgentInfo
 export type PromptType = PromptItem['type'];
 export type PromptSettings = {
     assistantPrefill: string
@@ -65,6 +65,14 @@ export interface PromptItemCache {
 
 }
 
+export interface PromptItemAgentInfo {
+    type: 'agentInfo'
+    id: string
+    name?: string
+    innerFormat?: string
+    role2?: PromptRole
+}
+
 export async function tokenizePreset(prompts:PromptItem[], consti:boolean = false){
     let total = 0
     for(const prompt of prompts){
@@ -80,6 +88,12 @@ export async function tokenizePreset(prompts:PromptItem[], consti:boolean = fals
             case 'postEverything':
             case 'authornote':
             case 'memory':{
+                if(prompt.innerFormat){
+                    total += await tokenizeAccurate(prompt.innerFormat, consti)
+                }
+                break
+            }
+            case 'agentInfo':{
                 if(prompt.innerFormat){
                     total += await tokenizeAccurate(prompt.innerFormat, consti)
                 }
