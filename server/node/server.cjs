@@ -34,6 +34,7 @@ const { createRequestLogs } = require('./request-logs.cjs');
 const { applyPatch } = require('fast-json-patch');
 const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON, normalizeForwardHeaders, hasRemoteBlocks } = require('./utils.cjs');
 const { spawn, execSync } = require('child_process');
+const { extractUpdateArchive } = require('./update-extractor.cjs');
 const os = require('os');
 const { Readable, Transform } = require('stream');
 
@@ -5979,19 +5980,7 @@ app.post('/api/self-update', async (req, res) => {
         const extractDir = path.join(tmpDir, 'extracted');
         await fs.mkdir(extractDir, { recursive: true });
 
-        if (process.platform === 'win32') {
-            try {
-                // Windows 10 1803+ has tar.exe built-in, handles zip, much faster than PowerShell
-                execSync(`tar -xf "${archivePath}" -C "${extractDir}"`, { timeout: 300000 });
-            } catch {
-                execSync(
-                    `powershell -NoProfile -Command "Expand-Archive -Force -Path '${archivePath}' -DestinationPath '${extractDir}'"`,
-                    { timeout: 300000 },
-                );
-            }
-        } else {
-            execSync(`tar -xzf "${archivePath}" -C "${extractDir}"`, { timeout: 300000 });
-        }
+        extractUpdateArchive(archivePath, extractDir);
 
         // Resolve possibly nested root directory (same as updater.cjs resolveExtractedRoot)
         const entries = await fs.readdir(extractDir);
