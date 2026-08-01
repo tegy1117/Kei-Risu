@@ -1,26 +1,26 @@
 <p align="center">
-  <img src="assets/pocketrisu-banner-1024.png" alt="PocketRisu — Self-hosted AI Roleplay Chat Platform" width="900" />
+  <img src="assets/pocketrisu-banner-1024.png" alt="Kei-Risu — Self-hosted AI Roleplay Chat Platform" width="900" />
 </p>
 
-<h1 align="center">PocketRisu — Self-hosted AI Roleplay Chat</h1>
+<h1 align="center">Kei-Risu — Self-hosted AI Roleplay Chat</h1>
 
 <p align="center">
   <strong>English</strong> | <a href="i18n/README.ko.md">한국어</a> | <a href="i18n/README.de.md">Deutsch</a> | <a href="i18n/README.cn.md">简体中文</a> | <a href="i18n/README.es.md">Español</a> | <a href="i18n/README.vi.md">Tiếng Việt</a> | <a href="i18n/README.zh-Hant.md">繁體中文</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/PocketRisu/PocketRisu/releases">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/PocketRisu/PocketRisu?label=latest" />
+  <a href="https://github.com/tegy1117/Kei-Risu/releases">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/tegy1117/Kei-Risu?label=latest" />
   </a>
   <a href="LICENSE">
-    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/PocketRisu/PocketRisu" />
+    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/tegy1117/Kei-Risu" />
   </a>
   <a href="https://nodejs.org/">
     <img alt="Node" src="https://img.shields.io/badge/node-≥22.12-brightgreen" />
   </a>
 </p>
 
-PocketRisu is a self-hosted AI roleplay chat platform you run on your PC or personal server and access from PC, tablet, and smartphone through a web browser.
+Kei-Risu is a self-hosted AI roleplay chat platform you run on your PC or personal server and access from PC, tablet, and smartphone through a web browser.
 
 <p align="center">
   <table>
@@ -46,7 +46,7 @@ PocketRisu is a self-hosted AI roleplay chat platform you run on your PC or pers
 
 ## RisuAI Compatibility
 
-PocketRisu is derived from [RisuAI](https://github.com/kwaroran/RisuAI) and refined for self-hosted environments. Existing RisuAI data can be migrated wholesale, and all RisuAI ecosystem assets remain usable as-is.
+Kei-Risu is derived from [RisuAI](https://github.com/kwaroran/RisuAI) and refined for self-hosted environments. Existing RisuAI data can be migrated wholesale, and all RisuAI ecosystem assets remain usable as-is.
 
 - RisuRealm character downloads
 - Character cards (`.charx`, `.risum`, `.risup`, etc.)
@@ -75,8 +75,7 @@ For migration from an existing RisuAI installation, see the [migration guide](do
 
 ## Community & Contact
 
-- Bug reports / feature requests: [GitHub Issues](https://github.com/PocketRisu/PocketRisu/issues)
-- Email: contact@pocketrisu.com
+- Bug reports / feature requests: [GitHub Issues](https://github.com/tegy1117/Kei-Risu/issues)
 
 
 ## License

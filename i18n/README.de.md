@@ -1,19 +1,19 @@
 <p align="center">
-  <img src="../assets/pocketrisu-banner-1024.png" alt="PocketRisu — Selbst gehostete KI-Rollenspiel-Chat-Plattform" width="900" />
+  <img src="../assets/pocketrisu-banner-1024.png" alt="Kei-Risu — Selbst gehostete KI-Rollenspiel-Chat-Plattform" width="900" />
 </p>
 
-<h1 align="center">PocketRisu — Selbst gehostete KI-Rollenspiel-Chat-Plattform</h1>
+<h1 align="center">Kei-Risu — Selbst gehostete KI-Rollenspiel-Chat-Plattform</h1>
 
 <p align="center">
   <a href="../README.md">English</a> | <a href="README.ko.md">한국어</a> | <strong>Deutsch</strong> | <a href="README.cn.md">简体中文</a> | <a href="README.es.md">Español</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh-Hant.md">繁體中文</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/PocketRisu/PocketRisu/releases">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/PocketRisu/PocketRisu?label=latest" />
+  <a href="https://github.com/tegy1117/Kei-Risu/releases">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/tegy1117/Kei-Risu?label=latest" />
   </a>
   <a href="../LICENSE">
-    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/PocketRisu/PocketRisu" />
+    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/tegy1117/Kei-Risu" />
   </a>
   <a href="https://nodejs.org/">
     <img alt="Node" src="https://img.shields.io/badge/node-≥22.12-brightgreen" />
@@ -22,7 +22,7 @@
 
 > 🌐 Diese README wurde maschinell übersetzt. Für die genauesten Informationen siehe die [englische](../README.md) oder [koreanische](README.ko.md) Version. Beiträge willkommen.
 
-PocketRisu ist eine selbstgehostete KI-Rollenspiel-Chat-Plattform, die Sie auf Ihrem PC oder persönlichen Server betreiben und über einen Webbrowser von PC, Tablet und Smartphone aus nutzen.
+Kei-Risu ist eine selbstgehostete KI-Rollenspiel-Chat-Plattform, die Sie auf Ihrem PC oder persönlichen Server betreiben und über einen Webbrowser von PC, Tablet und Smartphone aus nutzen.
 
 <p align="center">
   <table>
@@ -48,7 +48,7 @@ PocketRisu ist eine selbstgehostete KI-Rollenspiel-Chat-Plattform, die Sie auf I
 
 ## RisuAI-Kompatibilität
 
-PocketRisu ist von [RisuAI](https://github.com/kwaroran/RisuAI) abgeleitet und für selbstgehostete Umgebungen optimiert. Bestehende RisuAI-Daten können vollständig migriert werden, und alle RisuAI-Ökosystem-Assets bleiben unverändert nutzbar.
+Kei-Risu ist von [RisuAI](https://github.com/kwaroran/RisuAI) abgeleitet und für selbstgehostete Umgebungen optimiert. Bestehende RisuAI-Daten können vollständig migriert werden, und alle RisuAI-Ökosystem-Assets bleiben unverändert nutzbar.
 
 - RisuRealm-Charakter-Downloads
 - Charakterkarten (`.charx`, `.risum`, `.risup` usw.)
@@ -77,8 +77,7 @@ Für die Migration von einer bestehenden RisuAI-Installation siehe den [Migratio
 
 ## Community & Kontakt
 
-- Fehlerberichte / Funktionswünsche: [GitHub Issues](https://github.com/PocketRisu/PocketRisu/issues)
-- E-Mail: contact@pocketrisu.com
+- Fehlerberichte / Funktionswünsche: [GitHub Issues](https://github.com/tegy1117/Kei-Risu/issues)
 
 
 ## Lizenz
