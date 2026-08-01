@@ -315,6 +315,92 @@ function getToolStates(): ToolStateStore {
     return db.toolStates
 }
 
+export function createToolScopeStateSnapshot(state?: ToolScopeState): ToolScopeState {
+    return {
+        variables: safeStructuredClone(state?.variables ?? {}),
+        lists: Object.fromEntries(Object.entries(state?.lists ?? {}).map(([name, items]) => [name, safeStructuredClone([...items])])),
+        memories: (state?.memories ?? []).map((entry) => ({
+            id: entry.id,
+            title: entry.title,
+            content: entry.content,
+            tags: [...entry.tags],
+            importance: entry.importance,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+        })),
+    }
+}
+
+function toolScopeState(toolId: string, scope: ToolScope, contextId = ''): ToolScopeState | undefined {
+    const toolState = getToolStates()[toolId]
+    if (!toolState) return undefined
+    if (scope === 'global') return toolState.global
+    if (!contextId) return undefined
+    return scope === 'character' ? toolState.characters?.[contextId] : toolState.chats?.[contextId]
+}
+
+export function readToolScopeState(toolId: string, scope: ToolScope, contextId = ''): ToolScopeState {
+    return createToolScopeStateSnapshot(toolScopeState(toolId, scope, contextId))
+}
+
+export function writeToolScopeState(toolId: string, scope: ToolScope, contextId: string, state: ToolScopeState) {
+    const states = getToolStates()
+    const toolState = states[toolId] ?? (states[toolId] = {})
+    const clean = createToolScopeStateSnapshot(state)
+    if (scope === 'global') toolState.global = clean
+    else {
+        if (!contextId) throw new Error(`A ${scope} context is required.`)
+        const scoped = scope === 'character'
+            ? (toolState.characters ??= {})
+            : (toolState.chats ??= {})
+        scoped[contextId] = clean
+    }
+    return createToolScopeStateSnapshot(clean)
+}
+
+export function deleteToolScopeState(toolId: string, scope: ToolScope, contextId = '') {
+    const states = getToolStates()
+    const toolState = states[toolId]
+    if (!toolState) return false
+    if (scope === 'global') {
+        if (!toolState.global) return false
+        delete toolState.global
+        return true
+    }
+    if (!contextId) return false
+    const scoped = scope === 'character' ? toolState.characters : toolState.chats
+    if (!scoped?.[contextId]) return false
+    delete scoped[contextId]
+    return true
+}
+
+export function validateToolScopeState(tool: RisuToolPackage, scope: ToolScope, state: ToolScopeState): string[] {
+    const errors: string[] = []
+    for (const definition of tool.variables ?? []) {
+        if (definition.scope !== scope || !(definition.name in state.variables)) continue
+        if (!valueMatchesType(state.variables[definition.name], definition.type)) {
+            errors.push(`Invalid value for ${definition.name}; expected ${definition.type}.`)
+        }
+    }
+    for (const [name, items] of Object.entries(state.lists)) {
+        if (!Array.isArray(items)) {
+            errors.push(`List ${name} must be an array.`)
+            continue
+        }
+        const definition = (tool.lists ?? []).find((item) => item.scope === scope && item.name === name)
+        if (definition && !items.every((item) => valueMatchesType(item, definition.itemType))) {
+            errors.push(`Invalid list item for ${name}; expected ${definition.itemType}.`)
+        }
+    }
+    for (const entry of state.memories ?? []) {
+        if (!entry.id || !entry.title.trim() || !entry.content.trim()) errors.push('Memory title and content are required.')
+        if (!Array.isArray(entry.tags) || !entry.tags.every((tag) => typeof tag === 'string')) errors.push(`Invalid tags for memory ${entry.id || '(new)'}.`)
+        if (!Number.isFinite(entry.importance) || entry.importance < 1 || entry.importance > 5) errors.push(`Invalid importance for memory ${entry.id || '(new)'}.`)
+        if (!Number.isFinite(entry.createdAt) || !Number.isFinite(entry.updatedAt)) errors.push(`Invalid timestamps for memory ${entry.id || '(new)'}.`)
+    }
+    return errors
+}
+
 function scopeState(toolId: string, scope: ToolScope, create = true): ToolScopeState | undefined {
     const states = getToolStates()
     const toolState: ToolPackageState = states[toolId] ?? (create ? (states[toolId] = {}) : undefined)

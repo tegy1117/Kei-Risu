@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { CopyIcon, DownloadIcon, GlobeIcon, HardDriveUploadIcon, PlusIcon, SquarePenIcon, TrashIcon, WrenchIcon } from '@lucide/svelte'
+    import { CopyIcon, DatabaseIcon, DownloadIcon, GlobeIcon, HardDriveUploadIcon, PlusIcon, SquarePenIcon, TrashIcon, WrenchIcon } from '@lucide/svelte'
     import { language } from 'src/lang'
     import SettingPage from 'src/lib/UI/GUI/SettingPage.svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
@@ -11,8 +11,9 @@
     import { DBState } from 'src/ts/stores.svelte'
     import { v4 } from 'uuid'
     import ToolEditor from './ToolEditor.svelte'
+    import ToolStateEditor from './ToolStateEditor.svelte'
 
-    let mode = $state<'list' | 'create' | 'edit'>('list')
+    let mode = $state<'list' | 'create' | 'edit' | 'state'>('list')
     let search = $state('')
     let editIndex = $state(-1)
     let currentTool = $state<RisuToolPackage>(blankTool())
@@ -39,6 +40,11 @@
         copy.id = v4(); copy.name = `${tool.name} Copy`; copy.namespace = uniqueNamespace(tool.namespace); copy.builtinId = undefined; copy.readonly = false
         DBState.db.tools.push(copy)
         notifySuccess(language.toolCreated)
+    }
+
+    function openState(tool: RisuToolPackage) {
+        currentTool = tool
+        mode = 'state'
     }
 
     function saveTool() {
@@ -97,6 +103,7 @@
                     <div class="min-w-0 grow basis-[calc(100%-1.75rem)]"><div class="font-bold truncate">{tool.name}</div><div class="text-sm text-textcolor2 break-words">{tool.namespace} · {tool.description}</div></div>
                     <div class="ml-auto flex items-center gap-3 pl-7">
                         <button class={DBState.db.enabledTools.includes(tool.id) ? 'text-blue-500' : 'text-textcolor2 hover:text-primary'} title={language.enableGlobal} onclick={() => { DBState.db.enabledTools = DBState.db.enabledTools.includes(tool.id) ? DBState.db.enabledTools.filter((id) => id !== tool.id) : [...DBState.db.enabledTools, tool.id] }}><GlobeIcon size={18}/></button>
+                        <button class="text-textcolor2 hover:text-primary" title={language.toolStateManager} onclick={() => openState(tool)}><DatabaseIcon size={18}/></button>
                         <button class="text-textcolor2 hover:text-primary" title={language.toolExport} onclick={() => download(tool)}><DownloadIcon size={18}/></button>
                         <button class="text-textcolor2 hover:text-primary" title={language.toolClone} onclick={() => cloneTool(tool)}><CopyIcon size={18}/></button>
                         <button class="text-textcolor2 hover:text-primary" title={language.editTool} onclick={() => openEdit(tool)}><SquarePenIcon size={18}/></button>
@@ -105,6 +112,10 @@
                 </div>
             {/each}
         </div>
+    </SettingPage>
+{:else if mode === 'state'}
+    <SettingPage title={`${language.toolStateManager}: ${currentTool.name}`}>
+        <ToolStateEditor tool={currentTool} onclose={() => { mode = 'list' }} />
     </SettingPage>
 {:else}
     <SettingPage title={mode === 'create' ? language.createTool : language.editTool}>

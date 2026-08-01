@@ -21,12 +21,17 @@ vi.mock('src/ts/util', () => ({ selectSingleFile: vi.fn() }))
 
 import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
 import {
+    createToolScopeStateSnapshot,
     createToolExportPayload,
     createMemoryToolResult,
+    deleteToolScopeState,
     parseToolExport,
+    readToolScopeState,
     resolveActiveToolPackages,
     toolWireName,
+    validateToolScopeState,
     validateToolPackage,
+    writeToolScopeState,
 } from './tools'
 
 function sampleTool(): RisuToolPackage {
@@ -88,6 +93,46 @@ describe('memory tool results', () => {
 
         expect(result.tags).toEqual(['character', 'plot'])
         expect(() => structuredClone(result)).not.toThrow()
+    })
+})
+
+describe('tool state management', () => {
+    test('creates a cloneable snapshot from reactive state', () => {
+        const state = createToolScopeStateSnapshot({
+            variables: { count: 2 },
+            lists: { names: new Proxy(['A', 'B'], {}) },
+            memories: [{
+                id: 'm1', title: 'Title', content: 'Content', tags: new Proxy(['plot'], {}),
+                importance: 3, createdAt: 1, updatedAt: 2,
+            }],
+        })
+        expect(state.lists.names).toEqual(['A', 'B'])
+        expect(state.memories?.[0].tags).toEqual(['plot'])
+        expect(() => structuredClone(state)).not.toThrow()
+    })
+
+    test('reads, writes, and deletes an isolated scope', () => {
+        writeToolScopeState('tool-1', 'chat', 'chat-1', { variables: { count: 1 }, lists: {} })
+        const read = readToolScopeState('tool-1', 'chat', 'chat-1')
+        read.variables.count = 9
+        expect(readToolScopeState('tool-1', 'chat', 'chat-1').variables.count).toBe(1)
+        expect(deleteToolScopeState('tool-1', 'chat', 'chat-1')).toBe(true)
+        expect(readToolScopeState('tool-1', 'chat', 'chat-1')).toEqual({ variables: {}, lists: {}, memories: [] })
+    })
+
+    test('validates declared values, lists, and memories', () => {
+        const tool = sampleTool()
+        tool.variables = [{ id: 'v1', name: 'count', description: '', type: 'number', scope: 'global', defaultValue: 0 }]
+        tool.lists = [{ id: 'l1', name: 'labels', description: '', itemType: 'string', scope: 'global', defaultItems: [] }]
+        const errors = validateToolScopeState(tool, 'global', {
+            variables: { count: 'wrong' },
+            lists: { labels: [1] },
+            memories: [{ id: 'm1', title: '', content: '', tags: [], importance: 8, createdAt: 1, updatedAt: 2 }],
+        })
+        expect(errors.join('\n')).toContain('expected number')
+        expect(errors.join('\n')).toContain('expected string')
+        expect(errors.join('\n')).toContain('Memory title and content are required')
+        expect(errors.join('\n')).toContain('Invalid importance')
     })
 })
 
