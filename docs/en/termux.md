@@ -4,7 +4,7 @@
 
 # Termux Installation Guide
 
-This guide explains how to build and run PocketRisu directly on an Android phone using Termux. The intended use pattern is to open `http://localhost:6001` in the phone's own browser.
+This guide explains how to build and run Kei-Risu directly on an Android phone using Termux. The intended use pattern is to open `http://localhost:6001` in the phone's own browser.
 
 - [1. Prerequisites](#1-prerequisites) — F-Droid Termux and system requirements
 - [2. Install and Build](#2-install-and-build) — single-command setup
@@ -23,7 +23,7 @@ This guide explains how to build and run PocketRisu directly on an Android phone
 | **RAM**           | 2 GB            | 4 GB or more               |
 | **Free storage** | 2 GB            | 4 GB or more (with build)  |
 
-PocketRisu does not ship pre-compiled binaries for Termux, so the phone builds everything itself. Including native modules such as `better-sqlite3`, the build takes roughly **10 to 40 minutes** depending on phone performance.
+Kei-Risu does not ship pre-compiled binaries for Termux, so the phone builds everything itself. Including native modules such as `better-sqlite3`, the build takes roughly **10 to 40 minutes** depending on phone performance.
 
 
 ---
@@ -33,7 +33,7 @@ PocketRisu does not ship pre-compiled binaries for Termux, so the phone builds e
 ### Use the F-Droid or GitHub Releases build of Termux
 
 > ⚠️ **The Play Store version of Termux cannot be used.**
-> The Termux maintainers stopped updating the Play Store build in 2020, and it can no longer install the recent packages PocketRisu needs (Node.js 22+).
+> The Termux maintainers stopped updating the Play Store build in 2020, and it can no longer install the recent packages Kei-Risu needs (Node.js 22+).
 
 Install Termux from one of:
 
@@ -51,15 +51,15 @@ Open Termux and run this single command:
 
 ```bash
 pkg install -y git && \
-  git clone https://github.com/PocketRisu/PocketRisu.git && \
-  cd PocketRisu && \
+  git clone https://github.com/tegy1117/Kei-Risu.git && \
+  cd Kei-Risu && \
   bash scripts/termux/build.sh
 ```
 
 The command takes care of:
 
 1. Installing `git`
-2. Cloning the PocketRisu repository
+2. Cloning the Kei-Risu repository
 3. Installing build dependencies (`nodejs-lts`, `python`, `make`, `clang`, `pnpm`, etc.)
 4. `pnpm install` — JavaScript dependencies and native module compilation
 5. `pnpm build` — frontend bundling
@@ -91,7 +91,7 @@ Once the server boot log appears, open the phone's browser (Chrome, Firefox, etc
 http://localhost:6001
 ```
 
-The PocketRisu UI should load. `localhost` is automatically treated as a secure context by the browser, so clipboard, `crypto.subtle`, and other secure-context APIs work normally.
+The Kei-Risu UI should load. `localhost` is automatically treated as a secure context by the browser, so clipboard, `crypto.subtle`, and other secure-context APIs work normally.
 
 Stop the server with `Ctrl + C`.
 
@@ -117,10 +117,10 @@ Release with: `termux-wake-unlock`
 
 ## 5. Update
 
-From the PocketRisu directory:
+From the Kei-Risu directory:
 
 ```bash
-cd ~/PocketRisu
+cd ~/Kei-Risu
 git pull
 NODE_OPTIONS="--max-old-space-size=2048" pnpm build
 ```
@@ -134,7 +134,7 @@ If dependencies changed, `pnpm install` runs automatically as part of the build.
 
 **Quick Tunnel (Cloudflare auto tunnel) does not work on Termux.** The `cloudflared` binary is incompatible with Termux's DNS and TLS environment.
 
-PocketRisu detects the Termux environment automatically and shows a warning in the Remote Access menu, hiding the start button.
+Kei-Risu detects the Termux environment automatically and shows a warning in the Remote Access menu, hiding the start button.
 
 
 ---

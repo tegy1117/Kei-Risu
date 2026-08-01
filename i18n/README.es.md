@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/pocketrisu-banner-1024.png" alt="Kei-Risu — Plataforma de Chat de Roleplay con IA Autoalojada" width="900" />
+  <img src="../assets/kei-risu-banner-1024.png" alt="Kei-Risu — Plataforma de Chat de Roleplay con IA Autoalojada" width="900" />
 </p>
 
 <h1 align="center">Kei-Risu — Chat de Roleplay con IA Autoalojado</h1>

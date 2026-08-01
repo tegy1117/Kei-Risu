@@ -6,7 +6,7 @@
 
 > 🌐 此指南由機器翻譯生成。如需獲取最準確的資訊,請參閱 [English](../en/install.md) 或 [한국어](../ko/install.md) 版本。
 
-PocketRisu 有四種安裝方式。
+Kei-Risu 有四種安裝方式。
 
 - [1. 可攜版](#1-可攜版) — 預先編譯的二進位檔案。無需 Node.js。
 - [2. Docker](#2-docker) — 容器環境。
@@ -34,27 +34,27 @@ PocketRisu 有四種安裝方式。
 
 ### 下載
 
-從 [Releases 頁面](https://github.com/PocketRisu/PocketRisu/releases)取得對應您 OS 的檔案。
+從 [Releases 頁面](https://github.com/tegy1117/Kei-Risu/releases)取得對應您 OS 的檔案。
 
 | OS                       | 檔案                                      |
 | ------------------------ | ----------------------------------------- |
-| Windows (x64)            | `PocketRisu-vX.X.X-win-x64.zip`           |
-| macOS (Apple Silicon)    | `PocketRisu-vX.X.X-macos-arm64.tar.gz`    |
-| Linux (x64)              | `PocketRisu-vX.X.X-linux-x64.tar.gz`      |
-| Linux (ARM)              | `PocketRisu-vX.X.X-linux-arm64.tar.gz`    |
+| Windows (x64)            | `Kei-Risu-vX.X.X-win-x64.zip`           |
+| macOS (Apple Silicon)    | `Kei-Risu-vX.X.X-macos-arm64.tar.gz`    |
+| Linux (x64)              | `Kei-Risu-vX.X.X-linux-x64.tar.gz`      |
+| Linux (ARM)              | `Kei-Risu-vX.X.X-linux-arm64.tar.gz`    |
 
 ### 執行
 
 **Windows**
 
-解壓縮 zip,雙擊資料夾中的 `PocketRisu.exe`。瀏覽器自動開啟 `http://localhost:6001`。
+解壓縮 zip,雙擊資料夾中的 `Kei-Risu.exe`。瀏覽器自動開啟 `http://localhost:6001`。
 
 **macOS**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-macos-arm64.tar.gz
-xattr -cr PocketRisu-vX.X.X-macos-arm64
-open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
+tar -xzf Kei-Risu-vX.X.X-macos-arm64.tar.gz
+xattr -cr Kei-Risu-vX.X.X-macos-arm64
+open Kei-Risu-vX.X.X-macos-arm64/Kei-Risu.app
 ```
 
 `xattr` 命令是繞過「Apple 無法驗證」警告的一次性操作。
@@ -62,8 +62,8 @@ open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
 **Linux**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-linux-*.tar.gz
-cd PocketRisu-vX.X.X-linux-*
+tar -xzf Kei-Risu-vX.X.X-linux-*.tar.gz
+cd Kei-Risu-vX.X.X-linux-*
 ./start.sh
 ```
 
@@ -76,10 +76,10 @@ cd PocketRisu-vX.X.X-linux-*
 **Linux (x64):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-linux-x64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-cd PocketRisu-${VERSION}-linux-x64
+VERSION=$(curl -s https://api.github.com/repos/tegy1117/Kei-Risu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/tegy1117/Kei-Risu/releases/download/${VERSION}/Kei-Risu-${VERSION}-linux-x64.tar.gz" -o kei-risu.tar.gz
+tar -xzf kei-risu.tar.gz && rm kei-risu.tar.gz
+cd Kei-Risu-${VERSION}-linux-x64
 ./start.sh
 ```
 
@@ -88,11 +88,11 @@ cd PocketRisu-${VERSION}-linux-x64
 **macOS (Apple Silicon):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-macos-arm64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-xattr -cr PocketRisu-${VERSION}-macos-arm64
-cd PocketRisu-${VERSION}-macos-arm64
+VERSION=$(curl -s https://api.github.com/repos/tegy1117/Kei-Risu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/tegy1117/Kei-Risu/releases/download/${VERSION}/Kei-Risu-${VERSION}-macos-arm64.tar.gz" -o kei-risu.tar.gz
+tar -xzf kei-risu.tar.gz && rm kei-risu.tar.gz
+xattr -cr Kei-Risu-${VERSION}-macos-arm64
+cd Kei-Risu-${VERSION}-macos-arm64
 ./start.sh
 ```
 
@@ -123,7 +123,7 @@ cd PocketRisu-${VERSION}-macos-arm64
 ### 執行
 
 ```bash
-curl -L https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/docker-compose.yml -o docker-compose.yml
+curl -L https://raw.githubusercontent.com/tegy1117/Kei-Risu/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -160,7 +160,7 @@ node --version
 ### 安裝
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tegy1117/Kei-Risu/main/install.sh | bash
 ```
 
 安裝完成後會顯示狀態訊息。
@@ -168,7 +168,7 @@ curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.
 ### 啟動伺服器
 
 ```bash
-cd ~/pocketrisu
+cd ~/kei-risu
 pnpm runserver
 ```
 
@@ -177,14 +177,14 @@ pnpm runserver
 ### 更新
 
 ```bash
-cd ~/pocketrisu
+cd ~/kei-risu
 ./update.sh
 ```
 
-> **v1.5.x → v1.6.0 一次性提示**: 若您在 Risuai-NodeOnly 時代(v1.5.x 或更早)透過 `install.sh` 安裝,請在首次 v1.6.0 更新前一次性將 `update.sh` 替換為新版本。(儲存庫已重新命名為 PocketRisu,舊 `update.sh` 無法找到新的原始目錄。)
+> **從 PocketRisu 遷移的一次性提示**: 如果現有安裝來自 PocketRisu，請在更新前替換一次 `update.sh`。舊腳本仍會從 PocketRisu 儲存庫下載檔案。
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/update.sh -o update.sh && chmod +x update.sh
+> curl -fsSL https://raw.githubusercontent.com/tegy1117/Kei-Risu/main/update.sh -o update.sh && chmod +x update.sh
 > ./update.sh
 > ```
 >
@@ -198,8 +198,8 @@ cd ~/pocketrisu
 手動 clone 並建構原始碼。適用於需要修改或除錯程式碼的開發者。
 
 ```bash
-git clone https://github.com/PocketRisu/PocketRisu.git
-cd PocketRisu
+git clone https://github.com/tegy1117/Kei-Risu.git
+cd Kei-Risu
 pnpm install
 pnpm build
 pnpm runserver

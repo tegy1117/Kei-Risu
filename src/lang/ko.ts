@@ -28,7 +28,7 @@ export const languageKorean = {
     networkFetch:
       "네트워크가 불안정하거나 서버가 응답하지 않을 때 자주 발생합니다.",
     networkFetchWeb:
-      "이것은 CORS 오류일 수 있습니다. 이는 브라우저의 제한으로 인해 웹 버전을 사용할 때만 발생합니다. 데스크톱 로컬 버전이나 다른 버전의 PocketRisu를 사용해보세요.",
+      "이것은 CORS 오류일 수 있습니다. 이는 브라우저의 제한으로 인해 웹 버전을 사용할 때만 발생합니다. 데스크톱 로컬 버전이나 다른 버전의 Kei-Risu를 사용해보세요.",
     networkFetchPlain:
       "이것은 요청 오류일 수 있습니다. 설정에서 직접 요청 보내기 옵션을 비활성화해 보세요.",
     requestLogRemoved: "요청 로그가 삭제되었습니다.",
@@ -71,9 +71,9 @@ export const languageKorean = {
     texttheme: "텍스트 색상을 선택해주세요",
     inputName: "마지막으로, 닉네임을 입력해 주세요",
     welcome:
-      "PocketRisu에 오신 것을 환영해요! 저는 PocketRisu 셋업을 도와줄 아이리스라고 해요. 먼저 닉네임을 입력해 주세요!",
+      "Kei-Risu에 오신 것을 환영해요! 저는 Kei-Risu 셋업을 도와줄 아이리스라고 해요. 먼저 닉네임을 입력해 주세요!",
     welcome2:
-      "{username}님 안녕하세요! PocketRisu를 시작하려면 몇 가지 설정만 하시면 되요. Ai 제공자를 선택해 주세요!",
+      "{username}님 안녕하세요! Kei-Risu를 시작하려면 몇 가지 설정만 하시면 되요. Ai 제공자를 선택해 주세요!",
     openRouterProvider:
       "OpenRouter는 여러 무료/유료 모델이 있습니다. 기본적으로 무료로 설정됩니다.",
     hordeProvider:
@@ -753,9 +753,9 @@ export const languageKorean = {
   chatWidthWide: "넓게",
   chatWidthFull: "제한 없음",
   customCSSWarning:
-    "PocketRisu는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 CSS가 레이아웃을 깨거나 의도와 다르게 동작할 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
+    "Kei-Risu는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 CSS가 레이아웃을 깨거나 의도와 다르게 동작할 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
   customHTMLWarning:
-    "PocketRisu는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 Chat HTML이 정상적으로 렌더되지 않을 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
+    "Kei-Risu는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 Chat HTML이 정상적으로 렌더되지 않을 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
   sayNothing: "어떤 문자열도 입력되지 않을 시 'say nothing' 입력",
   regexScript: "정규식 스크립트",
   type: "타입",
@@ -1136,8 +1136,8 @@ export const languageKorean = {
     "삭제된 캐릭터는 휴지통에 보관됩니다. 복구하거나 영구 삭제할 수 있습니다. 3일 후에는 자동으로 영구 삭제됩니다.",
   shareExport: "공유/엑스포트",
   risupresetDesc:
-    "Risupreset 포맷은 포맷을 공유하기 위한 PocketRisu 전용 포맷입니다.",
-  risuMDesc: "RisuM 포맷은 PocketRisu 모듈을 위해 특별히 설계된 포맷입니다.",
+    "Risupreset 포맷은 포맷을 공유하기 위한 Kei-Risu 전용 포맷입니다.",
+  risuMDesc: "RisuM 포맷은 Kei-Risu 모듈을 위해 특별히 설계된 포맷입니다.",
   jsonDesc: "JSON은 데이터를 저장하고 불러오기 위한 일반적인 포맷입니다.",
   nickname: "닉네임",
   useRegexLorebook: "정규식 사용",
@@ -1373,7 +1373,7 @@ export const languageKorean = {
   home: "홈",
   showSavingIcon: "저장 아이콘 표시",
   pluginVersionWarn:
-    "이 플러그인은 {{plugin_version}} 버전입니다. 이 버전의 PocketRisu와 호환되지 않습니다. 플러그인을 {{required_version}} 버전으로 업데이트하세요.",
+    "이 플러그인은 {{plugin_version}} 버전입니다. 이 버전의 Kei-Risu와 호환되지 않습니다. 플러그인을 {{required_version}} 버전으로 업데이트하세요.",
   imageTranslation: "이미지 번역",
   banCharacterset: "문자 집합으로 자동 재생성",
   realmDirectOpen: "RisuRealm 미리보기에서 바로 열기",
@@ -1620,7 +1620,7 @@ export const languageKorean = {
   axModelTranslate: "번역",
   axModelEmotion: "감정",
   axModelOther: "기타",
-  tools: "도구",
+  tools: "툴",
   action: "동작",
   hotkey: "단축키",
   hotkeyDesc: {
@@ -1714,11 +1714,11 @@ export const languageKorean = {
     "## 나이틀리 빌드\n\n나이틀리 빌드에 연결하려고 합니다. 이 버전은 테스트용이며 버그가 포함되어 있을 수 있습니다. **이 버전에서는 버그 등 문제가 발생하더라도 직접적으로 해결하는 것을 지원하지 않습니다.**",
   loginSionyw: "Sionyw 계정으로 로그인",
   pluginRiskDetectedAlert:
-    "PocketRisu가 API 키나 개인 데이터를 훔칠 수도 있는 위험한 코드를 감지했습니다. 이 플러그인을 설치하지 않는 것을 권장합니다.",
+    "Kei-Risu가 API 키나 개인 데이터를 훔칠 수도 있는 위험한 코드를 감지했습니다. 이 플러그인을 설치하지 않는 것을 권장합니다.",
   doNotInstall: "설치하지 않음",
   continueAnyway: "무시하고 계속",
   pluginNoRiskButAlert:
-    "PocketRisu가 위험한 코드를 감지하지 못했지만, 신뢰할 수 없는 출처의 플러그인을 설치하면 보안 위험이 발생할 수 있습니다.",
+    "Kei-Risu가 위험한 코드를 감지하지 못했지만, 신뢰할 수 없는 출처의 플러그인을 설치하면 보안 위험이 발생할 수 있습니다.",
   pluginRisksInuserFriendly: {
     eval: "문자열에서 코드 실행",
     globalAccess: "글로벌 변수 접근",
@@ -2157,12 +2157,12 @@ export const languageKorean = {
   storageDiskOther: "기타 (시스템 및 다른 앱)",
   storageDiskFree: "여유 공간",
   storageDiskRisuTotal: (size: number) =>
-    `PocketRisu 합계: ${(size / 1024 / 1024).toFixed(1)} MB`,
+    `Kei-Risu 합계: ${(size / 1024 / 1024).toFixed(1)} MB`,
 
   // 항목별 라벨 (분포 리스트의 ⓘ 설명)
   storageRowDbFile: "risuai.db",
   storageRowDbFileDesc:
-    "PocketRisu의 메인 SQLite 데이터베이스 파일. 모든 채팅·캐릭터·에셋·설정이 여기 들어갑니다.",
+    "Kei-Risu의 메인 SQLite 데이터베이스 파일. 모든 채팅·캐릭터·에셋·설정이 여기 들어갑니다.",
   storageRowWal: "WAL (Write-Ahead Log)",
   storageRowWalDesc:
     "임시 트랜잭션 로그. 저장이 먼저 여기 기록된 뒤 본 파일에 통합됩니다. 사용 중엔 정상적으로 존재.",
@@ -2201,7 +2201,7 @@ export const languageKorean = {
     `${(size / 1024 / 1024).toFixed(1)} MB 회수 가능 — Optimize로 압축.`,
   storageInternalOnly: "저장공간과 함께보기",
   storageInternalOnlyHint:
-    "끄면 PocketRisu 내부 항목만, 켜면 기타 시스템·여유 공간까지 디스크 전체 기준으로 표시합니다.",
+    "끄면 Kei-Risu 내부 항목만, 켜면 기타 시스템·여유 공간까지 디스크 전체 기준으로 표시합니다.",
 
   // 2 GB BLOB 한계 (별도 섹션)
   storageBlobLimit: "2 GB BLOB 한계",
@@ -2297,7 +2297,7 @@ export const languageKorean = {
   // 데이터 이전 (구 "계정 & 파일")
   migration: "데이터 이전",
   migrationDesc:
-    "원본 RisuAI(또는 호환 시스템)에서 데이터를 가져오거나 PocketRisu 데이터를 원본 호환 형식으로 내보냅니다.",
+    "원본 RisuAI(또는 호환 시스템)에서 데이터를 가져오거나 Kei-Risu 데이터를 원본 호환 형식으로 내보냅니다.",
   migrationInfoBackupMoved:
     "서버 백업, 로컬 백업, 자동 스냅샷 관리는 [시스템 → 백업] 탭으로 이동했습니다.",
   migrationGotoBackupTab: "백업 탭 열기",
@@ -2306,7 +2306,7 @@ export const languageKorean = {
     "원본 RisuAI 호환 포맷으로 백업·내보내기를 수행하는 보조 기능들입니다. 일반적인 백업 작업은 백업 탭을 사용하세요.",
   migrationSaveFolderAccordion: "노드리스에서 save 폴더 가져오기",
   migrationSaveFolderDesc:
-    "이전에 사용하던 노드리스/RisuAI 인스턴스의 save 폴더를 PocketRisu로 가져올 때 사용합니다.",
+    "이전에 사용하던 노드리스/RisuAI 인스턴스의 save 폴더를 Kei-Risu로 가져올 때 사용합니다.",
   migrationLoadUpstreamBackup: "원본 리스 로컬 백업 불러오기",
 
   // 시스템 → 백업 탭
@@ -2411,7 +2411,7 @@ export const languageKorean = {
 
   relatedGithub: "GitHub",
   relatedGithubDesc: "Star를 눌러 프로젝트를 응원해주세요.",
-  relatedFeedbackForm: "의견 보내기",
+  relatedFeedbackForm: "이슈 및 의견",
   relatedFeedbackFormDesc: "이슈 제보 및 의견을 보내주세요.",
   relatedContactEmail: "개발자 이메일",
   relatedContactEmailDesc: "개발자에게 직접 메일을 보낼 수 있어요.",
@@ -2424,6 +2424,47 @@ export const languageKorean = {
   hideRecentChats: "대화 목록 숨기기",
 
   showRequestStatus: "요청 상태 표시",
+  noTools: "설치된 툴이 없습니다.",
+  createTool: "툴 생성",
+  editTool: "툴 편집",
+  toolCreated: "툴이 생성되었습니다.",
+  toolUpdated: "툴이 수정되었습니다.",
+  toolDeleted: "툴이 삭제되었습니다.",
+  toolFunctions: "기능",
+  toolVariables: "변수",
+  toolLists: "리스트",
+  toolPlugin: "플러그인",
+  toolNamespace: "네임스페이스",
+  toolVersion: "버전",
+  toolScope: "범위",
+  toolDefaultValue: "기본값",
+  toolDefaultItems: "기본 항목 (JSON)",
+  toolItemType: "항목 타입",
+  toolParameters: "파라미터",
+  toolRequired: "필수",
+  toolEnabled: "활성화",
+  toolImport: "툴 가져오기",
+  toolExport: "툴 내보내기",
+  toolExportWithData: "현재 데이터 포함 내보내기",
+  toolClone: "툴 복제",
+  toolReadonly: "기본 툴 원본은 수정할 수 없습니다. 복제한 뒤 코드를 편집하세요.",
+  toolPromptPolicy: "툴 정책",
+  toolPolicyInherit: "상속",
+  toolPolicyOn: "켜기",
+  toolPolicyOff: "끄기",
+  toolPermissions: "요청 권한",
+  toolPermissionAskUser: "사용자에게 질문",
+  toolPermissionNetwork: "네트워크 접근",
+  toolPermissionDatabase: "전체 데이터베이스 접근",
+  toolPermissionHint: "권한은 처음 사용할 때 확인하며, 현재 플러그인 코드에 대해서만 응답을 기억합니다.",
+  toolPermissionRequest: "툴 {name}이(가) {permission} 권한을 요청합니다. 허용하시겠습니까?",
+  toolImportConfirm: "툴 {name}을(를) 가져오시겠습니까?\n\n네임스페이스: {namespace}\n권한: {permissions}\n상태 데이터 포함: {state}",
+  toolNamespaceConflict: "네임스페이스 {namespace}은(는) 이미 사용 중입니다. 고유한 네임스페이스를 입력하세요:",
+  toolImported: "툴을 가져왔습니다.",
+  toolExported: "툴을 내보냈습니다.",
+  toolPluginApi: "사용 가능 API: registerFunction, askUser, getVariable/setVariable/resetVariable, getList/setList, memoryList/memorySearch/memoryRead/memoryUpsert/memoryDelete, nativeFetch, databaseGet/databaseSet.",
+  chatToolsInfo: "현재 대화의 툴을 켜거나 끌 수 있습니다. 우클릭하거나 길게 눌러 캐릭터에 연결할 수 있습니다.",
+
   requestStatus: {
     connecting: "요청 중…",
     thinking: "사고 중…",

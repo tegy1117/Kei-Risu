@@ -183,7 +183,7 @@
                             aprilFoolsPage = 0
                             aprilFools = false
                         }}>
-                            PocketRisu  
+                            Kei-Risu
                         </a>
                     </p>
 

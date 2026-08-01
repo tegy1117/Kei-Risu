@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { AccessibilityIcon, ActivityIcon, PackageIcon, BotIcon, CodeIcon, CogIcon, ContactIcon, FlaskConicalIcon, ImageIcon, LanguagesIcon, MonitorIcon, MonitorSmartphoneIcon, Sailboat, ScrollTextIcon, SearchIcon, UserIcon, CircleXIcon, KeyboardIcon, TruckIcon, FileBoxIcon, Volume2Icon } from "@lucide/svelte";
+    import { AccessibilityIcon, ActivityIcon, PackageIcon, BotIcon, CodeIcon, CogIcon, ContactIcon, FlaskConicalIcon, ImageIcon, LanguagesIcon, MonitorIcon, MonitorSmartphoneIcon, Sailboat, ScrollTextIcon, SearchIcon, UserIcon, CircleXIcon, KeyboardIcon, TruckIcon, FileBoxIcon, Volume2Icon, WrenchIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import DisplaySettings from "./Pages/DisplaySettings.svelte";
     import NotificationSoundSettings from "./Pages/NotificationSoundSettings.svelte";
@@ -29,6 +29,7 @@
     import PluginDefinedIcon from "../Others/PluginDefinedIcon.svelte";
     import DevPanel from "src/lib/_dev/DevPanel.svelte";
     import SettingsSearch from "./SettingsSearch.svelte";
+    import ToolSettings from "./Pages/Tool/ToolSettings.svelte";
 
     // Dev panel is opt-in via localStorage['risu-dev-panel']='1' in devtools.
     // Read once on mount — flag changes require reload. Gates both the menu
@@ -153,6 +154,13 @@
                     }}>
                         <PackageIcon />
                         <span>{language.modules}</span>
+                    </button>
+                    <button class="flex gap-2 items-center hover:text-textcolor"
+                        class:text-textcolor={$SettingsMenuIndex === 18}
+                        class:text-textcolor2={$SettingsMenuIndex !== 18}
+                        onclick={() => { $SettingsMenuIndex = 18 }}>
+                        <WrenchIcon />
+                        <span>{language.tools}</span>
                     </button>
                     <button class="flex gap-2 items-center hover:text-textcolor"
                         class:text-textcolor={$SettingsMenuIndex === 4}
@@ -295,6 +303,8 @@
                             <ModelPresetSettings/>
                         {:else if $SettingsMenuIndex === 17}
                             <PromptPresetSettings/>
+                        {:else if $SettingsMenuIndex === 18}
+                            <ToolSettings/>
                         {:else if $SettingsMenuIndex === 23}
                             <InlayImageGallery/>
                         {:else if $SettingsMenuIndex === 21}

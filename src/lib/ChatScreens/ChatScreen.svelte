@@ -11,8 +11,10 @@
     import BackgroundDom from "./BackgroundDom.svelte";
     import SideBarArrow from "../UI/GUI/SideBarArrow.svelte";
     import ModuleChatMenu from "../Setting/Pages/Module/ModuleChatMenu.svelte";
+    import ToolChatMenu from "../Setting/Pages/Tool/ToolChatMenu.svelte";
     let openChatList = $state(false)
     let openModuleList = $state(false)
+    let openToolList = $state(false)
 
     $effect(() => {
         if ($openModuleListStore) {
@@ -51,7 +53,7 @@
             {/if}
         {/if}
         <div class="h-full w-2xl" style:width="{42 * (DBState.db.waifuWidth / 100)}rem" class:halfwp={$selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none'}>
-            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList/>
+            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList bind:openToolList/>
         </div>
     </div>
 {:else if DBState.db.theme === 'waifuMobile'}
@@ -62,7 +64,7 @@
             class:per33={$selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
             class:h-full={!($selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none')}
         >
-            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList/>
+            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList bind:openToolList/>
         </div>
         {#if $selectedCharID >= 0}
             {#if DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
@@ -82,7 +84,7 @@
                     <ResizeBox />
                 {/if}
             {/if}
-            <DefaultChatScreen customStyle={bgImg.length > 2 ? `${externalStyles}`: ''} bind:openChatList bind:openModuleList/>
+            <DefaultChatScreen customStyle={bgImg.length > 2 ? `${externalStyles}`: ''} bind:openChatList bind:openModuleList bind:openToolList/>
         </div>
     </div>
 {/if}
@@ -90,6 +92,8 @@
     <ChatList close={() => {openChatList = false}}/>
 {:else if openModuleList}
     <ModuleChatMenu close={() => {openModuleList = false}}/>
+{:else if openToolList}
+    <ToolChatMenu close={() => {openToolList = false}}/>
 {/if}
 
 <style>

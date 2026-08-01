@@ -66,7 +66,7 @@ let specialDay = $state('')
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <h2 class="text-4xl text-textcolor mb-0 mt-6 font-black relative" class:text-bordered={specialDay === 'newYear'} onclick={onClick}>
     {#if specialDay === 'midAutumn'}
-        <span class="text-amber-400">🐉PocketRisu🐉</span>
+        <span class="text-amber-400">🐉Kei-Risu🐉</span>
     {:else if specialDay === 'chuseok'}
         <div class="flex">
             <span class="text-blue-500">P</span>
@@ -81,7 +81,7 @@ let specialDay = $state('')
             <span class="text-black">u</span>
         </div>
     {:else}
-        PocketRisu
+        Kei-Risu
     {/if}
     {#if specialDay === 'christmas'}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -111,7 +111,7 @@ let specialDay = $state('')
 
 {#if specialDay === 'nodeonlyAnniversary'}
     <h1>
-        <span class="text-2xl font-extralight italic text-amber-400 hover:text-amber-600 transition">PocketRisu {
+        <span class="text-2xl font-extralight italic text-amber-400 hover:text-amber-600 transition">Kei-Risu {
             new Date().getFullYear() - 2026
         }{getNumberPostfix(new Date().getFullYear() - 2026)} Anniversary!</span>
     </h1>

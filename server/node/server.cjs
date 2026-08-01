@@ -125,8 +125,9 @@ const SNAPSHOT_LIMIT_MIN_COUNT = 1;
 const SNAPSHOT_LIMIT_MAX_COUNT = 100;
 const SNAPSHOT_LIMIT_MIN_BYTES = 10 * 1024 * 1024;        // 10 MB
 const SNAPSHOT_LIMIT_MAX_BYTES = 50 * 1024 * 1024 * 1024; // 50 GB
-const BACKUP_INTERVAL_MS = process.env.POCKETRISU_BACKUP_INTERVAL_MS
-    ? Number(process.env.POCKETRISU_BACKUP_INTERVAL_MS)
+const backupIntervalEnv = process.env.KEIRISU_BACKUP_INTERVAL_MS ?? process.env.POCKETRISU_BACKUP_INTERVAL_MS;
+const BACKUP_INTERVAL_MS = backupIntervalEnv
+    ? Number(backupIntervalEnv)
     : 5 * 60 * 1000; // 5 minutes (override for tests to force snapshot creation)
 let lastBackupTime = null;
 
@@ -847,16 +848,6 @@ if (existsSync(jwtSecretPath)) {
     writeFileSync(jwtSecretPath, jwtSecret, 'utf-8')
 }
 
-// ── Instance ID for anonymous usage analytics ────────────────────────────────
-const instanceIdPath = path.join(savePath, '__instance_id')
-let instanceId
-if (existsSync(instanceIdPath)) {
-    instanceId = readFileSync(instanceIdPath, 'utf-8').trim()
-} else {
-    instanceId = nodeCrypto.randomUUID()
-    writeFileSync(instanceIdPath, instanceId, 'utf-8')
-}
-
 const authCodePath = path.join(process.cwd(), 'save', '__authcode')
 const inlayDir = path.join(savePath, 'inlays')
 const inlayMigrationMarker = path.join(inlayDir, '.migrated_to_fs')
@@ -910,7 +901,7 @@ function findCloudflaredBinary() {
 function followRedirects(url) {
     return new Promise((resolve, reject) => {
         const mod = url.startsWith('https') ? require('https') : require('http');
-        mod.get(url, { headers: { 'User-Agent': 'pocketrisu' } }, (res) => {
+        mod.get(url, { headers: { 'User-Agent': 'kei-risu' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 followRedirects(res.headers.location).then(resolve, reject);
             } else if (res.statusCode === 200) {
@@ -972,12 +963,14 @@ function stopTunnel() {
 }
 
 // ── Update check ─────────────────────────────────────────────────────────────
-const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false';
-const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || 'https://risu-update-worker.nodridan.workers.dev/check';
-const PUBLIC_STATS_URL = (process.env.RISU_UPDATE_URL || 'https://risu-update-worker.nodridan.workers.dev/check').replace(/\/check$/, '/api/public-stats');
+const GITHUB_REPO = 'tegy1117/Kei-Risu';
+const UPDATE_CHECK_DISABLED = (process.env.KEIRISU_UPDATE_CHECK ?? process.env.RISU_UPDATE_CHECK) === 'false';
+const UPDATE_CHECK_URL = process.env.KEIRISU_UPDATE_URL
+    || process.env.RISU_UPDATE_URL
+    || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
 // Re-read on each call so non-portable updates (docker/git pull) without a
-// process restart don't keep reporting the old version to the update worker.
+// process restart don't keep reporting the old version.
 function getCurrentVersion() {
     try {
         const pkg = JSON.parse(readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
@@ -986,8 +979,6 @@ function getCurrentVersion() {
 }
 
 // ── Deployment type & self-update helpers ─────────────────────────────────────
-const GITHUB_REPO = 'PocketRisu/PocketRisu';
-
 const deploymentType = (() => {
     // Only portable builds have the .portable marker (created by CI release workflow).
     // Self-update is gated on this — all other types are inferred for analytics only.
@@ -1011,7 +1002,7 @@ function getSelfUpdateAssetInfo(version) {
     if (!platformName) return null;
     const arch = process.arch; // x64, arm64
     const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
-    const filename = `PocketRisu-v${version}-${platformName}-${arch}.${ext}`;
+    const filename = `Kei-Risu-v${version}-${platformName}-${arch}.${ext}`;
     const url = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${filename}`;
     return { platformName, arch, ext, filename, url };
 }
@@ -1346,25 +1337,58 @@ async function migrateInlaysToFilesystem() {
     await fs.writeFile(inlayMigrationMarker, new Date().toISOString(), 'utf-8');
 }
 
-async function fetchLatestRelease(lang) {
+function compareVersions(left, right) {
+    const parse = (value) => {
+        const [core, prerelease = ''] = String(value || '').replace(/^v/i, '').split('-', 2);
+        return {
+            parts: core.split('.').map((part) => Number.parseInt(part, 10) || 0),
+            prerelease,
+        };
+    };
+    const a = parse(left);
+    const b = parse(right);
+    const width = Math.max(a.parts.length, b.parts.length, 3);
+    for (let i = 0; i < width; i++) {
+        const delta = (a.parts[i] || 0) - (b.parts[i] || 0);
+        if (delta !== 0) return Math.sign(delta);
+    }
+    if (a.prerelease === b.prerelease) return 0;
+    if (!a.prerelease) return 1;
+    if (!b.prerelease) return -1;
+    return a.prerelease.localeCompare(b.prerelease, undefined, { numeric: true });
+}
+
+async function fetchLatestRelease() {
     if (UPDATE_CHECK_DISABLED) return null;
     try {
         const currentVersion = getCurrentVersion();
-        const params = new URLSearchParams({
-            v: currentVersion,
-            d: deploymentType,
-            os: `${process.platform}-${process.arch}`,
-            id: instanceId,
+        const res = await fetch(UPDATE_CHECK_URL, {
+            headers: {
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'Kei-Risu-Update-Checker',
+            },
         });
-        if (lang) params.set('l', String(lang).slice(0, 16));
-        const url = `${UPDATE_CHECK_URL}?${params}`;
-        const res = await fetch(url);
         if (!res.ok) return null;
         const data = await res.json();
-        if (data.hasUpdate) {
-            console.log(`[Update] New version available: v${data.latestVersion} (current: v${currentVersion}, ${data.severity})`);
+        if (typeof data?.hasUpdate === 'boolean' && data.latestVersion) {
+            return data;
         }
-        return data;
+
+        const latestVersion = String(data.tag_name || '').replace(/^v/i, '');
+        if (!latestVersion) return null;
+        const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+        if (hasUpdate) {
+            console.log(`[Update] New version available: v${latestVersion} (current: v${currentVersion})`);
+        }
+        return {
+            currentVersion,
+            latestVersion,
+            hasUpdate,
+            severity: hasUpdate ? 'optional' : 'none',
+            releaseUrl: data.html_url || `https://github.com/${GITHUB_REPO}/releases`,
+            releaseName: data.name || data.tag_name || `v${latestVersion}`,
+            publishedAt: data.published_at || '',
+        };
     } catch (e) {
         logger.error('[Update] Failed to check for updates:', e.message);
         return null;
@@ -3876,7 +3900,7 @@ app.post('/api/assets/bulk-write', async (req, res, next) => {
 
 // ── Settings-only export ────────────────────────────────────────────────────
 //
-// Multi-instance setups are a common PocketRisu pattern, and re-entering every
+// Multi-instance setups are a common Kei-Risu pattern, and re-entering every
 // setting by hand on each new instance is the pain this removes. A settings-only
 // backup is the full backup minus characters, chats and inlay images: modules,
 // plugins, prompt presets, personas, lorebooks, theme and API keys all travel.
@@ -5744,7 +5768,7 @@ app.put('/api/backup/server/path', async (req, res, next) => {
         const resolved = path.resolve(next);
         if (isManagedBackupPath(resolved)) {
             return res.status(400).json({
-                error: 'Backup path cannot be inside PocketRisu app files. Choose a separate folder such as data/backups.',
+                error: 'Backup path cannot be inside Kei-Risu app files. Choose a separate folder such as data/backups.',
             });
         }
         // Ensure parent exists / target is writable. Create the dir if missing.
@@ -5847,18 +5871,6 @@ app.post('/api/inlays/compress', sessionAuthMiddleware, async (req, res) => {
     res.end();
 });
 
-// ── Public stats proxy ───────────────────────────────────────────────────────
-app.get('/api/public-stats', async (req, res) => {
-    try {
-        const r = await fetch(PUBLIC_STATS_URL);
-        if (!r.ok) { res.status(r.status).json({ error: 'upstream error' }); return; }
-        const data = await r.json();
-        res.json(data);
-    } catch {
-        res.status(502).json({ error: 'fetch failed' });
-    }
-});
-
 // ── Update check endpoint ────────────────────────────────────────────────────
 app.get('/api/update-check', async (req, res) => {
     const currentVersion = getCurrentVersion();
@@ -5866,7 +5878,7 @@ app.get('/api/update-check', async (req, res) => {
         res.json({ currentVersion, hasUpdate: false, severity: 'none', disabled: true, deploymentType, canSelfUpdate: false });
         return;
     }
-    const result = await fetchLatestRelease(req.query.lang);
+    const result = await fetchLatestRelease();
     const response = result || { currentVersion, hasUpdate: false, severity: 'none' };
     response.deploymentType = deploymentType;
     response.canSelfUpdate = deploymentType === 'portable'

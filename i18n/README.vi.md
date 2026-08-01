@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/pocketrisu-banner-1024.png" alt="Kei-Risu — Nền tảng Trò chuyện Nhập vai AI Tự lưu trữ" width="900" />
+  <img src="../assets/kei-risu-banner-1024.png" alt="Kei-Risu — Nền tảng Trò chuyện Nhập vai AI Tự lưu trữ" width="900" />
 </p>
 
 <h1 align="center">Kei-Risu — Trò chuyện Nhập vai AI Tự lưu trữ</h1>

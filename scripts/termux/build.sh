@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build PocketRisu on Termux for smoke testing.
-# Usage (from PocketRisu repo root): bash scripts/termux/build.sh
+# Build Kei-Risu on Termux for smoke testing.
+# Usage (from Kei-Risu repo root): bash scripts/termux/build.sh
 set -euo pipefail
 
 if [ ! -f package.json ] || [ ! -d server/node ]; then
-    echo "Run from the PocketRisu repo root."
+    echo "Run from the Kei-Risu repo root."
     exit 1
 fi
 

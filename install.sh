@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="PocketRisu/PocketRisu"
-INSTALL_DIR="${RISU_INSTALL_DIR:-$HOME/pocketrisu}"
+REPO="tegy1117/Kei-Risu"
+INSTALL_DIR="${KEIRISU_INSTALL_DIR:-${RISU_INSTALL_DIR:-$HOME/kei-risu}}"
 PORT="${PORT:-6001}"
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
@@ -53,12 +53,11 @@ fi
 
 info "Extracting..."
 tar -xzf "$TMP_DIR/release.tar.gz" -C "$TMP_DIR"
-# Match both PocketRisu-* (current) and Risuai-NodeOnly-* (legacy repo name)
-# in case an older script encounters a redirected source archive.
+# Match the current archive and both legacy repository names.
 # Use find rather than ls: ls exits non-zero when one branch has no match,
 # which `set -euo pipefail` would propagate and abort the script.
 EXTRACTED_DIR=$(find "$TMP_DIR" -maxdepth 1 -type d \
-    \( -name 'PocketRisu-*' -o -name 'Risuai-NodeOnly-*' \) \
+    \( -name 'Kei-Risu-*' -o -name 'PocketRisu-*' -o -name 'Risuai-NodeOnly-*' \) \
     -print -quit)
 [ -d "$EXTRACTED_DIR" ] || error "Extraction failed."
 

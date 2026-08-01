@@ -1,7 +1,7 @@
 <script lang="ts">
 
     import Suggestion from './Suggestion.svelte';
-    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2 } from "@lucide/svelte";
+    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, WrenchIcon } from "@lucide/svelte";
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
@@ -60,6 +60,7 @@ import { isMobile } from 'src/ts/platform'
 
     interface Props {
         openModuleList?: boolean;
+        openToolList?: boolean;
         openChatList?: boolean;
         customStyle?: string;
     }
@@ -76,7 +77,7 @@ import { isMobile } from 'src/ts/platform'
     let scrollNavTimer: ReturnType<typeof setTimeout> | null = null
     let chatsInstance: any = $state()
     let isScrollingToMessage = $state(false)
-    let { openModuleList = $bindable(false), openChatList = $bindable(false), customStyle = '' }: Props = $props();
+    let { openModuleList = $bindable(false), openToolList = $bindable(false), openChatList = $bindable(false), customStyle = '' }: Props = $props();
     let currentCharacter = $derived(DBState.db.characters[$selectedCharID])
     let currentChatSlot = $derived(currentCharacter?.chats[currentCharacter.chatPage])
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
@@ -1044,6 +1045,12 @@ import { isMobile } from 'src/ts/platform'
                                 openModuleList = true
                             }}>
                                 <PackageIcon /><span>{language.modules}</span>
+                            </ShDropdownMenuItem>
+                            <ShDropdownMenuItem onSelect={() => {
+                                DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].tools ??= []
+                                openToolList = true
+                            }}>
+                                <WrenchIcon /><span>{language.tools}</span>
                             </ShDropdownMenuItem>
                             {#if DBState.db.sideMenuRerollButton}
                                 <ShDropdownMenuItem onSelect={() => { reroll() }}>

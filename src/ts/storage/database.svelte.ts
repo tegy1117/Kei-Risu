@@ -20,6 +20,8 @@ import { applyModelPresetDefaults } from '../preset/dbDefaults';
 import type { ApiKeyPoolEntry, ModelBindingFields, ModelBindingSet, ModelPreset, ModelPresetMigrationSummary, RegistryCache } from '../preset/types';
 import { emptyModelBinding } from '../preset/types';
 import { isChatStub } from './chatStub';
+import { reconcileBuiltinTools } from '../process/tools/builtins';
+import { emptyToolPromptPolicy, type RisuToolPackage, type ToolPromptPolicy, type ToolStateStore } from '../process/tools/types';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
 export let appVer = "2026.2.291" //<APP_VERSION_POINT>
@@ -524,6 +526,14 @@ export function setDatabase(data:Database){
     data.memoryLimitThickness ??= 1
     data.modules ??= []
     data.enabledModules ??= []
+    data.tools = reconcileBuiltinTools(data.tools)
+    data.enabledTools ??= []
+    data.toolStates ??= {}
+    data.toolPermissions ??= {}
+    data.toolPolicy = data.toolPolicy ? {
+        tools: data.toolPolicy.tools ?? {},
+        functions: data.toolPolicy.functions ?? {},
+    } : emptyToolPromptPolicy()
     data.additionalParams ??= []
     data.heightMode ??= 'normal'
     data.antiClaudeOverload ??= false
@@ -776,6 +786,7 @@ export function setDatabase(data:Database){
     delete (data as {largeChatPerformanceMode?: unknown}).largeChatPerformanceMode
     data.fixedChatTextarea ??= true
     for(const char of data.characters){
+        char.tools ??= []
         for(const chat of char.chats ?? []){
             // Stubs (lazy-loaded chats) carry no streaming flags; skip them so
             // we don't graft chat-only fields onto stub objects.
@@ -784,6 +795,7 @@ export function setDatabase(data:Database){
             }
             chat.isStreaming = false
             chat.activeStreamingDisplayOptimizationMode = undefined
+            chat.tools ??= []
         }
     }
     applyModelPresetDefaults(data)
@@ -1256,6 +1268,11 @@ export interface Database{
     memoryLimitThickness?:number
     modules: RisuModule[]
     enabledModules: string[]
+    tools: RisuToolPackage[]
+    enabledTools: string[]
+    toolStates: ToolStateStore
+    toolPermissions: Record<string, Record<string, boolean>>
+    toolPolicy: ToolPromptPolicy
     sideMenuRerollButton?:boolean
     requestInfoInsideChat?:boolean
     additionalParams:[string, string][]
@@ -1767,6 +1784,7 @@ export interface character{
     prebuiltAssetStyle?:string
     prebuiltAssetExclude?:string[]
     modules?:string[]
+    tools?:string[]
     coldstorage?:string
     coldStoragedChats?:string[]
     customModuleToggle?:string
@@ -1858,6 +1876,7 @@ export interface botPreset{
     customPromptTemplateToggle?:string
     templateDefaultVariables?:string
     moduleIntergration?:string
+    toolPolicy?:ToolPromptPolicy
     top_k?:number
     instructChatTemplate?:string
     JinjaTemplate?:string
@@ -2111,6 +2130,7 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
     if (typeof c.note !== 'string') c.note = ''
     if (typeof c.name !== 'string') c.name = ''
     if (!Array.isArray(c.localLore)) c.localLore = []
+    if (!Array.isArray(c.tools)) c.tools = []
     return c
 }
 
@@ -2125,6 +2145,7 @@ export interface Chat{
     activeStreamingDisplayOptimizationMode?:StreamingDisplayOptimizationMode
     scriptstate?:{[key:string]:string|number|boolean}
     modules?:string[]
+    tools?:string[]
     id?:string
     bindedPersona?:string
     bindedBotPreset?:string
@@ -2542,6 +2563,7 @@ export function saveCurrentPreset(){
         customPromptTemplateToggle: db.customPromptTemplateToggle ?? "",
         templateDefaultVariables: db.templateDefaultVariables ?? "",
         moduleIntergration: db.moduleIntergration ?? "",
+        toolPolicy: safeStructuredClone(db.toolPolicy ?? emptyToolPromptPolicy()),
         top_k: db.top_k,
         instructChatTemplate: db.instructChatTemplate,
         JinjaTemplate: db.JinjaTemplate ?? '',
@@ -2671,6 +2693,7 @@ export function setPreset(db:Database, newPres: botPreset){
     db.customPromptTemplateToggle = newPres.customPromptTemplateToggle ?? ''
     db.templateDefaultVariables = newPres.templateDefaultVariables ?? ''
     db.moduleIntergration = newPres.moduleIntergration ?? ''
+    db.toolPolicy = safeStructuredClone(newPres.toolPolicy ?? emptyToolPromptPolicy())
     db.top_k = newPres.top_k ?? db.top_k
     db.instructChatTemplate = newPres.instructChatTemplate ?? db.instructChatTemplate
     db.JinjaTemplate = newPres.JinjaTemplate ?? db.JinjaTemplate

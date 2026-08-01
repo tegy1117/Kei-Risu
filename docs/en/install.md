@@ -4,7 +4,7 @@
 
 # Installation Guide
 
-PocketRisu can be installed in four ways.
+Kei-Risu can be installed in four ways.
 
 - [1. Portable Package](#1-portable-package) — Pre-compiled binary. No Node.js required.
 - [2. Docker](#2-docker) — Container environment.
@@ -32,27 +32,27 @@ Download and run a pre-compiled binary. No Node.js, Docker, or other tools requi
 
 ### Download
 
-Get the file for your OS from the [Releases page](https://github.com/PocketRisu/PocketRisu/releases).
+Get the file for your OS from the [Releases page](https://github.com/tegy1117/Kei-Risu/releases).
 
 | OS                      | File                                      |
 | ----------------------- | ----------------------------------------- |
-| Windows (x64)           | `PocketRisu-vX.X.X-win-x64.zip`           |
-| macOS (Apple Silicon)   | `PocketRisu-vX.X.X-macos-arm64.tar.gz`    |
-| Linux (x64)             | `PocketRisu-vX.X.X-linux-x64.tar.gz`      |
-| Linux (ARM)             | `PocketRisu-vX.X.X-linux-arm64.tar.gz`    |
+| Windows (x64)           | `Kei-Risu-vX.X.X-win-x64.zip`           |
+| macOS (Apple Silicon)   | `Kei-Risu-vX.X.X-macos-arm64.tar.gz`    |
+| Linux (x64)             | `Kei-Risu-vX.X.X-linux-x64.tar.gz`      |
+| Linux (ARM)             | `Kei-Risu-vX.X.X-linux-arm64.tar.gz`    |
 
 ### Run
 
 **Windows**
 
-Extract the zip and double-click `PocketRisu.exe`. A browser opens automatically at `http://localhost:6001`.
+Extract the zip and double-click `Kei-Risu.exe`. A browser opens automatically at `http://localhost:6001`.
 
 **macOS**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-macos-arm64.tar.gz
-xattr -cr PocketRisu-vX.X.X-macos-arm64
-open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
+tar -xzf Kei-Risu-vX.X.X-macos-arm64.tar.gz
+xattr -cr Kei-Risu-vX.X.X-macos-arm64
+open Kei-Risu-vX.X.X-macos-arm64/Kei-Risu.app
 ```
 
 The `xattr` command is a one-time step to bypass the "Apple cannot verify" warning.
@@ -60,8 +60,8 @@ The `xattr` command is a one-time step to bypass the "Apple cannot verify" warni
 **Linux**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-linux-*.tar.gz
-cd PocketRisu-vX.X.X-linux-*
+tar -xzf Kei-Risu-vX.X.X-linux-*.tar.gz
+cd Kei-Risu-vX.X.X-linux-*
 ./start.sh
 ```
 
@@ -74,10 +74,10 @@ For Linux/macOS servers without a GUI, fetch and run the latest version in one c
 **Linux (x64):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-linux-x64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-cd PocketRisu-${VERSION}-linux-x64
+VERSION=$(curl -s https://api.github.com/repos/tegy1117/Kei-Risu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/tegy1117/Kei-Risu/releases/download/${VERSION}/Kei-Risu-${VERSION}-linux-x64.tar.gz" -o kei-risu.tar.gz
+tar -xzf kei-risu.tar.gz && rm kei-risu.tar.gz
+cd Kei-Risu-${VERSION}-linux-x64
 ./start.sh
 ```
 
@@ -86,11 +86,11 @@ cd PocketRisu-${VERSION}-linux-x64
 **macOS (Apple Silicon):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-macos-arm64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-xattr -cr PocketRisu-${VERSION}-macos-arm64
-cd PocketRisu-${VERSION}-macos-arm64
+VERSION=$(curl -s https://api.github.com/repos/tegy1117/Kei-Risu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/tegy1117/Kei-Risu/releases/download/${VERSION}/Kei-Risu-${VERSION}-macos-arm64.tar.gz" -o kei-risu.tar.gz
+tar -xzf kei-risu.tar.gz && rm kei-risu.tar.gz
+xattr -cr Kei-Risu-${VERSION}-macos-arm64
+cd Kei-Risu-${VERSION}-macos-arm64
 ./start.sh
 ```
 
@@ -121,7 +121,7 @@ Runs on a system with Docker or Docker Desktop installed.
 ### Run
 
 ```bash
-curl -L https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/docker-compose.yml -o docker-compose.yml
+curl -L https://raw.githubusercontent.com/tegy1117/Kei-Risu/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -158,7 +158,7 @@ Install from the [official Node.js site](https://nodejs.org/) if not present.
 ### Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tegy1117/Kei-Risu/main/install.sh | bash
 ```
 
 A status message is shown when installation finishes.
@@ -166,7 +166,7 @@ A status message is shown when installation finishes.
 ### Start Server
 
 ```bash
-cd ~/pocketrisu
+cd ~/kei-risu
 pnpm runserver
 ```
 
@@ -175,14 +175,14 @@ Open `http://localhost:6001` in your browser.
 ### Update
 
 ```bash
-cd ~/pocketrisu
+cd ~/kei-risu
 ./update.sh
 ```
 
-> **One-time note for v1.5.x → v1.6.0**: If you installed via `install.sh` during the Risuai-NodeOnly era (v1.5.x or earlier), replace `update.sh` with the new version once before your first v1.6.0 update. (The repository was renamed to PocketRisu, and the old `update.sh` cannot find the new source directory.)
+> **One-time PocketRisu migration**: If your existing installation came from PocketRisu, replace `update.sh` once before updating. The old script still downloads from the PocketRisu repository.
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/update.sh -o update.sh && chmod +x update.sh
+> curl -fsSL https://raw.githubusercontent.com/tegy1117/Kei-Risu/main/update.sh -o update.sh && chmod +x update.sh
 > ./update.sh
 > ```
 >
@@ -196,8 +196,8 @@ cd ~/pocketrisu
 Manually clone and build the source. For developers who need to modify or debug code.
 
 ```bash
-git clone https://github.com/PocketRisu/PocketRisu.git
-cd PocketRisu
+git clone https://github.com/tegy1117/Kei-Risu.git
+cd Kei-Risu
 pnpm install
 pnpm build
 pnpm runserver

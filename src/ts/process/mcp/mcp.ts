@@ -8,6 +8,7 @@ import type { MCPClientLike } from "./internalmcp";
 import { sleep } from "src/ts/util";
 import { registeredCustomPluginMCPs } from "./pluginmcp";
 import { makeEncodedStorageKey, readPersistentJson, writePersistentJson } from "src/ts/storage/persistentKv";
+import { callManagedTool, getManagedTools } from "../tools/tools";
 
 export type MCPToolWithURL = MCPTool & {
     mcpURL: string;
@@ -176,11 +177,19 @@ export async function callMCPTool(methodName:string, args:any):Promise<RPCToolCa
 
 //Currently just a wrapper for getMCPTools, but can be extended later for more than MCPs
 export async function getTools(){
-    return await getMCPTools();
+    const [mcpTools, managedTools] = await Promise.all([getMCPTools(), getManagedTools()]);
+    const counts = new Map<string, number>();
+    for (const tool of [...mcpTools, ...managedTools]) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+    for (const [name, count] of counts) {
+        if (count > 1) console.error(`[Tools] Duplicate callable name "${name}" was hidden.`);
+    }
+    return [...mcpTools, ...managedTools].filter((tool) => counts.get(tool.name) === 1);
 }
 
 //Currently just a wrapper for callMCPTool, but can be extended later for more than MCPs
 export async function callTool(methodName:string, args:any) {
+    const managed = await callManagedTool(methodName, args);
+    if (managed) return managed;
     return await callMCPTool(methodName, args);
 }
 

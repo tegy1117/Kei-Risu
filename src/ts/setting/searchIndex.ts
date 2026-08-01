@@ -122,6 +122,7 @@ function routeLabel(route: SettingsRouteValue): string {
         case SettingsRoute.Persona: return language.persona;
         case SettingsRoute.Prompt: return language.promptTemplate;
         case SettingsRoute.Module: return language.modules;
+        case SettingsRoute.Tool: return language.tools;
         case SettingsRoute.Hotkey: return language.hotkey;
         case SettingsRoute.ModelPreset: return language.modelPresetMenu;
         case SettingsRoute.PromptPreset: return language.promptPresetMenu;

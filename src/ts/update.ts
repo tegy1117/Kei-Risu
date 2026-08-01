@@ -1,6 +1,5 @@
 import { writable, get } from "svelte/store"
 import { forageStorage } from "./globalApi.svelte"
-import { DBState } from "./stores.svelte"
 
 export interface UpdateInfo {
     currentVersion: string
@@ -34,8 +33,7 @@ export const selfUpdateProgressStore = writable<SelfUpdateProgress | null>(null)
 
 export async function checkRisuUpdate(): Promise<UpdateInfo | null> {
     try {
-        const lang = encodeURIComponent(DBState.db?.language || '')
-        const res = await fetch(`/api/update-check?lang=${lang}`)
+        const res = await fetch('/api/update-check')
         if (!res.ok) return null
         const data: UpdateInfo = await res.json()
         updateInfoStore.set(data)
@@ -50,10 +48,11 @@ export async function checkRisuUpdate(): Promise<UpdateInfo | null> {
     }
 }
 
-const DISMISSED_KEY = 'risuNodeOnly_dismissedUpdateVersion'
+const DISMISSED_KEY = 'keiRisu_dismissedUpdateVersion'
+const LEGACY_DISMISSED_KEY = 'risuNodeOnly_dismissedUpdateVersion'
 
 function showUpdatePopupOnce(info: UpdateInfo) {
-    const dismissed = localStorage.getItem(DISMISSED_KEY)
+    const dismissed = localStorage.getItem(DISMISSED_KEY) ?? localStorage.getItem(LEGACY_DISMISSED_KEY)
     if (dismissed === info.latestVersion) return
 
     localStorage.setItem(DISMISSED_KEY, info.latestVersion)

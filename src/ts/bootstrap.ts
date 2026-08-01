@@ -5,7 +5,6 @@ import { get } from "svelte/store";
 import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
-import { fetchPublicStats } from "./publicStats";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, bootBackupPromptStore } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
 import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
@@ -85,7 +84,7 @@ export async function loadData() {
             }
             if (createdFreshDatabase) {
                 // Brand-new instance (no save file existed): apply the default
-                // theme preset (#0 = PocketRisu Standard) so the active display
+                // theme preset (#0 = Kei-Risu Standard) so the active display
                 // settings (zoomsize 120, iconsize, line height, etc.) match the
                 // standard theme instead of upstream's raw DB defaults. setDatabase
                 // creates this preset but never applies it. Gated on
@@ -181,7 +180,6 @@ export async function loadData() {
                 cleanChunks().catch(console.error)
             }, 5_000)
             checkRisuUpdate()
-            fetchPublicStats()
             // Server-side model-job recovery (jobRecovery.ts): slot journaled
             // responses from disconnected generations back into their chats.
             // Installs the return triggers (visibility / online) and runs the

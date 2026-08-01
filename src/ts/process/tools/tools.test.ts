@@ -1,0 +1,148 @@
+import { beforeEach, describe, expect, test, vi } from 'vitest'
+import type { RisuToolPackage } from './types'
+
+let mockDb: any
+
+vi.mock('src/ts/alert', () => ({
+    alertConfirm: vi.fn(), alertInput: vi.fn(), alertSelect: vi.fn(),
+    notifyError: vi.fn(), notifySuccess: vi.fn(),
+}))
+vi.mock('src/ts/globalApi.svelte', () => ({ downloadFile: vi.fn(), fetchNative: vi.fn() }))
+vi.mock('src/ts/plugins/apiV3/transpiler', () => ({ pluginCodeTranspiler: vi.fn((source) => source) }))
+vi.mock('src/ts/plugins/apiV3/factory', () => ({ SandboxHost: class {} }))
+vi.mock('src/ts/storage/database.svelte', () => ({
+    getDatabase: () => mockDb,
+    setDatabase: vi.fn(),
+    getCurrentCharacter: () => undefined,
+    getCurrentChat: () => undefined,
+}))
+vi.mock('src/ts/parser/parser.svelte', () => ({ hasher: vi.fn(() => 'hash') }))
+vi.mock('src/ts/util', () => ({ selectSingleFile: vi.fn() }))
+
+import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
+import {
+    createToolExportPayload,
+    parseToolExport,
+    resolveActiveToolPackages,
+    toolWireName,
+    validateToolPackage,
+} from './tools'
+
+function sampleTool(): RisuToolPackage {
+    return {
+        id: 'tool-1', name: 'Sample', description: 'Sample tool', namespace: 'sample', version: '1.0.0',
+        functions: [
+            { id: 'fn-a', name: 'alpha', description: 'Alpha', enabled: true, parameters: [] },
+            { id: 'fn-b', name: 'beta', description: 'Beta', enabled: false, parameters: [] },
+        ],
+        variables: [], lists: [],
+        plugin: { language: 'javascript', source: '', permissions: [] },
+    }
+}
+
+beforeEach(() => {
+    mockDb = { tools: [], enabledTools: [], toolStates: {}, toolPermissions: {}, toolPolicy: { tools: {}, functions: {} } }
+})
+
+describe('built-in tool packages', () => {
+    test('ships Question, Localtime, and Memory as read-only packages', () => {
+        const tools = createBuiltinTools()
+        expect(tools.map((tool) => tool.builtinId)).toEqual(['question', 'localtime', 'memory'])
+        expect(tools.every((tool) => tool.readonly)).toBe(true)
+        expect(tools.find((tool) => tool.builtinId === 'memory')?.functions.map((fn) => fn.name))
+            .toEqual(['list', 'search', 'read', 'upsert', 'delete'])
+    })
+
+    test('refreshes bundled definitions while preserving function switches and user tools', () => {
+        const current = createBuiltinTools()
+        current[0].functions[0].enabled = false
+        current[0].description = 'stale'
+        const userTool = sampleTool()
+        const reconciled = reconcileBuiltinTools([...current, userTool])
+        expect(reconciled[0].description).not.toBe('stale')
+        expect(reconciled[0].functions[0].enabled).toBe(false)
+        expect(reconciled.at(-1)).toEqual(userTool)
+    })
+
+    test('each bundled plugin registers every declared function', async () => {
+        for (const tool of createBuiltinTools()) {
+            const handlers = new Map<string, Function>()
+            const risuai = new Proxy({
+                registerFunction: async (name: string, handler: Function) => { handlers.set(name, handler) },
+            }, { get: (target, key) => (target as any)[key] ?? vi.fn() })
+            const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+            await new AsyncFunction('risuai', tool.plugin.source)(risuai)
+            expect([...handlers.keys()]).toEqual(tool.functions.map((fn) => fn.name))
+        }
+    })
+})
+
+describe('tool activation policy', () => {
+    test('inherits package activation and declared function switches', () => {
+        const tool = sampleTool()
+        const active = resolveActiveToolPackages([tool], [tool.id], { tools: {}, functions: {} })
+        expect(active[0].functions.map((fn) => fn.name)).toEqual(['alpha'])
+    })
+
+    test('prompt policy can force a package on and independently override functions', () => {
+        const tool = sampleTool()
+        const active = resolveActiveToolPackages([tool], [], {
+            tools: { sample: 'on' },
+            functions: { [toolWireName('sample', 'alpha')]: 'off', [toolWireName('sample', 'beta')]: 'on' },
+        })
+        expect(active[0].functions.map((fn) => fn.name)).toEqual(['beta'])
+    })
+
+    test('package off blocks all functions even when its scope and a function are on', () => {
+        const tool = sampleTool()
+        expect(resolveActiveToolPackages([tool], [tool.id], {
+            tools: { sample: 'off' }, functions: { sample__alpha: 'on' },
+        })).toEqual([])
+    })
+})
+
+describe('.risutool definition format', () => {
+    test('exports a cloneable definition and includes state only when requested', () => {
+        const tool = { ...sampleTool(), builtinId: 'question', readonly: true } as RisuToolPackage
+        const withoutState = createToolExportPayload(tool)
+        expect(withoutState.tool.id).not.toBe(tool.id)
+        expect(withoutState.tool.builtinId).toBeUndefined()
+        expect(withoutState.tool.readonly).toBe(false)
+        expect(withoutState.state).toBeUndefined()
+
+        const withState = createToolExportPayload(tool, { global: { variables: { count: 1 }, lists: {} } })
+        expect(withState.state?.global?.variables.count).toBe(1)
+    })
+
+    test('parses v1 and fills optional collections from older files', () => {
+        const tool = sampleTool() as any
+        delete tool.variables
+        delete tool.lists
+        tool.plugin = { language: 'javascript', source: '' }
+        const parsed = parseToolExport(JSON.stringify({ type: 'risuTool', version: 1, tool }))
+        expect(parsed.tool.variables).toEqual([])
+        expect(parsed.tool.lists).toEqual([])
+        expect(parsed.tool.plugin.permissions).toEqual([])
+    })
+
+    test('rejects an unsupported payload', () => {
+        expect(() => parseToolExport('{"type":"other"}')).toThrow('Invalid .risutool file.')
+    })
+})
+
+describe('tool validation', () => {
+    test('guards namespaces, duplicate functions, parameters, and package collisions', () => {
+        const tool = sampleTool()
+        tool.namespace = 'not valid'
+        tool.functions.push({ ...tool.functions[0], id: 'duplicate' })
+        tool.functions[0].parameters = [
+            { id: 'p1', name: 'arg', description: '', type: 'string' },
+            { id: 'p2', name: 'arg', description: '', type: 'string' },
+        ]
+        const errors = validateToolPackage(tool, [{ ...sampleTool(), id: 'other' }])
+        expect(errors.join('\n')).toContain('Namespace may contain')
+        expect(errors.join('\n')).toContain('Duplicate function name')
+        expect(errors.join('\n')).toContain('Duplicate parameter')
+        expect(validateToolPackage(sampleTool(), [{ ...sampleTool(), id: 'other' }]).join('\n')).toContain('already in use')
+    })
+})

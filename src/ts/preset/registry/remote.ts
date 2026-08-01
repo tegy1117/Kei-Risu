@@ -1,5 +1,6 @@
-// Runtime registry fetch — pulls the combined catalog from GitHub and overlays
-// it on the build-time bundled snapshot.
+// Optional runtime registry fetch — custom registries can overlay the
+// build-time bundled snapshot. Kei-Risu has no external registry dependency by
+// default.
 //
 // Flow:
 //  1. Fetch index.json (tiny: { schemaVersion, hash }) on every menu entry.
@@ -19,7 +20,6 @@ import type { BaseProviderDefinition, ModelPreset, ModelProfile, RegistryCache }
 import { getProfileUpdateStatus, type ProfileUpdateStatus } from '../customProfiles'
 import { getBundledRegistryId, loadBundledRegistry } from './loader'
 
-const OFFICIAL_BASE = 'https://raw.githubusercontent.com/PocketRisu/pocketrisu-model-registry/main/'
 // Skip a re-fetch if one ran this recently (menu re-entry debounce).
 const REFETCH_GUARD_MS = 5_000
 
@@ -48,13 +48,12 @@ async function fetchJson<T>(url: string): Promise<T> {
     return (await res.json()) as T
 }
 
-// https-only custom base (dev branch / fork), else official. Trailing slash so
-// `base + 'index.json'` resolves.
-function getRegistryBase(): string {
+// HTTPS-only custom base. Trailing slash so `base + 'index.json'` resolves.
+function getRegistryBase(): string | undefined {
     const db = DBState.db
     const custom = db.useCustomModelRegistry ? db.modelProfileRegistryBaseUrl?.trim() : undefined
     if (custom && /^https:\/\//i.test(custom)) return custom.endsWith('/') ? custom : custom + '/'
-    return OFFICIAL_BASE
+    return undefined
 }
 
 // Non-empty when the custom registry is enabled but its URL is empty or not
@@ -161,11 +160,13 @@ export async function syncRemoteRegistry(force = false): Promise<SyncResult> {
         const urlError = customUrlError()
         if (urlError) return { ok: false, changed: false, downloaded: false, error: urlError }
 
+        const base = getRegistryBase()
+        if (!base) return { ok: true, changed: false, downloaded: false }
+
         if (!force && isRefetchGuarded(db.modelProfileRegistryLastFetched)) {
             return { ok: true, changed: false, downloaded: false }
         }
 
-        const base = getRegistryBase()
         let index: RegistryIndexFile
         try {
             index = await fetchJson<RegistryIndexFile>(base + 'index.json')
@@ -245,7 +246,9 @@ export async function syncRemoteRegistry(force = false): Promise<SyncResult> {
 // The official registry to read from: remote cache if present, else bundled.
 // Scoped to just the official entry so custom profiles never leak in.
 export function getOfficialRegistry(): RegistryCache {
-    const remote = DBState.db.modelProfileRegistryCache?.registries?.[getBundledRegistryId()]
+    const remote = DBState.db.useCustomModelRegistry
+        ? DBState.db.modelProfileRegistryCache?.registries?.[getBundledRegistryId()]
+        : undefined
     if (remote?.profiles && Object.keys(remote.profiles).length > 0) {
         return { schemaVersion: 4, registries: { [getBundledRegistryId()]: remote } }
     }

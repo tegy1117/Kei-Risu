@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/pocketrisu-banner-1024.png" alt="Kei-Risu — 自架 AI 角色扮演聊天平台" width="900" />
+  <img src="../assets/kei-risu-banner-1024.png" alt="Kei-Risu — 自架 AI 角色扮演聊天平台" width="900" />
 </p>
 
 <h1 align="center">Kei-Risu — 自架 AI 角色扮演聊天</h1>

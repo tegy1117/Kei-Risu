@@ -189,6 +189,12 @@ export const searchManifestEntries: ManualSearchEntry[] = [
         route: SettingsRoute.Module,
     },
     {
+        id: 'manual.page.tool',
+        label: () => language.tools,
+        keywords: ['tool', 'agent', 'function', '툴', '에이전트'],
+        route: SettingsRoute.Tool,
+    },
+    {
         id: 'manual.page.hotkey',
         label: () => language.hotkey,
         keywords: ['hotkey', 'shortcut', 'keyboard', '단축키', '핫키'],

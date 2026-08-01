@@ -1,7 +1,7 @@
 /**
  * Chunking lifecycle integration tests.
  *
- * Boots a real server with a LOW chunk threshold (POCKETRISU_CHUNK_THRESHOLD)
+ * Boots a real server with a LOW chunk threshold (KEIRISU_CHUNK_THRESHOLD)
  * so the DB blob actually chunks, then drives the full lifecycle over HTTP:
  *   import (chunks) → stats (chunk-aware) → export → re-import (round-trip) →
  *   snapshots/limits → optimize/gc, plus the save-folder import paths.
@@ -27,7 +27,7 @@ function dbBlobFromExport(exported: Buffer): Buffer {
 }
 
 // Chunk anything larger than 4 KB so a normal seed DB chunks.
-const CHUNK_ENV = { POCKETRISU_CHUNK_THRESHOLD: '4096' }
+const CHUNK_ENV = { KEIRISU_CHUNK_THRESHOLD: '4096' }
 
 const servers: ServerHandle[] = []
 afterAll(async () => { await Promise.allSettled(servers.map((s) => s.cleanup())) })
@@ -112,7 +112,7 @@ describe('chunking lifecycle (real server, low threshold)', () => {
 
   test('a chunked snapshot reports a real footprint, not the 13-byte marker', async () => {
     // No backup cooldown so the 2nd import snapshots the 1st (chunked) DB.
-    const { client } = await boot({ POCKETRISU_BACKUP_INTERVAL_MS: '0' })
+    const { client } = await boot({ KEIRISU_BACKUP_INTERVAL_MS: '0' })
     expect((await uploadZip(client, bigDbBlob('AAA'))).status).toBe(200) // v1 chunked
     expect((await uploadZip(client, bigDbBlob('BBB'))).status).toBe(200) // snapshots v1, then v2
 
@@ -173,7 +173,7 @@ describe('chunking lifecycle (real server, low threshold)', () => {
   })
 
   test('restoring a chunked snapshot brings its data back (recovery path)', async () => {
-    const { client } = await boot({ POCKETRISU_BACKUP_INTERVAL_MS: '0' })
+    const { client } = await boot({ KEIRISU_BACKUP_INTERVAL_MS: '0' })
     await uploadZip(client, bigDbBlob('AAA')) // v1
     await uploadZip(client, bigDbBlob('BBB')) // snapshots v1 (chunked), live = v2
 
@@ -244,7 +244,7 @@ describe('chunking lifecycle (real server, low threshold)', () => {
     // Simulate an "old" server (chunking effectively off via a huge threshold):
     // it must import and store the blob raw.
     const exported = await client.exportBackup()
-    const { client: oldish } = await boot({ POCKETRISU_CHUNK_THRESHOLD: '9999999999' })
+    const { client: oldish } = await boot({ KEIRISU_CHUNK_THRESHOLD: '9999999999' })
     expect((await oldish.importBackup(exported)).ok).toBe(true)
     const s2 = await getStats(oldish)
     expect(s2.chunks.liveChunked).toBe(false) // stored raw, like a pre-chunking server

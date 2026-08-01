@@ -92,8 +92,9 @@ function migrateFromSaveDir() {
 // with no benefit. Creates its own chunks/manifest tables (kv stays as-is).
 // Built before migrateFromSaveDir so legacy blob migration can chunk too.
 const DB_BLOB_KEY = 'database/database.bin';
-const chunkThreshold = process.env.POCKETRISU_CHUNK_THRESHOLD
-    ? Number(process.env.POCKETRISU_CHUNK_THRESHOLD)
+const chunkThresholdEnv = process.env.KEIRISU_CHUNK_THRESHOLD ?? process.env.POCKETRISU_CHUNK_THRESHOLD;
+const chunkThreshold = chunkThresholdEnv
+    ? Number(chunkThresholdEnv)
     : undefined;
 const chunkStore = createChunkStore(db, { threshold: chunkThreshold });
 

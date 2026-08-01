@@ -6,7 +6,7 @@
 
 > 🌐 此指南由機器翻譯生成。如需獲取最準確的資訊,請參閱 [English](../en/termux.md) 或 [한국어](../ko/termux.md) 版本。
 
-本指南介紹如何透過 Termux 在 Android 手機上直接建置並執行 PocketRisu。預期使用方式是在同一支手機的瀏覽器中開啟 `http://localhost:6001`。
+本指南介紹如何透過 Termux 在 Android 手機上直接建置並執行 Kei-Risu。預期使用方式是在同一支手機的瀏覽器中開啟 `http://localhost:6001`。
 
 - [1. 準備工作](#1-準備工作) — F-Droid Termux 與系統需求
 - [2. 安裝與建置](#2-安裝與建置) — 一條命令完成
@@ -25,7 +25,7 @@
 | **記憶體**   | 2 GB         | 4 GB 或以上               |
 | **可用空間** | 2 GB         | 4 GB 或以上(含建置產物)   |
 
-PocketRisu 不為 Termux 提供預先編譯的二進位檔,因此由手機自行建置。包括 `better-sqlite3` 等原生模組在內,建置大約需要 **10 至 40 分鐘**,具體取決於手機效能。
+Kei-Risu 不為 Termux 提供預先編譯的二進位檔,因此由手機自行建置。包括 `better-sqlite3` 等原生模組在內,建置大約需要 **10 至 40 分鐘**,具體取決於手機效能。
 
 
 ---
@@ -35,7 +35,7 @@ PocketRisu 不為 Termux 提供預先編譯的二進位檔,因此由手機自行
 ### 使用 F-Droid 或 GitHub Releases 版本的 Termux
 
 > ⚠️ **Play Store 版本的 Termux 無法使用。**
-> Termux 維護者已於 2020 年停止更新 Play Store 版本,無法再安裝 PocketRisu 所需的最新套件(Node.js 22+)。
+> Termux 維護者已於 2020 年停止更新 Play Store 版本,無法再安裝 Kei-Risu 所需的最新套件(Node.js 22+)。
 
 請從以下任一來源安裝 Termux:
 
@@ -53,15 +53,15 @@ PocketRisu 不為 Termux 提供預先編譯的二進位檔,因此由手機自行
 
 ```bash
 pkg install -y git && \
-  git clone https://github.com/PocketRisu/PocketRisu.git && \
-  cd PocketRisu && \
+  git clone https://github.com/tegy1117/Kei-Risu.git && \
+  cd Kei-Risu && \
   bash scripts/termux/build.sh
 ```
 
 該命令會自動完成:
 
 1. 安裝 `git`
-2. 複製 PocketRisu 儲存庫
+2. 複製 Kei-Risu 儲存庫
 3. 安裝建置相依套件(`nodejs-lts`、`python`、`make`、`clang`、`pnpm` 等)
 4. `pnpm install` — JavaScript 相依套件與原生模組編譯
 5. `pnpm build` — 前端打包
@@ -93,7 +93,7 @@ node server/node/server.cjs
 http://localhost:6001
 ```
 
-PocketRisu UI 應當正常載入。瀏覽器自動將 `localhost` 視為安全內容(secure context),因此剪貼簿、`crypto.subtle` 等需要安全內容的 API 均可正常運作。
+Kei-Risu UI 應當正常載入。瀏覽器自動將 `localhost` 視為安全內容(secure context),因此剪貼簿、`crypto.subtle` 等需要安全內容的 API 均可正常運作。
 
 使用 `Ctrl + C` 停止伺服器。
 
@@ -119,10 +119,10 @@ Termux 通知列會顯示喚醒鎖指示器,即使螢幕關閉伺服器也會繼
 
 ## 5. 更新
 
-在 PocketRisu 目錄下執行:
+在 Kei-Risu 目錄下執行:
 
 ```bash
-cd ~/PocketRisu
+cd ~/Kei-Risu
 git pull
 NODE_OPTIONS="--max-old-space-size=2048" pnpm build
 ```
@@ -136,7 +136,7 @@ NODE_OPTIONS="--max-old-space-size=2048" pnpm build
 
 **Quick Tunnel(Cloudflare 自動隧道)在 Termux 上無法使用。** `cloudflared` 二進位檔與 Termux 的 DNS 和 TLS 環境不相容。
 
-PocketRisu 會自動偵測 Termux 環境,在遠端存取選單中顯示警告並隱藏啟動按鈕。
+Kei-Risu 會自動偵測 Termux 環境,在遠端存取選單中顯示警告並隱藏啟動按鈕。
 
 
 ---

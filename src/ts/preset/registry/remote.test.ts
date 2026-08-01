@@ -21,7 +21,7 @@ vi.mock('src/ts/stores.svelte', () => ({ DBState: mockDb }))
 import { getOfficialRegistry, isEntryCorrupted, isRefetchGuarded, syncRemoteRegistry } from './remote'
 import { getBundledRegistryId, loadBundledRegistry } from './loader'
 
-const BASE = 'https://raw.githubusercontent.com/PocketRisu/pocketrisu-model-registry/main/'
+const BASE = 'https://example.com/kei-risu-model-registry/'
 
 // Wire up index.json + catalog.json responders for a given base + hash.
 function setup(
@@ -48,12 +48,22 @@ function officialEntry() {
 }
 
 beforeEach(() => {
-    mockDb.db = {}
+    mockDb.db = {
+        useCustomModelRegistry: true,
+        modelProfileRegistryBaseUrl: BASE,
+    }
     state.responders = {}
     state.fetchCount = 0
 })
 
 describe('syncRemoteRegistry', () => {
+    it('uses the bundled registry without making a network request by default', async () => {
+        mockDb.db.useCustomModelRegistry = false
+        const res = await syncRemoteRegistry()
+        expect(res).toEqual({ ok: true, changed: false, downloaded: false })
+        expect(state.fetchCount).toBe(0)
+    })
+
     it('downloads the catalog on first sync and stores hash + source', async () => {
         setup(BASE, 'h1')
         const res = await syncRemoteRegistry()
