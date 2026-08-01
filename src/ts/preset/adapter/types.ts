@@ -156,6 +156,12 @@ export interface AdapterChatStreamDelta {
     // Reasoning (thinking) text for this chunk, kept SEPARATE from textDelta so it
     // can be wrapped in <Thoughts> for display instead of leaking into the answer.
     reasoningDelta?: string
+    // Tool-capable streams emit fully assembled calls once, after all provider-
+    // specific fragments for the turn have arrived. `reasoning` / providerEcho
+    // are the structured forms needed to safely continue thinking-model turns.
+    toolCalls?: AdapterToolCall[]
+    reasoning?: AdapterReasoningPart[]
+    providerEcho?: unknown
     finishReason?: string
     usage?: AdapterUsage
     raw: unknown

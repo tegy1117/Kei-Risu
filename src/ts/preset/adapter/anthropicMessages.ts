@@ -123,10 +123,13 @@ export async function* streamAnthropicChatRequest(
         throw new ModelPresetAdapterError('parse', 'Anthropic stream response has no body')
     }
 
+    const blocks = new Map<number, Record<string, unknown>>()
+    const partialInputs = new Map<number, string>()
+    let lastRaw: unknown = {}
     try {
         for await (const event of parseSseStream(response.body)) {
             if (event.event === 'ping') continue
-            if (event.event === 'message_stop') return
+            if (event.event === 'message_stop') break
             if (event.event === 'error') {
                 throw deriveStreamError(event.data)
             }
@@ -141,8 +144,20 @@ export async function* streamAnthropicChatRequest(
                     { cause: err },
                 )
             }
+            lastRaw = raw
+            if (isPlainObject(raw)) collectAnthropicStreamBlock(event.event, raw, blocks, partialInputs)
             const delta = parseAnthropicStreamDelta(event.event, raw)
             if (delta) yield delta
+        }
+        const assembled = assembleAnthropicStreamTurn(blocks, partialInputs)
+        if (assembled.toolCalls.length > 0) {
+            yield {
+                textDelta: '',
+                toolCalls: assembled.toolCalls,
+                reasoning: assembled.reasoning.length > 0 ? assembled.reasoning : undefined,
+                providerEcho: assembled.providerEcho,
+                raw: lastRaw,
+            }
         }
     } catch (err) {
         if (err instanceof ModelPresetAdapterError) throw err
@@ -484,6 +499,69 @@ export function parseAnthropicStreamDelta(eventName: string | undefined, raw: un
         return { textDelta: '', finishReason, usage, raw }
     }
     return null
+}
+
+function collectAnthropicStreamBlock(
+    eventName: string | undefined,
+    raw: Record<string, unknown>,
+    blocks: Map<number, Record<string, unknown>>,
+    partialInputs: Map<number, string>,
+): void {
+    const index = typeof raw['index'] === 'number' ? raw['index'] as number : -1
+    if (index < 0) return
+    if (eventName === 'content_block_start' && isPlainObject(raw['content_block'])) {
+        blocks.set(index, { ...raw['content_block'] as Record<string, unknown> })
+        return
+    }
+    if (eventName !== 'content_block_delta' || !isPlainObject(raw['delta'])) return
+    const delta = raw['delta'] as Record<string, unknown>
+    const block = blocks.get(index)
+    if (!block) return
+    if (delta['type'] === 'text_delta' && typeof delta['text'] === 'string') {
+        block.text = String(block.text ?? '') + delta['text']
+    } else if (delta['type'] === 'thinking_delta' && typeof delta['thinking'] === 'string') {
+        block.thinking = String(block.thinking ?? '') + delta['thinking']
+    } else if (delta['type'] === 'signature_delta' && typeof delta['signature'] === 'string') {
+        block.signature = String(block.signature ?? '') + delta['signature']
+    } else if (delta['type'] === 'input_json_delta' && typeof delta['partial_json'] === 'string') {
+        partialInputs.set(index, (partialInputs.get(index) ?? '') + delta['partial_json'])
+    }
+}
+
+function assembleAnthropicStreamTurn(
+    blocks: Map<number, Record<string, unknown>>,
+    partialInputs: Map<number, string>,
+): { toolCalls: AdapterToolCall[], reasoning: AdapterReasoningPart[], providerEcho: Record<string, unknown>[] } {
+    const toolCalls: AdapterToolCall[] = []
+    const reasoning: AdapterReasoningPart[] = []
+    const providerEcho = Array.from(blocks.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([index, source]) => {
+            const block = { ...source }
+            if (block.type === 'tool_use') {
+                const partial = partialInputs.get(index)
+                if (partial !== undefined) {
+                    try { block.input = JSON.parse(partial) }
+                    catch { block.input = {} }
+                }
+                if (typeof block.name === 'string') {
+                    toolCalls.push({
+                        id: typeof block.id === 'string' ? block.id : '',
+                        name: block.name,
+                        arguments: partial ?? JSON.stringify(block.input ?? {}),
+                    })
+                }
+            } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+                reasoning.push({
+                    text: block.thinking,
+                    signature: typeof block.signature === 'string' ? block.signature : undefined,
+                })
+            } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
+                reasoning.push({ redactedData: block.data })
+            }
+            return block
+        })
+    return { toolCalls, reasoning, providerEcho }
 }
 
 function parseAnthropicUsage(raw: unknown): AdapterUsage | undefined {

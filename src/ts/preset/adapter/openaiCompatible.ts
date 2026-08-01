@@ -108,9 +108,14 @@ export async function* streamChatRequest(
         throw new ModelPresetAdapterError('parse', 'OpenAI-compatible stream response has no body')
     }
 
+    const toolFragments = new Map<number, AdapterToolCall>()
+    const reasoningDetails: unknown[] = []
+    let fullText = ''
+    let fullReasoning = ''
+    let lastRaw: unknown = {}
     try {
         for await (const event of parseSseStream(response.body)) {
-            if (event.data === '[DONE]') return
+            if (event.data === '[DONE]') break
             if (event.data.length === 0) continue
             let raw: unknown
             try {
@@ -122,8 +127,44 @@ export async function* streamChatRequest(
                     { cause: err },
                 )
             }
+            lastRaw = raw
+            collectOpenAiToolFragments(raw, toolFragments)
+            collectOpenAiReasoningDetails(raw, reasoningDetails)
             const delta = parseChatStreamDelta(raw)
-            if (delta) yield delta
+            if (delta) {
+                fullText += delta.textDelta
+                fullReasoning += delta.reasoningDelta ?? ''
+                yield delta
+            }
+        }
+        const toolCalls = Array.from(toolFragments.entries())
+            .sort(([a], [b]) => a - b)
+            .map(([, call]) => call)
+            .filter((call) => call.name.length > 0)
+        if (toolCalls.length > 0) {
+            const wireCalls: WireToolCall[] = toolCalls.map((call) => {
+                const wire: WireToolCall = {
+                    id: call.id,
+                    type: 'function',
+                    function: { name: call.name, arguments: call.arguments },
+                }
+                if (call.signature) wire.extra_content = { google: { thought_signature: call.signature } }
+                return wire
+            })
+            const providerEcho: Record<string, unknown> = {
+                role: 'assistant',
+                content: fullText,
+                tool_calls: wireCalls,
+            }
+            if (fullReasoning.length > 0) providerEcho.reasoning = fullReasoning
+            if (reasoningDetails.length > 0) providerEcho.reasoning_details = reasoningDetails
+            yield {
+                textDelta: '',
+                toolCalls,
+                reasoning: fullReasoning.length > 0 ? [{ text: fullReasoning }] : undefined,
+                providerEcho,
+                raw: lastRaw,
+            }
         }
     } catch (err) {
         // Intentional domain errors (parse, etc.) pass through;
@@ -330,6 +371,34 @@ function parseToolCalls(raw: unknown): AdapterToolCall[] | undefined {
         calls.push({ id, name: fn['name'] as string, arguments: args, signature })
     }
     return calls.length > 0 ? calls : undefined
+}
+
+function collectOpenAiToolFragments(raw: unknown, calls: Map<number, AdapterToolCall>): void {
+    if (!isPlainObject(raw) || !Array.isArray(raw['choices'])) return
+    const first = raw['choices'][0]
+    if (!isPlainObject(first) || !isPlainObject(first['delta'])) return
+    const fragments = first['delta']['tool_calls']
+    if (!Array.isArray(fragments)) return
+    fragments.forEach((entry, fallbackIndex) => {
+        if (!isPlainObject(entry)) return
+        const index = typeof entry['index'] === 'number' ? entry['index'] as number : fallbackIndex
+        const current = calls.get(index) ?? { id: '', name: '', arguments: '' }
+        const fn = entry['function']
+        calls.set(index, {
+            id: current.id + (typeof entry['id'] === 'string' ? entry['id'] as string : ''),
+            name: current.name + (isPlainObject(fn) && typeof fn['name'] === 'string' ? fn['name'] as string : ''),
+            arguments: current.arguments + (isPlainObject(fn) && typeof fn['arguments'] === 'string' ? fn['arguments'] as string : ''),
+            signature: extractThoughtSignature(entry['extra_content']) ?? current.signature,
+        })
+    })
+}
+
+function collectOpenAiReasoningDetails(raw: unknown, output: unknown[]): void {
+    if (!isPlainObject(raw) || !Array.isArray(raw['choices'])) return
+    const first = raw['choices'][0]
+    if (!isPlainObject(first) || !isPlainObject(first['delta'])) return
+    const details = first['delta']['reasoning_details']
+    if (Array.isArray(details)) output.push(...details)
 }
 
 // OpenRouter relays Gemini's thoughtSignature here. Returns undefined for the

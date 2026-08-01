@@ -19,7 +19,7 @@ vi.mock('./storage/database.svelte', () => ({
     getDatabase: () => ({ requestLogEnabled: loggingEnabled }),
 }))
 
-const { createRequestLogScope } = await import('./requestLog')
+const { createRequestLogScope, redactRequestLogValue, stringifyRequestLogValue } = await import('./requestLog')
 
 // Captures what the collector POSTs to /api/request-logs.
 let posted: any[][]
@@ -177,6 +177,44 @@ describe('createRequestLogScope', () => {
         expect(posted).toHaveLength(1)
         expect(posted[0]).toHaveLength(2)
         expect(posted[0][1].url).toBe('https://x.test/2')
+    })
+
+    it('keeps synthetic tool calls between the model requests that surround them', async () => {
+        const scope = createRequestLogScope({ category: 'llm', source: 'main', chatId: 'gen-tools' })
+        const wrapped = scope.wrap(async () => jsonResponse('{}'))
+        await (await wrapped('https://x.test/turn-1', { method: 'POST', body: '{}' })).text()
+        scope.append({
+            timestamp: Date.now(), category: 'tool', source: 'main', chatId: 'gen-tools',
+            url: 'tool://localtime__now', method: 'CALL', success: true, streaming: false,
+            requestBody: '{"zone":"UTC"}', responseBody: '{"now":"12:00"}',
+        })
+        await (await wrapped('https://x.test/turn-2', { method: 'POST', body: '{}' })).text()
+        await scope.close()
+
+        expect(posted[0].map((entry) => entry.url)).toEqual([
+            'https://x.test/turn-1', 'tool://localtime__now', 'https://x.test/turn-2',
+        ])
+        expect(posted[0][1]).toMatchObject({ category: 'tool', requestBody: '{"zone":"UTC"}' })
+    })
+
+    it('redacts sensitive tool fields and credential-shaped strings', () => {
+        const redacted = redactRequestLogValue({
+            apiKey: 'plain-secret',
+            nested: {
+                password: 'hunter2',
+                value: 'sk-abcdefghijklmnopqrstuvwxyz123456',
+                toolText: '{"secret":"inside text"}',
+            },
+        })
+        expect(redacted).toEqual({
+            apiKey: '[REDACTED]',
+            nested: {
+                password: '[REDACTED]',
+                value: '[REDACTED_API_KEY]',
+                toolText: '{"secret":"[REDACTED]"}',
+            },
+        })
+        expect(stringifyRequestLogValue(redacted)).not.toContain('hunter2')
     })
 
     it('applies usage only to the last request of a tool loop', async () => {

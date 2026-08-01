@@ -162,6 +162,8 @@ export async function* streamGoogleChatRequest(
         throw new ModelPresetAdapterError('parse', 'Gemini stream response has no body')
     }
 
+    const echoParts: Record<string, unknown>[] = []
+    let lastRaw: unknown = {}
     try {
         // usageMetadata arrives on the last SSE chunk; capture it so the cache
         // lifecycle can run once the stream completes normally.
@@ -178,6 +180,8 @@ export async function* streamGoogleChatRequest(
                     { cause: err },
                 )
             }
+            lastRaw = raw
+            collectGeminiStreamParts(raw, echoParts)
             const delta = parseGeminiStreamDelta(raw)
             if (delta) {
                 if (delta.usage) lastUsage = delta.usage
@@ -185,6 +189,16 @@ export async function* streamGoogleChatRequest(
             }
         }
         cacheTurn?.finish(lastUsage?.promptTokens)
+        const assembled = parseGeminiParts({ parts: echoParts })
+        if (assembled.toolCalls.length > 0) {
+            yield {
+                textDelta: '',
+                toolCalls: assembled.toolCalls,
+                reasoning: assembled.reasoning.length > 0 ? assembled.reasoning : undefined,
+                providerEcho: echoParts,
+                raw: lastRaw,
+            }
+        }
     } catch (err) {
         if (err instanceof ModelPresetAdapterError) throw err
         throw normalizeFetchError(err)
@@ -538,6 +552,19 @@ function splitStreamParts(content: unknown): { text: string; reasoning: string }
         else text += part['text'] as string
     }
     return { text, reasoning }
+}
+
+function collectGeminiStreamParts(
+    raw: unknown,
+    output: Record<string, unknown>[],
+): void {
+    if (!isPlainObject(raw) || !Array.isArray(raw['candidates'])) return
+    const first = raw['candidates'][0]
+    if (!isPlainObject(first) || !isPlainObject(first['content']) || !Array.isArray(first['content']['parts'])) return
+    for (const source of first['content']['parts']) {
+        if (!isPlainObject(source)) continue
+        output.push({ ...source })
+    }
 }
 
 function parseGeminiUsage(raw: unknown): AdapterUsage | undefined {

@@ -4,7 +4,7 @@ import { resolveSnapshot } from '../registry/snapshot'
 import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
 import { ModelPresetAdapterError } from './error'
 import { sendChatRequest, streamChatRequest, previewChatRequest } from './openaiCompatible'
-import type { AdapterChatMessage } from './types'
+import type { AdapterChatMessage, AdapterToolCall } from './types'
 
 function makeSnapshot(overrides: Partial<ResolvedModelProfileSnapshot> = {}): ResolvedModelProfileSnapshot {
     return {
@@ -329,6 +329,24 @@ describe('streamChatRequest', () => {
         }
         expect(text.join('')).toBe('answer')
         expect(reasoning.join('')).toBe('step two')
+    })
+
+    test('assembles fragmented streamed tool calls and emits them once', async () => {
+        const { fetchImpl } = captureFetch(sseResponse([
+            'data: {"choices":[{"delta":{"content":"checking","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"local","arguments":"{\\"zone\\":"},"extra_content":{"google":{"thought_signature":"sig"}}}]}}]}\n\n',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"time","arguments":"\\"UTC\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+            'data: [DONE]\n\n',
+        ]))
+        const calls: AdapterToolCall[][] = []
+        let providerEcho: unknown
+        for await (const delta of streamChatRequest(makePreset(), { messages: userMessages, fetchImpl }, { apiKey: 'sk' })) {
+            if (delta.toolCalls) calls.push(delta.toolCalls)
+            if (delta.providerEcho) providerEcho = delta.providerEcho
+        }
+        expect(calls).toEqual([[
+            { id: 'call_1', name: 'localtime', arguments: '{"zone":"UTC"}', signature: 'sig' },
+        ]])
+        expect(providerEcho).toMatchObject({ role: 'assistant', content: 'checking' })
     })
 
     test('captures usage emitted in the final chunk', async () => {

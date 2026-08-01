@@ -28,7 +28,7 @@
 
     // Every category is stored, but the log is overwhelmingly about model
     // requests, so the default view shows those and the rest is one click away.
-    const CATEGORIES: RequestLogCategory[] = ['llm', 'tts', 'image', 'translate', 'embedding', 'other']
+    const CATEGORIES: RequestLogCategory[] = ['llm', 'tool', 'tts', 'image', 'translate', 'embedding', 'other']
     const SOURCES: RequestLogSource[] = [
         'main', 'translate', 'memory', 'emotion', 'sub',
         'preview', 'test', 'tts', 'image', 'plugin', 'other',
@@ -36,6 +36,7 @@
 
     const categoryLabel: Record<RequestLogCategory, string> = {
         llm: language.requestLogsCategoryLlm,
+        tool: language.requestLogsCategoryTool,
         tts: language.requestLogsCategoryTts,
         image: language.requestLogsCategoryImage,
         translate: language.requestLogsCategoryTranslate,
@@ -422,6 +423,10 @@
                                 {tokenSummary(entry)}
                             </span>
                         {/if}
+
+                        <ShBadge variant="outline" className="shrink-0 hidden md:inline-flex">
+                            {categoryLabel[entry.category] ?? entry.category}
+                        </ShBadge>
 
                         <ShBadge variant="outline" className="shrink-0 hidden md:inline-flex">
                             {sourceLabel[entry.source] ?? entry.source}

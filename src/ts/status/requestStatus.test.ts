@@ -116,6 +116,12 @@ describe('recomputeEntry', () => {
         expect(re.phase).toBe('connecting')
     })
 
+    it('does not flip a long-running tool execution to stalled', () => {
+        const e = makeEntry({ phase: 'using_tool', lastChunkAt: 0 })
+        const re = recomputeEntry(e, STALL_THRESHOLD_MS + 1)
+        expect(re.phase).toBe('using_tool')
+    })
+
     it('leaves terminal entries frozen', () => {
         const e = makeEntry({ phase: 'done', lastChunkAt: 0, tokPerSec: 42 })
         const re = recomputeEntry(e, STALL_THRESHOLD_MS + 9999)

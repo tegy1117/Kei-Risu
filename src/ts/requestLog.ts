@@ -18,7 +18,7 @@
 import { getDatabase } from './storage/database.svelte'
 import { getClientId } from './log'
 
-export type RequestLogCategory = 'llm' | 'tts' | 'image' | 'translate' | 'embedding' | 'other'
+export type RequestLogCategory = 'llm' | 'tool' | 'tts' | 'image' | 'translate' | 'embedding' | 'other'
 export type RequestLogSource =
     | 'main' | 'translate' | 'memory' | 'emotion' | 'sub'
     | 'preview' | 'test' | 'tts' | 'image' | 'plugin' | 'other'
@@ -72,6 +72,8 @@ interface PendingEntry {
     clientId?: string
 }
 
+export type RequestLogSyntheticEntry = Omit<PendingEntry, 'clientId'>
+
 // Client-side ceiling on an assembled response. The server applies its own
 // 2MB cap; this one just stops a runaway stream from growing the tab's heap.
 const MAX_ASSEMBLED_CHARS = 4 * 1024 * 1024
@@ -108,6 +110,40 @@ function stripInlineMedia(body: string): string {
         (match, type: string, subtype: string) =>
             `"[${type}/${subtype}: ${Math.round(match.length * 0.75 / 1024)} KB omitted]"`,
     )
+}
+
+const SENSITIVE_FIELD = /(?:authorization|(?:x-)?api[-_]?key|token|secret|password|passwd|private[-_]?key|cookie|session[-_]?key)/i
+
+/** Redact a tool payload before it reaches either a live status preview or disk. */
+export function redactRequestLogValue(value: unknown): unknown {
+    const seen = new WeakSet<object>()
+    const visit = (input: unknown): unknown => {
+        if (typeof input === 'string') {
+            return input
+                .replace(/"([a-z0-9_-]*(?:authorization|api[-_]?key|token|secret|password|passwd|private[-_]?key|cookie|session[-_]?key))"\s*:\s*"[^"]*"/gi, '"$1":"[REDACTED]"')
+                .replace(/(Authorization\s*[:=]\s*)[^\s,;)}{]+/gi, '$1[REDACTED_TOKEN]')
+                .replace(/((?:x-)?api[-_]?key\s*[:=]\s*)['"]?[^'"\s,;)}{]+/gi, '$1[REDACTED_API_KEY]')
+                .replace(/sk-ant-[A-Za-z0-9_-]{20,}/g, '[REDACTED_API_KEY]')
+                .replace(/sk-[A-Za-z0-9_-]{20,}/g, '[REDACTED_API_KEY]')
+                .replace(/AIza[0-9A-Za-z_-]{35}/g, '[REDACTED_API_KEY]')
+                .replace(/ya29\.[A-Za-z0-9_-]{20,}/g, '[REDACTED_TOKEN]')
+        }
+        if (!input || typeof input !== 'object') return input
+        if (seen.has(input as object)) return '[Circular]'
+        seen.add(input as object)
+        if (Array.isArray(input)) return input.map(visit)
+        const out: Record<string, unknown> = {}
+        for (const [key, child] of Object.entries(input as Record<string, unknown>)) {
+            out[key] = SENSITIVE_FIELD.test(key) ? '[REDACTED]' : visit(child)
+        }
+        return out
+    }
+    return visit(value)
+}
+
+export function stringifyRequestLogValue(value: unknown): string {
+    try { return JSON.stringify(redactRequestLogValue(value), null, 2) }
+    catch { return String(value) }
 }
 
 function bodyToString(body: unknown): string | undefined {
@@ -341,6 +377,8 @@ export interface RequestLogScope {
      *  on the wire differ from what the caller handed in (body interceptors). */
     setRequestBody(body: string): void
     setRoute(route: RequestLogRoute): void
+    /** Add a non-network event (for example a tool call) in this scope's order. */
+    append(entry: RequestLogSyntheticEntry): void
     /** Await in-flight body assembly, then POST every entry as one batch. */
     close(): Promise<void>
 }
@@ -351,6 +389,7 @@ const NOOP_SCOPE: RequestLogScope = {
     setModel: () => {},
     setRequestBody: () => {},
     setRoute: () => {},
+    append: () => {},
     close: async () => {},
 }
 
@@ -513,6 +552,10 @@ export function createRequestLogScope(init: RequestLogScopeInit): RequestLogScop
         },
         setRoute(route) {
             for (const e of entries) e.route = route
+        },
+        append(entry) {
+            if (closed) return
+            entries.push({ ...entry, clientId: getClientId() })
         },
         async close() {
             if (closed) return

@@ -162,10 +162,10 @@
         }
     }
 
-    async function loadMessageRequestLog(generationId: string): Promise<RequestLogEntry | null> {
-        if (!generationId || generationId === 'none') return null
-        const rows = await fetchRequestLogs({ chatId: generationId, limit: 1, bodies: true })
-        return rows[0] ?? null
+    async function loadMessageRequestLogs(generationId: string): Promise<RequestLogEntry[]> {
+        if (!generationId || generationId === 'none') return []
+        const rows = await fetchRequestLogs({ chatId: generationId, limit: 500, bodies: true })
+        return rows.sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
     }
 
     const beautifyJSON = (data:string) =>{
@@ -322,23 +322,62 @@
                 </div>
                 {/if}
                 {#if generationInfoMenuIndex === 2}
-                    {#await loadMessageRequestLog($alertStore.msg)}
+                    {#await loadMessageRequestLogs($alertStore.msg)}
                         <span class="text-gray-500 mt-2">{language.loading}</span>
-                    {:then data}
-                        {#if !data}
+                    {:then rows}
+                        {#if rows.length === 0}
                             <span class="text-gray-300 text-lg mt-2">{language.errors.requestLogRemoved}</span>
                             <span class="text-gray-500">{language.errors.requestLogRemovedDesc}</span>
                         {:else}
-                            <h1 class="text-2xl font-bold my-4">URL</h1>
-                            <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{data.url}</code>
-                            {#if data.durationMs !== undefined && data.durationMs !== null}
-                                <h1 class="text-2xl font-bold my-4">{language.requestLogsDuration}</h1>
-                                <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{(data.durationMs / 1000).toFixed(2)}s{data.firstTokenMs ? ` (${language.requestLogsFirstToken}: ${(data.firstTokenMs / 1000).toFixed(2)}s)` : ''}</code>
-                            {/if}
-                            <h1 class="text-2xl font-bold my-4">Request Body</h1>
-                            <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{beautifyJSON(data.requestBody ?? '')}</code>
-                            <h1 class="text-2xl font-bold my-4">Response</h1>
-                            <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{beautifyJSON(data.responseBody ?? '')}</code>
+                            <div class="flex flex-col gap-2 mt-4">
+                                {#each rows as data, logIndex (data.id)}
+                                    <details class="border border-darkborderc rounded-md bg-darkbg/40" open={logIndex === rows.length - 1}>
+                                        <summary class="cursor-pointer px-3 py-2 flex items-center gap-2">
+                                            <span class="text-xs px-2 py-0.5 rounded-full bg-selected">
+                                                {data.category === 'tool' ? language.requestLogsCategoryTool : language.requestLogsCategoryLlm}
+                                            </span>
+                                            <span class="font-mono text-sm truncate flex-1">{data.model || data.url.replace(/^tool:\/\//, '')}</span>
+                                            <span class="text-xs {data.success ? 'text-green-400' : 'text-red-400'}">
+                                                {data.success ? language.requestLogsResultSuccess : language.requestLogsResultFailed}
+                                            </span>
+                                            {#if data.durationMs !== undefined}
+                                                <span class="text-xs text-textcolor2">{(data.durationMs / 1000).toFixed(2)}s</span>
+                                            {/if}
+                                        </summary>
+                                        <div class="p-3 border-t border-darkborderc flex flex-col gap-3">
+                                            <div>
+                                                <div class="text-xs text-textcolor2 mb-1">URL</div>
+                                                <code class="block text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap break-all">{data.url}</code>
+                                            </div>
+                                            {#if data.requestBody}
+                                                <div>
+                                                    <div class="flex items-center justify-between mb-1">
+                                                        <span class="text-xs text-textcolor2">{language.requestLogsRequestBody}</span>
+                                                        <button onclick={() => copyToClipboard(data.requestBody ?? '', `request-${data.id}`)}>
+                                                            {#if copiedKey === `request-${data.id}`}<CheckIcon size={14} />{:else}<CopyIcon size={14} />{/if}
+                                                        </button>
+                                                    </div>
+                                                    <code class="block max-h-64 overflow-y-auto text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap break-all">{beautifyJSON(data.requestBody)}</code>
+                                                </div>
+                                            {/if}
+                                            {#if data.responseBody}
+                                                <div>
+                                                    <div class="flex items-center justify-between mb-1">
+                                                        <span class="text-xs text-textcolor2">{language.requestLogsResponse}</span>
+                                                        <button onclick={() => copyToClipboard(data.responseBody ?? '', `response-${data.id}`)}>
+                                                            {#if copiedKey === `response-${data.id}`}<CheckIcon size={14} />{:else}<CopyIcon size={14} />{/if}
+                                                        </button>
+                                                    </div>
+                                                    <code class="block max-h-64 overflow-y-auto text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap break-all">{beautifyJSON(data.responseBody)}</code>
+                                                </div>
+                                            {/if}
+                                            {#if data.errorMessage}
+                                                <code class="block text-red-400 border border-red-500/40 p-2 rounded-md whitespace-pre-wrap">{data.errorMessage}</code>
+                                            {/if}
+                                        </div>
+                                    </details>
+                                {/each}
+                            </div>
                         {/if}
                     {/await}
                 {/if}

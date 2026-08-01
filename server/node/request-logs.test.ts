@@ -461,11 +461,16 @@ describe('routes', () => {
     it('applies category and source filters from the query string', async () => {
         await post([
             entry({ category: 'llm', source: 'main' }),
+            entry({ category: 'tool', source: 'main', url: 'tool://localtime__now' }),
             entry({ category: 'tts', source: 'tts' }),
         ])
         const llm = await (await get('/api/request-logs?categories=llm')).json()
         expect(llm.total).toBe(1)
         expect(llm.content[0].category).toBe('llm')
+
+        const tools = await (await get('/api/request-logs?categories=tool')).json()
+        expect(tools.total).toBe(1)
+        expect(tools.content[0].url).toBe('tool://localtime__now')
 
         const tts = await (await get('/api/request-logs?sources=tts')).json()
         expect(tts.total).toBe(1)

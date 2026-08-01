@@ -2056,7 +2056,7 @@ export const languageKorean = {
   // 리퀘스트 로그 / 사용량 (시스템 설정)
   requestLogsTab: "리퀘스트 로그",
   requestLogsDesc:
-    "프로바이더로 나간 요청의 본문·응답·소요 시간을 기록합니다. 기본 필터는 LLM 요청만 표시합니다.",
+    "프로바이더 요청과 툴 호출의 본문·응답·소요 시간을 기록합니다. 기본 필터는 LLM 요청만 표시합니다.",
   requestLogsFilters: "필터",
   requestLogsFilterClear: "필터 초기화",
   requestLogsFilterActive: (count: number) =>
@@ -2065,6 +2065,7 @@ export const languageKorean = {
   requestLogsFilterSource: "출처",
   requestLogsFilterResult: "결과",
   requestLogsCategoryLlm: "LLM",
+  requestLogsCategoryTool: "툴",
   requestLogsCategoryTts: "음성",
   requestLogsCategoryImage: "이미지",
   requestLogsCategoryTranslate: "번역",
@@ -2092,7 +2093,7 @@ export const languageKorean = {
   requestLogsClearConfirm:
     "저장된 리퀘스트 로그를 모두 삭제할까요? 사용량 통계는 유지됩니다.",
   requestLogsEmpty: "로그가 없습니다",
-  requestLogsEmptyDesc: "요청을 보내면 여기에 기록됩니다.",
+  requestLogsEmptyDesc: "프로바이더 요청과 툴 호출이 여기에 기록됩니다.",
   requestLogsEmptyButMore: "현재 필터에 맞는 항목이 없습니다. 더 불러와 보세요.",
   requestLogsLoading: "불러오는 중...",
   requestLogsFailedLoad: "리퀘스트 로그를 불러오지 못했습니다",
@@ -2469,6 +2470,7 @@ export const languageKorean = {
     connecting: "요청 중…",
     thinking: "사고 중…",
     responding: "응답 중…",
+    usingTool: "툴 사용 중…",
     retrying: "재시도 중…",
     stalled: "멈춤…",
     background: "백그라운드 진행 중…",

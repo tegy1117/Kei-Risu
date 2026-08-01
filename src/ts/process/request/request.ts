@@ -25,7 +25,7 @@ import {
     sendChatRequest, streamChatRequest, previewChatRequest,
     sendAnthropicChatRequest, streamAnthropicChatRequest, previewAnthropicChatRequest,
     sendGoogleChatRequest, streamGoogleChatRequest, previewGoogleChatRequest,
-    runToolLoop,
+    collectToolStream, runToolLoop,
     type AdapterCacheContext,
     type AdapterChatMessage, type AdapterChatOptions, type AdapterChatResponse,
     type AdapterChatStreamDelta, type AdapterCredential,
@@ -38,9 +38,9 @@ import { makeJobFetch } from "./jobFetch";
 import { resolveChatModelBinding, buildModelPresetCredential, applyPromptPresetParams } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
-import { createRequestLogScope, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
+import { createRequestLogScope, stringifyRequestLogValue, type RequestLogRoute, type RequestLogScope, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
 import {
-    startStatus, appendText, endStatus, setStatusTokenCounter, addBadge,
+    startStatus, appendText, endStatus, setStatusTokenCounter, addBadge, markPhase,
     type RequestKind,
 } from "src/ts/status/requestStatus";
 
@@ -914,19 +914,32 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     }
 
     try {
-        // Tool runs always go non-streaming for now: the execute→re-request loop
-        // needs the full structured response (tool_calls) each turn, and
-        // streaming tool_call assembly is a later stage. Status is NOT reported
-        // for the tool path in v1 (it bypasses the pump); see the toast infra note.
+        const useStreaming = resolvePresetStreaming(preset, arg)
         if (tools) {
-            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal)
-            // The tool loop issues one request per turn; each is its own log
-            // entry and all of them flush together here.
+            if (reportStatus) {
+                safeStatus(() => startStatus(genId, { kind: statusKind, label: preset.name, chatId: arg.realChatId, phase: 'connecting', now: Date.now() }))
+            }
+            if (useStreaming) {
+                const stream = createModelPresetToolStream({
+                    arg, preset, kind, credential, fetchImpl, messages, tools,
+                    abortSignal, logScope, genId, reportStatus, logSource: arg.logSource ?? toLogSource(mode),
+                })
+                return { type: 'streaming', result: stream, model: preset.name }
+            }
+            const { result, toolsExecuted, usage } = await runModelPresetToolLoop(
+                arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal,
+                { logScope, genId, reportStatus, logSource: arg.logSource ?? toLogSource(mode) },
+            )
             void logScope.close()
+            if (reportStatus) {
+                safeStatus(() => endStatus(genId, abortSignal?.aborted ? 'aborted' : 'done', {
+                    now: Date.now(),
+                    usage: usage?.completionTokens !== undefined ? { responseTokens: usage.completionTokens } : undefined,
+                }))
+            }
             return { type: 'success', result, model: preset.name, toolExecuted: toolsExecuted }
         }
 
-        const useStreaming = resolvePresetStreaming(preset, arg)
         const options: AdapterChatOptions = {
             messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache,
             // Opt-in (System > Request Logs): without it a streamed response
@@ -1074,6 +1087,17 @@ export async function testModelPreset(preset: ModelPreset, message: string, abor
 // Mirrors the classic recursive path (openAI/requests.ts): the visible result
 // interleaves model text with `<tool_call>` markers (encoded when
 // rememberToolUsage is on) so the turn round-trips on the next request.
+interface ModelPresetToolLoopRuntime {
+    logScope: RequestLogScope
+    genId: string
+    reportStatus: boolean
+    logSource: RequestLogSource
+    streaming?: boolean
+    onDelta?: (delta: AdapterChatStreamDelta) => void
+    onModelTurn?: (response: AdapterChatResponse) => void
+    onToolFinish?: (result: { encoded?: string }) => void
+}
+
 async function runModelPresetToolLoop(
     arg: RequestDataArgumentExtended,
     preset: ModelPreset,
@@ -1083,24 +1107,96 @@ async function runModelPresetToolLoop(
     messages: AdapterChatMessage[],
     tools: AdapterToolDef[],
     abortSignal: AbortSignal | null,
-): Promise<{ result: string; toolsExecuted: boolean }> {
+    runtime: ModelPresetToolLoopRuntime,
+): Promise<{ result: string; toolsExecuted: boolean; usage?: AdapterUsage }> {
     // Tracks whether any tool actually ran, so the caller can block outer
     // success-path retries that would otherwise re-execute side-effecting tools.
     let toolsExecuted = false
+    let totalUsage: AdapterUsage | undefined
+    const toolStarts = new Map<string, number>()
     const result = await runToolLoop(messages, {
         maxSteps: MODEL_PRESET_MAX_TOOL_STEPS,
         formatReasoning: formatPresetReasoning,
         abortSignal: abortSignal ?? undefined,
-        send: (convo) => sendModelPreset(
-            kind, preset,
-            {
+        send: async (convo) => {
+            if (runtime.reportStatus) {
+                safeStatus(() => markPhase(runtime.genId, 'connecting', Date.now()))
+            }
+            const options: AdapterChatOptions = {
                 messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl,
+                generationId: runtime.genId,
+                collectStreamUsage: getDatabase().requestLogStreamUsage === true,
                 // Tool turns are ordinary billed requests: without this the cache
                 // TTL silently drops back to 5 minutes for the whole tool loop.
                 anthropicCache1h: getDatabase().claude1HourCaching === true,
-            },
-            credential,
-        ),
+            }
+            const response = runtime.streaming
+                ? await collectToolStream(streamModelPreset(kind, preset, options, credential), (delta) => {
+                    if (runtime.reportStatus) safeStatus(() => {
+                        const now = Date.now()
+                        if (delta.reasoningDelta) appendText(runtime.genId, { thinking: delta.reasoningDelta }, now)
+                        if (delta.textDelta) appendText(runtime.genId, { response: delta.textDelta }, now)
+                    })
+                    runtime.onDelta?.(delta)
+                })
+                : await sendModelPreset(kind, preset, options, credential)
+            if (!runtime.streaming && runtime.reportStatus) safeStatus(() => {
+                const now = Date.now()
+                const thinking = response.reasoning?.map((part) => part.text ?? '').join('') ?? ''
+                if (thinking) appendText(runtime.genId, { thinking }, now)
+                if (response.text) appendText(runtime.genId, { response: response.text }, now)
+            })
+            totalUsage = addAdapterUsage(totalUsage, response.usage)
+            runtime.logScope.setUsage(toLogUsage(response.usage))
+            return response
+        },
+        onModelTurn: (response) => {
+            runtime.onModelTurn?.(response)
+        },
+        onToolStart: (call, position) => {
+            const key = toolPositionKey(position.step, position.callIndex ?? 0)
+            const started = Date.now()
+            toolStarts.set(key, started)
+            if (runtime.reportStatus) safeStatus(() => {
+                markPhase(runtime.genId, 'using_tool', started)
+                addBadge(runtime.genId, {
+                    key: 'tool',
+                    text: `${call.name} · ${toolTracePreview(toolArgumentsForTrace(call))}`,
+                })
+            })
+        },
+        onToolFinish: (call, toolResult, position) => {
+            const now = Date.now()
+            const key = toolPositionKey(position.step, position.callIndex ?? 0)
+            const started = toolStarts.get(key) ?? now
+            const aborted = abortSignal?.aborted === true
+            const success = toolResult.success !== false && !aborted
+            runtime.logScope.append({
+                timestamp: started,
+                category: 'tool',
+                source: runtime.logSource,
+                chatId: runtime.genId,
+                generationId: runtime.genId,
+                provider: 'tool',
+                url: `tool://${encodeURIComponent(call.name)}`,
+                method: 'CALL',
+                status: aborted ? 499 : success ? 200 : 500,
+                success,
+                aborted,
+                streaming: false,
+                durationMs: now - started,
+                requestBody: stringifyRequestLogValue(toolArgumentsForTrace(call)),
+                responseBody: stringifyRequestLogValue(toolResult.response ?? toolResult.text),
+                responseType: 'application/json',
+                errorMessage: toolResult.error,
+            })
+            if (runtime.reportStatus) safeStatus(() => addBadge(runtime.genId, {
+                key: 'tool',
+                text: `${success ? '✓' : '⚠'} ${call.name} · ${formatToolDuration(now - started)} · ${toolTracePreview(toolResult.response ?? toolResult.text)}`,
+                tone: success ? 'success' : 'warn',
+            }))
+            runtime.onToolFinish?.(toolResult)
+        },
         executeTool: async (call) => {
             toolsExecuted = true
             const executed = await executeModelPresetTool(arg, call)
@@ -1119,33 +1215,181 @@ async function runModelPresetToolLoop(
                     console.error('[ModelPreset] tool-call persistence failed', e)
                 }
             }
-            return { text: executed.text, encoded }
+            return {
+                text: executed.text,
+                encoded,
+                response: executed.response,
+                success: executed.success,
+                error: executed.error,
+            }
         },
     })
-    return { result, toolsExecuted }
+    return { result, toolsExecuted, usage: totalUsage }
+}
+
+function createModelPresetToolStream(input: {
+    arg: RequestDataArgumentExtended
+    preset: ModelPreset
+    kind: AdapterKind
+    credential: AdapterCredential | undefined
+    fetchImpl: typeof fetch
+    messages: AdapterChatMessage[]
+    tools: AdapterToolDef[]
+    abortSignal: AbortSignal | null
+    logScope: RequestLogScope
+    genId: string
+    reportStatus: boolean
+    logSource: RequestLogSource
+}): ReadableStream<StreamResponseChunk> {
+    return new ReadableStream<StreamResponseChunk>({
+        start(controller) {
+            const completed: string[] = []
+            let turnText = ''
+            let turnReasoning = ''
+            let lastSnapshot = ''
+            let lastFlushAt = -Infinity
+            const buildCurrent = () => {
+                const current = (turnReasoning ? formatPresetReasoning([{ text: turnReasoning }]) : '') + turnText
+                return [...completed, current].filter(Boolean).join('\n\n')
+            }
+            const emit = (force = false) => {
+                const now = Date.now()
+                if (!force && (now - lastFlushAt < STREAM_FLUSH_INTERVAL_MS || (controller.desiredSize ?? 1) <= 0)) return
+                const snapshot = buildCurrent()
+                if (snapshot === lastSnapshot) return
+                controller.enqueue({ '0': snapshot })
+                lastSnapshot = snapshot
+                lastFlushAt = now
+            }
+            void (async () => {
+                try {
+                    const outcome = await runModelPresetToolLoop(
+                        input.arg, input.preset, input.kind, input.credential, input.fetchImpl,
+                        input.messages, input.tools, input.abortSignal,
+                        {
+                            logScope: input.logScope,
+                            genId: input.genId,
+                            reportStatus: input.reportStatus,
+                            logSource: input.logSource,
+                            streaming: true,
+                            onDelta: (delta) => {
+                                turnText += delta.textDelta
+                                turnReasoning += delta.reasoningDelta ?? ''
+                                if (!input.preset.decoupledStreaming && (delta.textDelta || delta.reasoningDelta)) emit()
+                            },
+                            onModelTurn: (response) => {
+                                const segment = formatPresetReasoning(response.reasoning) + response.text
+                                if (segment) completed.push(segment)
+                                turnText = ''
+                                turnReasoning = ''
+                                // In decoupled mode this is the model/tool boundary;
+                                // in live mode it guarantees the unthrottled turn tail.
+                                emit(true)
+                            },
+                            onToolFinish: (toolResult) => {
+                                if (toolResult.encoded) completed.push(toolResult.encoded.trim())
+                                emit(true)
+                            },
+                        },
+                    )
+                    if (outcome.result !== lastSnapshot) {
+                        controller.enqueue({ '0': outcome.result })
+                        lastSnapshot = outcome.result
+                    }
+                    controller.close()
+                    if (input.reportStatus) safeStatus(() => endStatus(input.genId, input.abortSignal?.aborted ? 'aborted' : 'done', {
+                        now: Date.now(),
+                        usage: outcome.usage?.completionTokens !== undefined
+                            ? { responseTokens: outcome.usage.completionTokens }
+                            : undefined,
+                    }))
+                } catch (err) {
+                    controller.error(err)
+                    if (input.reportStatus) safeStatus(() => {
+                        const outcome = input.abortSignal?.aborted ? 'aborted' : 'failed'
+                        endStatus(input.genId, outcome, {
+                            now: Date.now(),
+                            error: outcome === 'failed' ? (err instanceof Error ? err.message : String(err)) : undefined,
+                        })
+                    })
+                } finally {
+                    void input.logScope.close()
+                }
+            })()
+        },
+    })
+}
+
+function addAdapterUsage(total: AdapterUsage | undefined, next: AdapterUsage | undefined): AdapterUsage | undefined {
+    if (!next) return total
+    const out: AdapterUsage = { ...(total ?? {}) }
+    for (const key of ['promptTokens', 'completionTokens', 'totalTokens', 'cachedTokens', 'reasoningTokens'] as const) {
+        if (next[key] !== undefined) out[key] = (out[key] ?? 0) + next[key]!
+    }
+    return out
+}
+
+function toolPositionKey(step: number, callIndex: number): string {
+    return `${step}:${callIndex}`
+}
+
+function toolArgumentsForTrace(call: AdapterToolCall): unknown {
+    try { return call.arguments ? JSON.parse(call.arguments) : {} }
+    catch { return { raw: call.arguments } }
+}
+
+function toolTracePreview(value: unknown): string {
+    const text = stringifyRequestLogValue(value).replace(/\s+/g, ' ').trim()
+    return text.length > 160 ? text.slice(0, 157) + '…' : text
+}
+
+function formatToolDuration(ms: number): string {
+    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
 
 async function executeModelPresetTool(
     arg: RequestDataArgumentExtended,
     call: AdapterToolCall,
-): Promise<{ text: string, response: RPCToolCallContent[] }> {
+): Promise<{ text: string, response: RPCToolCallContent[], success: boolean, error?: string }> {
     const tool = (arg.tools ?? []).find(t => t.name === call.name)
     if (!tool) {
-        return { text: 'No tool found with name: ' + call.name, response: [] }
+        const error = 'No tool found with name: ' + call.name
+        return { text: error, response: [], success: false, error }
     }
     let parsedArgs: unknown
     try {
         parsedArgs = call.arguments ? JSON.parse(call.arguments) : {}
     } catch (e) {
-        return { text: 'Tool call has invalid JSON arguments: ' + (e instanceof Error ? e.message : String(e)), response: [] }
+        const error = 'Tool call has invalid JSON arguments: ' + (e instanceof Error ? e.message : String(e))
+        return { text: error, response: [], success: false, error }
     }
     try {
         const response = await callTool(call.name, parsedArgs)
         const text = toolResponseText(response)
-        return { text: text.length > 0 ? text : 'Tool call returned no text response', response }
+        const reportedError = toolResponseError(response)
+        return {
+            text: text.length > 0 ? text : 'Tool call returned no text response',
+            response,
+            success: !reportedError,
+            error: reportedError,
+        }
     } catch (e) {
-        return { text: 'Tool call failed: ' + (e instanceof Error ? e.message : String(e)), response: [] }
+        const error = 'Tool call failed: ' + (e instanceof Error ? e.message : String(e))
+        return { text: error, response: [], success: false, error }
     }
+}
+
+function toolResponseError(response: RPCToolCallContent[]): string | undefined {
+    for (const part of response) {
+        if (part.type !== 'text') continue
+        try {
+            const parsed = JSON.parse(part.text)
+            if (parsed && typeof parsed === 'object' && parsed.ok === false && typeof parsed.error === 'string') {
+                return parsed.error
+            }
+        } catch { /* ordinary text result */ }
+    }
+    return undefined
 }
 
 

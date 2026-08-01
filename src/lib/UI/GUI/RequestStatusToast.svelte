@@ -30,6 +30,7 @@
         connecting: rs?.connecting ?? 'Connecting…',
         thinking:   rs?.thinking ?? 'Thinking…',
         responding: rs?.responding ?? 'Responding…',
+        using_tool: rs?.usingTool ?? 'Using tool…',
         retrying:   rs?.retrying ?? 'Retrying…',
         stalled:    rs?.stalled ?? 'Stalled…',
         background: rs?.background ?? 'In background…',
@@ -127,7 +128,7 @@
             {/if}
 
             {#each entry.badges as badge (badge.key)}
-                <div class="rs-badge-row"
+                <div class="rs-badge-row truncate"
                      class:rs-badge-success={badge.tone === 'success'}
                      class:rs-badge-warn={badge.tone === 'warn'}>
                     {badge.text}

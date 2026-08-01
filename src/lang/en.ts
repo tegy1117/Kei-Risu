@@ -1936,7 +1936,7 @@ export const languageEnglish = {
 
     // Request logs / usage (system settings)
     requestLogsTab: "Request Logs",
-    requestLogsDesc: "Records the body, response and timing of every request sent to a provider. The default filter shows LLM requests only.",
+    requestLogsDesc: "Records provider requests and tool calls with their bodies, responses, and timing. The default filter shows LLM requests only.",
     requestLogsFilters: "Filters",
     requestLogsFilterClear: "Clear filters",
     requestLogsFilterActive: (count: number) => count === 0 ? "" : `${count} active`,
@@ -1944,6 +1944,7 @@ export const languageEnglish = {
     requestLogsFilterSource: "Source",
     requestLogsFilterResult: "Result",
     requestLogsCategoryLlm: "LLM",
+    requestLogsCategoryTool: "Tool",
     requestLogsCategoryTts: "Speech",
     requestLogsCategoryImage: "Image",
     requestLogsCategoryTranslate: "Translate",
@@ -1970,7 +1971,7 @@ export const languageEnglish = {
     requestLogsClearAll: "Clear all",
     requestLogsClearConfirm: "Delete all stored request logs? Usage statistics are kept.",
     requestLogsEmpty: "No logs yet",
-    requestLogsEmptyDesc: "Requests you send will be recorded here.",
+    requestLogsEmptyDesc: "Provider requests and tool calls will be recorded here.",
     requestLogsEmptyButMore: "Nothing matches the current filter. Try loading more.",
     requestLogsLoading: "Loading...",
     requestLogsFailedLoad: "Failed to load request logs",
@@ -2260,6 +2261,7 @@ export const languageEnglish = {
         connecting: "Connecting…",
         thinking: "Thinking…",
         responding: "Responding…",
+        usingTool: "Using tool…",
         retrying: "Retrying…",
         stalled: "Stalled…",
         background: "In background…",

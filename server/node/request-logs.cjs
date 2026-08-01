@@ -41,7 +41,7 @@ const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_BATCH_SIZE = 50;
 const ROTATE_EVERY_N_ROWS = 20;
 
-const CATEGORIES = ['llm', 'tts', 'image', 'translate', 'embedding', 'other'];
+const CATEGORIES = ['llm', 'tool', 'tts', 'image', 'translate', 'embedding', 'other'];
 const ROUTES = ['direct', 'proxy', 'job'];
 // Which part of the app issued the request — the request-log analog of the
 // system log's `source` tag. 'main'/'translate'/'memory'/'emotion'/'sub'

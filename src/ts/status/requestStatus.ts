@@ -11,6 +11,7 @@ export type RequestPhase =
     | 'connecting'   // request sent, awaiting first byte
     | 'thinking'     // receiving reasoning
     | 'responding'   // receiving answer body
+    | 'using_tool'   // model paused while a requested tool is executing
     | 'retrying'     // fallback / retry
     | 'stalled'      // chunks stopped arriving for a while
     | 'background'   // server-side job reattached after reload; renders on completion (jobRecovery)
@@ -255,6 +256,10 @@ export function addBadge(id: string, badge: StatusBadge): void {
         const badges = e.badges.filter((b) => b.key !== badge.key).concat(badge)
         return { ...e, badges }
     })
+}
+
+export function removeBadge(id: string, key: string): void {
+    update(id, (e) => ({ ...e, badges: e.badges.filter((badge) => badge.key !== key) }))
 }
 
 export interface EndStatusUsage {

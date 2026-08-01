@@ -6,7 +6,7 @@ import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
 import { ModelPresetAdapterError } from './error'
 import * as serviceAccountCache from './googleServiceAccount/cache'
 import { sendGoogleChatRequest, streamGoogleChatRequest } from './googleGemini'
-import type { AdapterCacheContext, AdapterChatMessage } from './types'
+import type { AdapterCacheContext, AdapterChatMessage, AdapterToolCall } from './types'
 
 // Minimal SA JSON that parseServiceAccountJson accepts; the token exchange is
 // stubbed (see stubServiceAccountToken) so no signing/network happens.
@@ -531,6 +531,28 @@ describe('streamGoogleChatRequest', () => {
         expect(usage).toEqual({ promptTokens: 3, completionTokens: 1, totalTokens: 4 })
         expect(calls[0].url).toBe('https://demo.test/v1beta/models/gemini-demo:streamGenerateContent?alt=sse')
         expect(calls[0].headers.Accept).toBe('text/event-stream')
+    })
+
+    test('emits streamed functionCall parts with ids and thought signatures', async () => {
+        const { fetchImpl } = captureFetch(sseResponse([
+            'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"checking"}]}}]}\n\n',
+            'data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"g1","name":"localtime","args":{"zone":"UTC"}},"thoughtSignature":"sig-g"}]},"finishReason":"STOP"}]}\n\n',
+        ]))
+        let calls: AdapterToolCall[] | undefined
+        let providerEcho: unknown
+        for await (const delta of streamGoogleChatRequest(
+            makePreset(), { messages: messagesWithSystem, fetchImpl }, { apiKey: 'k' },
+        )) {
+            calls = delta.toolCalls ?? calls
+            providerEcho = delta.providerEcho ?? providerEcho
+        }
+        expect(calls).toEqual([{
+            id: 'g1', name: 'localtime', arguments: '{"zone":"UTC"}', signature: 'sig-g',
+        }])
+        expect(providerEcho).toEqual([
+            { text: 'checking' },
+            { functionCall: { id: 'g1', name: 'localtime', args: { zone: 'UTC' } }, thoughtSignature: 'sig-g' },
+        ])
     })
 
     test('routes thought parts to reasoningDelta, never into the visible textDelta', async () => {

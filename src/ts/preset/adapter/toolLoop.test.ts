@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
-import { runToolLoop, type ToolLoopDeps } from './toolLoop'
-import type { AdapterChatMessage, AdapterChatResponse, AdapterToolCall } from './types'
+import { collectToolStream, runToolLoop, type ToolLoopDeps } from './toolLoop'
+import type { AdapterChatMessage, AdapterChatResponse, AdapterChatStreamDelta, AdapterToolCall } from './types'
 
 const NL2 = String.fromCharCode(10, 10) // blank-line separator the loop joins with
 
@@ -58,6 +58,25 @@ describe('runToolLoop', () => {
         expect(secondConvo).toHaveLength(3)
         expect(secondConvo[1]).toMatchObject({ role: 'assistant', toolCalls: [{ id: 'c1', name: 'search' }] })
         expect(secondConvo[2]).toMatchObject({ role: 'tool', toolCallId: 'c1', name: 'search', content: 'result for search' })
+    })
+
+    test('reports model/tool lifecycle events in execution order', async () => {
+        const { send } = scriptedSend([res('before', [call('c1', 'clock')]), res('after')])
+        const events: string[] = []
+        await runToolLoop(initial, {
+            send,
+            executeTool: async () => ({ text: '12:00', response: { now: '12:00' }, success: true }),
+            maxSteps: 8,
+            onModelTurn: (response, position) => events.push(`model:${position.step}:${response.text}`),
+            onToolStart: (tool, position) => events.push(`start:${position.step}:${position.callIndex}:${tool.name}`),
+            onToolFinish: (tool, result) => events.push(`finish:${tool.name}:${result.success}`),
+        })
+        expect(events).toEqual([
+            'model:0:before',
+            'start:0:0:clock',
+            'finish:clock:true',
+            'model:1:after',
+        ])
     })
 
     test('handles parallel tool calls in a single step (ordered results)', async () => {
@@ -207,5 +226,47 @@ describe('runToolLoop', () => {
         const { send } = scriptedSend([withReasoning])
         const out = await runToolLoop(initial, { send, executeTool: vi.fn(), maxSteps: 8 })
         expect(out).toBe('visible')
+    })
+})
+
+describe('collectToolStream', () => {
+    test('assembles visible deltas, structured tool calls, reasoning and usage', async () => {
+        async function* stream(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+            yield { textDelta: 'before ', reasoningDelta: 'think ', usage: { promptTokens: 4 }, raw: { n: 1 } }
+            yield { textDelta: 'tool', reasoningDelta: 'first', usage: { completionTokens: 3 }, raw: { n: 2 } }
+            yield {
+                textDelta: '',
+                toolCalls: [call('c1', 'clock', '{"zone":"UTC"}')],
+                reasoning: [{ text: 'think first', signature: 'sig' }],
+                providerEcho: [{ functionCall: { name: 'clock' } }],
+                finishReason: 'tool_calls',
+                raw: { n: 3 },
+            }
+        }
+        const seen: string[] = []
+        const response = await collectToolStream(stream(), (delta) => seen.push(delta.textDelta))
+        expect(response.text).toBe('before tool')
+        expect(response.toolCalls).toEqual([call('c1', 'clock', '{"zone":"UTC"}')])
+        expect(response.reasoning).toEqual([{ text: 'think first', signature: 'sig' }])
+        expect(response.usage).toEqual({ promptTokens: 4, completionTokens: 3 })
+        expect(response.finishReason).toBe('tool_calls')
+        expect(seen).toEqual(['before ', 'tool', ''])
+    })
+
+    test('does not send a follow-up model request when the only tool aborts', async () => {
+        const controller = new AbortController()
+        const { send } = scriptedSend([
+            res('before', [call('a', 'question')]),
+            res('should-not-reach'),
+        ])
+        const executeTool = vi.fn(async () => {
+            controller.abort()
+            return { text: 'cancelled' }
+        })
+        const out = await runToolLoop(initial, {
+            send, executeTool, maxSteps: 8, abortSignal: controller.signal,
+        })
+        expect(send).toHaveBeenCalledTimes(1)
+        expect(out).toContain('aborted after tool execution')
     })
 })

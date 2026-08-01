@@ -4,7 +4,7 @@ import { resolveSnapshot } from '../registry/snapshot'
 import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
 import { parseAnthropicStreamDelta, sendAnthropicChatRequest, streamAnthropicChatRequest } from './anthropicMessages'
 import { ModelPresetAdapterError } from './error'
-import type { AdapterChatMessage } from './types'
+import type { AdapterChatMessage, AdapterToolCall } from './types'
 
 function makeSnapshot(overrides: Partial<ResolvedModelProfileSnapshot> = {}): ResolvedModelProfileSnapshot {
     return {
@@ -746,6 +746,35 @@ describe('streamAnthropicChatRequest', () => {
         expect(usage).toMatchObject({ completionTokens: 5 })
         expect(calls[0].body.stream).toBe(true)
         expect(calls[0].headers.Accept).toBe('text/event-stream')
+    })
+
+    test('assembles tool_use input JSON and thinking signatures across stream events', async () => {
+        const { fetchImpl } = captureFetch(sseResponse([
+            'event: content_block_start\ndata: {"index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}\n\n',
+            'event: content_block_delta\ndata: {"index":0,"delta":{"type":"thinking_delta","thinking":"check"}}\n\n',
+            'event: content_block_delta\ndata: {"index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}\n\n',
+            'event: content_block_start\ndata: {"index":1,"content_block":{"type":"tool_use","id":"t1","name":"localtime","input":{}}}\n\n',
+            'event: content_block_delta\ndata: {"index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"zone\\":"}}\n\n',
+            'event: content_block_delta\ndata: {"index":1,"delta":{"type":"input_json_delta","partial_json":"\\"UTC\\"}"}}\n\n',
+            'event: message_delta\ndata: {"delta":{"stop_reason":"tool_use"}}\n\n',
+            'event: message_stop\ndata: {}\n\n',
+        ]))
+        let calls: AdapterToolCall[] | undefined
+        let reasoning: unknown
+        let providerEcho: unknown
+        for await (const delta of streamAnthropicChatRequest(
+            makePreset(), { messages: messagesWithSystem, fetchImpl }, { apiKey: 'k' },
+        )) {
+            calls = delta.toolCalls ?? calls
+            reasoning = delta.reasoning ?? reasoning
+            providerEcho = delta.providerEcho ?? providerEcho
+        }
+        expect(calls).toEqual([{ id: 't1', name: 'localtime', arguments: '{"zone":"UTC"}' }])
+        expect(reasoning).toEqual([{ text: 'check', signature: 'sig-1' }])
+        expect(providerEcho).toEqual([
+            { type: 'thinking', thinking: 'check', signature: 'sig-1' },
+            { type: 'tool_use', id: 't1', name: 'localtime', input: { zone: 'UTC' } },
+        ])
     })
 
     test('separates thinking_delta into reasoningDelta, never into textDelta', async () => {
