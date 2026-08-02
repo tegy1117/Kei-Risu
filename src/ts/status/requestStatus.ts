@@ -22,7 +22,7 @@ export type RequestPhase =
 // pipeline's ModelModeExtended: model→main, translate→translate, memory→memory,
 // emotion→emotion, submodel/otherAx→sub. The renderer maps these to localized
 // chip labels (메인 / 번역 / 메모리 / 감정 / 보조).
-export type RequestKind = 'main' | 'translate' | 'memory' | 'emotion' | 'sub'
+export type RequestKind = 'main' | 'translate' | 'memory' | 'emotion' | 'sub' | 'agent' | 'tool-agent'
 
 // A phase is terminal when the request has finished one way or another; the
 // renderer uses this to decide dismissal/retention.
@@ -40,6 +40,8 @@ export interface StatusBadge {
 export interface RequestStatusEntry {
     id: string                             // per-request key = generationId (issued upstream; we only consume)
     chatId?: string                        // real chat.id of the generating chat (absent for aux requests)
+    parentId?: string                      // owning request; keeps nested agent cards below their caller
+    order?: number                         // stable sibling order for concurrently-started agents
     kind: RequestKind                      // chip: main / translate / memory / emotion / sub
     label: string                          // model / preset name
     phase: RequestPhase
@@ -177,6 +179,8 @@ export interface StartStatusInit {
     kind: RequestKind
     label: string
     chatId?: string
+    parentId?: string
+    order?: number
     phase?: RequestPhase
     now: number
 }
@@ -187,6 +191,8 @@ export function startStatus(id: string, init: StartStatusInit): void {
         next.set(id, {
             id,
             chatId: init.chatId,
+            parentId: init.parentId,
+            order: init.order,
             kind: init.kind,
             label: init.label,
             phase: init.phase ?? 'connecting',
@@ -205,6 +211,41 @@ export function startStatus(id: string, init: StartStatusInit): void {
     })
     // Self-start the recompute timer; it self-stops once entries go terminal.
     startStatusTimer()
+}
+
+export function orderedRequestStatusIds(entries: Map<string, RequestStatusEntry>): string[] {
+    const compareStarted = (a: RequestStatusEntry, b: RequestStatusEntry) =>
+        a.startedAt - b.startedAt || a.id.localeCompare(b.id)
+    const compareSiblings = (a: RequestStatusEntry, b: RequestStatusEntry) =>
+        (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)
+        || compareStarted(a, b)
+    const children = new Map<string, RequestStatusEntry[]>()
+    const roots: RequestStatusEntry[] = []
+
+    for(const entry of entries.values()){
+        if(entry.parentId && entry.parentId !== entry.id && entries.has(entry.parentId)){
+            const siblings = children.get(entry.parentId) ?? []
+            siblings.push(entry)
+            children.set(entry.parentId, siblings)
+        } else {
+            roots.push(entry)
+        }
+    }
+
+    roots.sort(compareStarted)
+    for(const siblings of children.values()) siblings.sort(compareSiblings)
+
+    const ordered: string[] = []
+    const visited = new Set<string>()
+    const visit = (entry: RequestStatusEntry) => {
+        if(visited.has(entry.id)) return
+        visited.add(entry.id)
+        ordered.push(entry.id)
+        for(const child of children.get(entry.id) ?? []) visit(child)
+    }
+    for(const root of roots) visit(root)
+    for(const entry of [...entries.values()].sort(compareStarted)) visit(entry)
+    return ordered
 }
 
 export function markPhase(id: string, phase: RequestPhase, now: number): void {

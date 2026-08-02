@@ -199,8 +199,10 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             return false
         }
     }
-    const generationId = v4()
-    startGeneration(genKey, generationId)
+    const generationId = arg.agentContext?.generationId ?? v4()
+    if(!arg.agentContext || !isChatGenerating(genKey)){
+        startGeneration(genKey, generationId)
+    }
     // Resumable-send tombstone (pendingSends.ts): registered BEFORE the
     // pipeline so a tab death anywhere in it (translate → memory → request)
     // leaves the marker; cleared on every conclude path. Previews never
@@ -1505,6 +1507,10 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         previewBody: arg.previewPrompt,
         escape: nowChatroom.type === 'character' && nowChatroom.escapeOutput,
         rememberToolUsage: DBState.db.rememberToolUsage,
+        requestStatus: arg.agentContext ? {
+            kind: 'main',
+            label: arg.agentContext.node.name,
+        } : undefined,
     }, 'model', abortSignal)
 
     console.log(req)

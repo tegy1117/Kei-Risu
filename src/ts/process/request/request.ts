@@ -80,6 +80,12 @@ interface requestDataArgument{
     rememberToolUsage?: boolean
     persistToolDisplay?: boolean
     toolExecutionContext?: ToolExecutionContext
+    requestStatus?: {
+        kind?: RequestKind
+        label?: string
+        parentId?: string
+        order?: number
+    }
     forceStreaming?: boolean
     blockPlugins?: boolean
     forceLocalNetwork?: boolean
@@ -644,11 +650,15 @@ function safeStatus(fn: () => void): void {
 // Map the request pipeline's mode to the status-channel chip kind. submodel and
 // otherAx collapse to 'sub' (both are internal aux calls the user rarely
 // distinguishes; see the toast infra note).
-// The request log reuses RequestKind's vocabulary for its `source` tag, so the
-// part of the app that issued a request reads the same in the log as it does
-// in the request-status toast.
 function toLogSource(mode: ModelModeExtended): RequestLogSource {
-    return toRequestKind(mode)
+    switch (mode) {
+        case 'translate': return 'translate'
+        case 'memory': return 'memory'
+        case 'emotion': return 'emotion'
+        case 'submodel':
+        case 'otherAx': return 'sub'
+        default: return 'main'
+    }
 }
 
 function toLogUsage(usage: AdapterUsage | undefined): RequestLogUsage | undefined {
@@ -723,7 +733,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // crypto.randomUUID (secure-context only — would throw on remote HTTP and
     // break the aux request before the try). Reporting is gated by db.showRequestStatus.
     const genId = arg.chatId ?? `aux-${uuidv4()}`
-    const statusKind = toRequestKind(mode)
+    const statusKind = arg.requestStatus?.kind ?? toRequestKind(mode)
+    const statusLabel = arg.requestStatus?.label
+        ? `${arg.requestStatus.label} · ${preset.name}`
+        : preset.name
     const reportStatus = statusEnabled() && !!genId
 
     // Request logging wraps the transport, so the direct path and the
@@ -927,7 +940,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         const useStreaming = resolvePresetStreaming(preset, arg)
         if (tools) {
             if (reportStatus) {
-                safeStatus(() => startStatus(genId, { kind: statusKind, label: preset.name, chatId: arg.realChatId, phase: 'connecting', now: Date.now() }))
+                safeStatus(() => startStatus(genId, { kind: statusKind, label: statusLabel, chatId: arg.realChatId, parentId: arg.requestStatus?.parentId, order: arg.requestStatus?.order, phase: 'connecting', now: Date.now() }))
             }
             if (useStreaming) {
                 const stream = createModelPresetToolStream({
@@ -960,7 +973,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             anthropicCache1h: getDatabase().claude1HourCaching === true,
         }
         if (reportStatus) {
-            safeStatus(() => startStatus(genId, { kind: statusKind, label: preset.name, chatId: arg.realChatId, phase: 'connecting', now: Date.now() }))
+            safeStatus(() => startStatus(genId, { kind: statusKind, label: statusLabel, chatId: arg.realChatId, parentId: arg.requestStatus?.parentId, order: arg.requestStatus?.order, phase: 'connecting', now: Date.now() }))
         }
         if(useStreaming){
             const gen = streamModelPreset(kind, preset, options, credential)
@@ -1229,7 +1242,13 @@ async function runModelPresetToolLoop(
         },
         executeTool: async (call) => {
             toolsExecuted = true
-            const executed = await executeModelPresetTool(arg, call)
+            const executed = await executeModelPresetTool({
+                ...arg,
+                toolExecutionContext: {
+                    ...(arg.toolExecutionContext ?? { stack: [] }),
+                    requestStatusId: runtime.genId,
+                },
+            }, call)
             // Persistence is best-effort: the tool already ran, so a failed
             // encode must not throw (the loop would otherwise drop later results,
             // and a propagated error could trigger an outer re-run). Skip the

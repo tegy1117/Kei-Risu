@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { AgentPreset } from './types'
-import { applyPostOutput, runWithConcurrency, validateAgentPreset } from './pipeline'
+import { applyPostOutput, runWithConcurrency, sanitizeAgentInfoBindings, validateAgentPreset } from './pipeline'
 
 function presetWithStages(): AgentPreset {
     return {
@@ -81,6 +81,17 @@ describe('agent preset validation', () => {
 
         expect(result.errors).toEqual([])
         expect(result.mainStageIndex).toBe(2)
+    })
+
+    test('removes missing and no-longer-earlier bindings after structural edits', () => {
+        const preset = presetWithStages()
+        preset.stages[1].nodes[0].agentInfoBindings.prompt.info.push('deleted-agent')
+        const [preStage] = preset.stages.splice(0, 1)
+        preset.stages.push(preStage)
+
+        expect(sanitizeAgentInfoBindings(preset)).toBe(2)
+        expect(preset.stages[0].nodes[0].agentInfoBindings).toEqual({})
+        expect(preset.stages[1].nodes[0].agentInfoBindings).toEqual({ prompt: { info: ['main'] } })
     })
 })
 

@@ -2374,6 +2374,8 @@ export const languageEnglish = {
         kindMemory: "Memory",
         kindEmotion: "Emotion",
         kindSub: "Sub",
+        kindAgent: "Agent",
+        kindToolAgent: "Tool agent",
         outputTokens: "out",
         thinkingTokensLabel: "think",
         tokensPerSec: "tok/s",

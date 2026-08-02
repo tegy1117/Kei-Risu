@@ -23,6 +23,7 @@ import { isChatStub } from './chatStub';
 import { reconcileBuiltinTools } from '../process/tools/builtins';
 import { emptyToolPromptPolicy, type RisuToolPackage, type ToolPromptPolicy, type ToolStateStore } from '../process/tools/types';
 import type { AgentMessageVariantState, AgentPreset, AgentRunRecord } from '../agent/types';
+import { sanitizeAgentInfoBindings } from '../agent/pipeline';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
 export let appVer = "2026.2.291" //<APP_VERSION_POINT>
@@ -231,6 +232,7 @@ export function setDatabase(data:Database){
                 }
             }
         }
+        sanitizeAgentInfoBindings(preset)
     }
     if(data.defaultAgentPresetId !== undefined && typeof data.defaultAgentPresetId !== 'string'){
         data.defaultAgentPresetId = undefined

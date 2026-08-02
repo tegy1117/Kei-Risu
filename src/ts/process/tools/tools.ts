@@ -34,6 +34,7 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
 
 export interface ToolExecutionContext {
     stack: string[]
+    requestStatusId?: string
 }
 
 export interface ManagedToolExecutionResult {
@@ -227,7 +228,10 @@ export async function callManagedToolDetailed(
         if (context.stack.includes(wireName)) return managedError(tool, fn, `Recursive tool call blocked: ${[...context.stack, wireName].join(' -> ')}`)
         try {
             if (fn.execution?.kind === 'agent') {
-                return await executeAgentFunction(tool, fn, fn.execution, input, { stack: [...context.stack, wireName] })
+                return await executeAgentFunction(tool, fn, fn.execution, input, {
+                    stack: [...context.stack, wireName],
+                    requestStatusId: context.requestStatusId,
+                })
             }
             const runtime = await ensureRuntime(tool)
             const handler = runtime.handlers.get(fn.name)
@@ -506,6 +510,11 @@ async function executeAgentFunction(
         rememberToolUsage: false,
         tools: allowedTools,
         toolExecutionContext: context,
+        requestStatus: {
+            kind: 'tool-agent',
+            label: `${tool.name} · ${fn.name}`,
+            parentId: context.requestStatusId,
+        },
         persistToolDisplay: false,
     }, preset)
     if (!response.ok) return managedError(tool, fn, 'error' in response ? response.error : 'Agent request failed.')

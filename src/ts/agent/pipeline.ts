@@ -113,3 +113,30 @@ export function applyPostOutput(base: string, output: string, placement: AgentPo
 export function getOrderedNodes(preset: AgentPreset): AgentPipelineNode[] {
     return preset.stages.flatMap((stage) => stage.nodes)
 }
+
+export function sanitizeAgentInfoBindings(preset: AgentPreset): number {
+    const nodeStages = new Map<string, number>()
+    preset.stages.forEach((stage, stageIndex) => {
+        for(const node of stage.nodes) nodeStages.set(node.id, stageIndex)
+    })
+
+    let removed = 0
+    preset.stages.forEach((stage, stageIndex) => {
+        for(const node of stage.nodes){
+            for(const [promptId, cards] of Object.entries(node.agentInfoBindings ?? {})){
+                for(const [cardId, sourceIds] of Object.entries(cards ?? {})){
+                    const valid = sourceIds.filter((sourceId) => {
+                        const sourceStage = nodeStages.get(sourceId)
+                        const keep = sourceStage !== undefined && sourceStage < stageIndex
+                        if(!keep) removed++
+                        return keep
+                    })
+                    if(valid.length > 0) cards[cardId] = valid
+                    else delete cards[cardId]
+                }
+                if(Object.keys(cards).length === 0) delete node.agentInfoBindings[promptId]
+            }
+        }
+    })
+    return removed
+}

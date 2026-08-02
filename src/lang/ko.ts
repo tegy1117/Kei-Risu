@@ -2583,6 +2583,8 @@ export const languageKorean = {
     kindMemory: "메모리",
     kindEmotion: "감정",
     kindSub: "보조",
+    kindAgent: "에이전트",
+    kindToolAgent: "툴 에이전트",
     outputTokens: "출력",
     thinkingTokensLabel: "사고",
     tokensPerSec: "tok/s",

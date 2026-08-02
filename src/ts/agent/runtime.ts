@@ -13,6 +13,7 @@ import { sayTTS } from '../process/tts'
 import { chatGenKey, endGeneration, isChatGenerating, startGeneration } from '../process/generationState'
 
 export interface AgentMainPromptContext {
+    generationId: string
     node: AgentMainNode
     outputs: Map<string, AgentOutputValue>
     outputOrder: Map<string, number>
@@ -44,8 +45,21 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
     if(options.preview || options.previewPrompt) return options.runMain()
 
     const charIndex = get(selectedCharID)
-    const character = DBState.db.characters[charIndex]
-    const chat = character?.chats?.[character.chatPage]
+    const initialCharacter = DBState.db.characters[charIndex]
+    const initialChatIndex = initialCharacter?.chatPage
+    const initialChat = initialCharacter?.chats?.[initialChatIndex]
+    const characterId = initialCharacter?.chaId
+    const chatId = initialChat?.id
+    const resolveTarget = () => {
+        const character = DBState.db.characters.find((entry) => entry.chaId === characterId)
+            ?? DBState.db.characters[charIndex]
+        const chat = character?.chats?.find((entry) => entry.id === chatId)
+            ?? character?.chats?.[initialChatIndex]
+        return character && chat ? { character, chat } : null
+    }
+    const initialTarget = resolveTarget()
+    if(!initialTarget) return false
+    const { chat } = initialTarget
     const boundId = chat?.boundAgentPresetId
     if(!boundId) return options.runMain()
 
@@ -97,6 +111,14 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         displayData: continuedMessage.displayData,
         agentRun: continuedMessage.agentRun,
     } : null
+    const restorePreviousMessage = () => {
+        if(!previousState || previousMessageIndex < 0) return
+        const message = resolveTarget()?.chat.message[previousMessageIndex]
+        if(!message) return
+        message.data = previousState.data
+        message.displayData = previousState.displayData
+        message.agentRun = previousState.agentRun
+    }
     if(continuedMessage?.agentRun?.rawMainOutput !== undefined){
         continuedMessage.data = continuedMessage.agentRun.rawMainOutput
         delete continuedMessage.displayData
@@ -115,16 +137,18 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         }
         const promptPreset = DBState.db.botPresets.find((entry) => entry.id === node.promptPresetId)
         const storedModelPreset = DBState.db.modelPresets.find((entry) => entry.id === node.modelPresetId)
-        if(!promptPreset || !storedModelPreset){
+        const target = resolveTarget()
+        if(!promptPreset || !storedModelPreset || !target){
             record.status = 'failed'
-            record.error = !promptPreset ? 'Prompt preset not found.' : 'Model preset not found.'
+            record.error = !promptPreset ? 'Prompt preset not found.'
+                : !storedModelPreset ? 'Model preset not found.' : 'Agent chat is no longer available.'
             record.endedAt = Date.now()
             return record
         }
         record.promptPresetName = promptPreset.name
         record.modelPresetName = storedModelPreset.name
         try {
-            const built = await buildAgentPrompt({ node, promptPreset, character, chat, outputs, outputOrder })
+            const built = await buildAgentPrompt({ node, promptPreset, character: target.character, chat: target.chat, outputs, outputOrder })
             record.warnings = built.warnings
             run.warnings.push(...built.warnings.map((warning) => `${node.name}: ${warning}`))
             record.inputTokens = await countInputTokens(built.messages)
@@ -134,10 +158,15 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 formated: built.messages,
                 bias: {},
                 biasString: promptPreset.bias,
-                currentChar: character,
+                currentChar: target.character,
                 useStreaming: true,
                 chatId: `${generationId}:${node.id}`,
                 rememberToolUsage: DBState.db.rememberToolUsage,
+                requestStatus: {
+                    kind: 'agent',
+                    parentId: generationId,
+                    order: outputOrder.get(node.id),
+                },
             }, requestPreset, options.signal)
             record.model = response.model
             if(!response.ok){
@@ -174,7 +203,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
             record.promptPresetId = activePrompt?.id
             record.promptPresetName = activePrompt?.name
             const mainWarnings: string[] = []
-            const ok = await options.runMain({ node: mainNode, outputs, outputOrder, warnings: mainWarnings })
+            const ok = await options.runMain({ generationId, node: mainNode, outputs, outputOrder, warnings: mainWarnings })
             record.warnings = mainWarnings
             run.warnings.push(...mainWarnings.map((warning) => `${mainNode.name}: ${warning}`))
             record.endedAt = Date.now()
@@ -182,15 +211,20 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 record.status = options.signal?.aborted ? 'aborted' : 'failed'
                 run.status = record.status === 'aborted' ? 'aborted' : 'failed'
                 run.endedAt = Date.now()
-                if(continuedMessage && previousState){
-                    continuedMessage.data = previousState.data
-                    continuedMessage.displayData = previousState.displayData
-                    continuedMessage.agentRun = previousState.agentRun
-                }
+                restorePreviousMessage()
                 endGeneration(generationKey)
                 return false
             }
-            messageIndex = findLastCharacterMessageIndex(chat.message)
+            const target = resolveTarget()
+            if(!target){
+                record.status = 'failed'
+                record.error = 'Agent chat is no longer available.'
+                run.status = 'failed'
+                run.endedAt = Date.now()
+                endGeneration(generationKey)
+                return false
+            }
+            messageIndex = findLastCharacterMessageIndex(target.chat.message)
             if(messageIndex < 0){
                 record.status = 'failed'
                 record.error = 'Main output message was not created.'
@@ -199,7 +233,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 endGeneration(generationKey)
                 return false
             }
-            const message = chat.message[messageIndex]
+            const message = target.chat.message[messageIndex]
             const rawMainOutput = message.data
             record.status = 'done'
             record.output = rawMainOutput
@@ -224,11 +258,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
             if(failed){
                 run.status = failed.status === 'aborted' ? 'aborted' : 'failed'
                 run.endedAt = Date.now()
-                if(continuedMessage && previousState){
-                    continuedMessage.data = previousState.data
-                    continuedMessage.displayData = previousState.displayData
-                    continuedMessage.agentRun = previousState.agentRun
-                }
+                restorePreviousMessage()
                 if(failed.status === 'failed') alertError(`${failed.nodeName}: ${failed.error || 'Agent request failed.'}`)
                 endGeneration(generationKey)
                 return false
@@ -250,15 +280,27 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 historyOutput = applyPostOutput(historyOutput, output, node.post.placement)
             }
         }
-        const message = chat.message[messageIndex]
+        const target = resolveTarget()
+        if(!target){
+            run.status = 'failed'
+            run.endedAt = Date.now()
+            endGeneration(generationKey)
+            return false
+        }
+        const message = target.chat.message[messageIndex]
         message.data = historyOutput
         message.displayData = displayOutput !== historyOutput ? displayOutput : undefined
         message.agentRun = run
-        character.reloadKeys += 1
+        target.character.reloadKeys += 1
     }
 
     if(!passedMain) return false
-    const message = chat.message[messageIndex]
+    const target = resolveTarget()
+    if(!target){
+        endGeneration(generationKey)
+        return false
+    }
+    const message = target.chat.message[messageIndex]
     run.historyOutput = historyOutput
     run.displayOutput = displayOutput
     if(run.status === 'running') run.status = 'done'
@@ -266,8 +308,8 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
     message.agentRun = run
     message.data = historyOutput
     message.displayData = displayOutput !== historyOutput ? displayOutput : undefined
-    character.reloadKeys += 1
-    if(DBState.db.ttsAutoSpeech) await sayTTS(character, displayOutput)
+    target.character.reloadKeys += 1
+    if(DBState.db.ttsAutoSpeech) await sayTTS(target.character, displayOutput)
     if(DBState.db.notification){
         try {
             const permission = await Notification.requestPermission()

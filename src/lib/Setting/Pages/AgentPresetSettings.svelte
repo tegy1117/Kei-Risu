@@ -11,7 +11,7 @@
     import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
     import { saveCurrentPreset } from 'src/ts/storage/database.svelte'
     import type { AgentPipelineNode, AgentPostPlacement, AgentPreset, AgentWorkerNode } from 'src/ts/agent/types'
-    import { createAgentPreset, validateAgentPreset } from 'src/ts/agent/pipeline'
+    import { createAgentPreset, sanitizeAgentInfoBindings, validateAgentPreset } from 'src/ts/agent/pipeline'
 
     let mappingPromptId = $state(DBState.db.botPresets?.[DBState.db.botPresetsId]?.id ?? '')
     let draggedNodeId = $state('')
@@ -93,6 +93,7 @@
     function removeNode(stageIndex: number, nodeIndex: number){
         if(!preset || preset.stages[stageIndex].nodes[nodeIndex]?.kind === 'main') return
         preset.stages[stageIndex].nodes.splice(nodeIndex, 1)
+        sanitizeAgentInfoBindings(preset)
     }
 
     function moveNode(stageIndex: number, nodeIndex: number, direction: -1|1){
@@ -110,11 +111,13 @@
         if(target < 0 || target >= preset.stages.length) return
         const [stage] = preset.stages.splice(index, 1)
         preset.stages.splice(target, 0, stage)
+        sanitizeAgentInfoBindings(preset)
     }
 
     function deleteStage(index: number){
         if(!preset || preset.stages[index].nodes.some((node) => node.kind === 'main')) return
         preset.stages.splice(index, 1)
+        sanitizeAgentInfoBindings(preset)
     }
 
     function findNode(nodeId: string): { stageIndex: number, nodeIndex: number } | null {
@@ -135,6 +138,7 @@
         if(node.kind === 'main') return
         preset.stages[found.stageIndex].nodes.splice(found.nodeIndex, 1)
         targetStage.nodes.push(node)
+        sanitizeAgentInfoBindings(preset)
         draggedNodeId = ''
     }
 

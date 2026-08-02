@@ -8,6 +8,7 @@ import {
     endStatus,
     isTerminalPhase,
     markPhase,
+    orderedRequestStatusIds,
     recomputeEntry,
     requestStatuses,
     setStatusTokenCounter,
@@ -139,13 +140,38 @@ describe('isTerminalPhase', () => {
     })
 })
 
+describe('request status ordering', () => {
+    it('keeps a main request first and concurrent/nested agents below it', () => {
+        const entries = new Map<string, RequestStatusEntry>([
+            ['worker-2', makeEntry({ id: 'worker-2', kind: 'agent', parentId: 'main', order: 2, startedAt: 12 })],
+            ['nested', makeEntry({ id: 'nested', kind: 'tool-agent', parentId: 'worker-1', startedAt: 13 })],
+            ['main', makeEntry({ id: 'main', startedAt: 10 })],
+            ['worker-1', makeEntry({ id: 'worker-1', kind: 'agent', parentId: 'main', order: 1, startedAt: 11 })],
+        ])
+
+        expect(orderedRequestStatusIds(entries)).toEqual(['main', 'worker-1', 'nested', 'worker-2'])
+    })
+
+    it('promotes a child safely when its completed parent has been cleared', () => {
+        const entries = new Map<string, RequestStatusEntry>([
+            ['worker', makeEntry({ id: 'worker', kind: 'agent', parentId: 'main', startedAt: 20 })],
+            ['other-main', makeEntry({ id: 'other-main', startedAt: 10 })],
+        ])
+
+        expect(orderedRequestStatusIds(entries)).toEqual(['other-main', 'worker'])
+    })
+})
+
 describe('publish API', () => {
     it('startStatus creates an entry', () => {
-        startStatus('g1', { kind: 'main', label: 'gpt', chatId: 'c1', now: 100 })
+        startStatus('g1', { kind: 'agent', label: 'gpt', chatId: 'c1', parentId: 'main', order: 2, now: 100 })
         const e = get(requestStatuses).get('g1')!
         expect(e.phase).toBe('connecting')
         expect(e.label).toBe('gpt')
         expect(e.chatId).toBe('c1')
+        expect(e.kind).toBe('agent')
+        expect(e.parentId).toBe('main')
+        expect(e.order).toBe(2)
         expect(e.startedAt).toBe(100)
     })
 

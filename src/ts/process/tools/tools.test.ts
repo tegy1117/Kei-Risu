@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { RisuToolPackage } from './types'
 
 let mockDb: any
+const requestMocks = vi.hoisted(() => ({
+    requestAgentModelPreset: vi.fn(),
+}))
 
 vi.mock('src/ts/alert', () => ({
     alertConfirm: vi.fn(), alertInput: vi.fn(), alertSelect: vi.fn(),
@@ -21,6 +24,8 @@ vi.mock('src/ts/storage/database.svelte', () => ({
 }))
 vi.mock('src/ts/parser/parser.svelte', () => ({ hasher: vi.fn(() => 'hash') }))
 vi.mock('src/ts/util', () => ({ selectSingleFile: vi.fn() }))
+vi.mock('../mcp/mcp', () => ({ getTools: vi.fn(async () => []) }))
+vi.mock('../request/request', () => ({ requestAgentModelPreset: requestMocks.requestAgentModelPreset }))
 
 import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
 import {
@@ -28,6 +33,7 @@ import {
     createToolExportPayload,
     createToolExportPayloadV2,
     createMemoryToolResult,
+    callManagedToolDetailed,
     deleteToolScopeState,
     parseToolExport,
     readToolScopeState,
@@ -52,6 +58,8 @@ function sampleTool(): RisuToolPackage {
 }
 
 beforeEach(() => {
+    vi.clearAllMocks()
+    requestMocks.requestAgentModelPreset.mockResolvedValue({ ok: true, text: 'OK:door-a', model: 'model' })
     mockDb = { tools: [], enabledTools: [], toolStates: {}, toolPermissions: {}, toolPolicy: { tools: {}, functions: {} } }
 })
 
@@ -169,6 +177,33 @@ describe('tool activation policy', () => {
 })
 
 describe('sub-agent output routing', () => {
+    test('publishes a nested tool-agent status under the request that invoked it', async () => {
+        const tool = sampleTool()
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: 'system', userPrompt: 'prompt', allowedTools: [],
+            outputRoutes: [{ id: 'ok', name: 'ok', pattern: '^OK:(?<choice>.+)$', outcome: 'success', modelTemplate: '{{tool_capture::choice}}', actions: [] }],
+        }
+        mockDb = {
+            ...mockDb,
+            tools: [tool],
+            enabledTools: [tool.id],
+            modelPresets: [{ id: 'model-1', name: 'Model', toolUse: false }],
+        }
+
+        const result = await callManagedToolDetailed(toolWireName(tool.namespace, 'alpha'), {}, {
+            stack: [],
+            requestStatusId: 'parent-request',
+        })
+
+        expect(result?.success).toBe(true)
+        expect(requestMocks.requestAgentModelPreset).toHaveBeenCalledOnce()
+        expect(requestMocks.requestAgentModelPreset.mock.calls[0][0]).toMatchObject({
+            toolExecutionContext: { stack: ['sample__alpha'], requestStatusId: 'parent-request' },
+            requestStatus: { kind: 'tool-agent', label: 'Sample · alpha', parentId: 'parent-request' },
+        })
+        expect(requestMocks.requestAgentModelPreset.mock.calls[0][0].chatId).toMatch(/^tool-agent:/)
+    })
+
     test('uses the first matching regex, exposes decisions, and commits state updates', async () => {
         const tool = sampleTool()
         tool.variables = [{ id: 'v1', name: 'decision', description: '', type: 'string', scope: 'global', defaultValue: '' }]
