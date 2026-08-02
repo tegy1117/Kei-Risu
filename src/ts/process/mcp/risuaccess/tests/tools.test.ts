@@ -27,6 +27,7 @@ vi.mock('src/ts/process/tools/tools', () => ({
   validateToolPackage: () => [],
   validateToolPluginSource: async () => [],
 }))
+vi.mock('src/ts/process/mcp/mcp', () => ({ getMCPTools: vi.fn(async () => []) }))
 
 import { ToolPackageHandler } from '../tools'
 
@@ -71,6 +72,129 @@ test('exposes the complete tool authoring workflow', () => {
     'risu-get-tool-draft', 'risu-edit-tool-draft', 'risu-validate-tool-draft', 'risu-commit-tool-draft',
     'risu-discard-tool-draft', 'risu-set-tool-activation', 'risu-delete-tool',
   ])
+})
+
+test('publishes the canonical agent execution schema with a usable preset example', async () => {
+  mockDb.modelPresets = [{ id: 'model-1', name: 'Model 1', toolUse: true }]
+  const context = payload(await new ToolPackageHandler().handle('risu-get-tool-authoring-context', {}))
+
+  expect(context.schemaVersion).toBe(1)
+  expect(context.operationSchemas.setFunctionExecution.anyOf[1].required).toEqual([
+    'kind', 'modelPresetId', 'systemPrompt', 'userPrompt', 'allowedTools', 'outputRoutes',
+  ])
+  expect(context.authoringExamples.setFunctionExecutionAgent).toMatchObject({
+    kind: 'agent', modelPresetId: 'model-1', systemPrompt: expect.any(String), userPrompt: '{{tool_args}}', allowedTools: [],
+  })
+  expect(context.authoringExamples.setFunctionExecutionAgent.outputRoutes[0]).toMatchObject({
+    pattern: '^(?<result>[\\s\\S]+)$', outcome: 'success', modelTemplate: '{{tool_capture::result}}', actions: [],
+  })
+  expect(context.authoringNotes.join('\n')).toContain('no separate agent model registry')
+})
+
+test('normalizes reported agent authoring aliases into the canonical saved shape', async () => {
+  mockDb.modelPresets = [{ id: 'model-1', name: 'Model 1', toolUse: true }]
+  const handler = new ToolPackageHandler()
+  const started = payload(await handler.handle('risu-start-tool-draft', { mode: 'create' }))
+  const withFunction = payload(await handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{ kind: 'upsertFunction', value: { id: 'fn-agent', name: 'analyze', description: 'Analyze' } }],
+  }))
+  expect(withFunction.tool.functions[0].id).toBe('fn-agent')
+
+  const edited = payload(await handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{
+      kind: 'setFunctionExecution',
+      functionId: 'fn-agent',
+      value: {
+        kind: 'agent',
+        modelPreset: 'model-1',
+        prompts: [
+          { role: 'system', content: 'Analyze carefully.' },
+          { role: 'user', content: '{{tool_args}}' },
+        ],
+        allowedTools: [],
+        outputRoutes: [{
+          name: 'Success', pattern: '^(?<result>[\\s\\S]+)$', outcome: 'success',
+          modelResultTemplate: '{{tool_capture::result}}', actions: [],
+        }],
+      },
+    }],
+  }))
+
+  expect(edited.tool.functions[0].execution).toMatchObject({
+    kind: 'agent', modelPresetId: 'model-1', systemPrompt: 'Analyze carefully.', userPrompt: '{{tool_args}}', allowedTools: [],
+  })
+  expect(edited.tool.functions[0].execution).not.toHaveProperty('modelPreset')
+  expect(edited.tool.functions[0].execution).not.toHaveProperty('prompts')
+  expect(edited.tool.functions[0].execution.outputRoutes[0]).toMatchObject({
+    modelTemplate: '{{tool_capture::result}}', actions: [],
+  })
+  expect(edited.tool.functions[0].execution.outputRoutes[0]).not.toHaveProperty('modelResultTemplate')
+  expect(edited.warnings.join('\n')).toContain('execution.modelPreset was normalized')
+  expect(edited.warnings.join('\n')).toContain('execution.prompts was normalized')
+  expect(edited.warnings.join('\n')).toContain('modelResultTemplate was normalized')
+})
+
+test('normalizes string agentPrompt and resultTemplate aliases', async () => {
+  mockDb.modelPresets = [{ id: 'model-1', name: 'Model 1', toolUse: false }]
+  const handler = new ToolPackageHandler()
+  const started = payload(await handler.handle('risu-start-tool-draft', { mode: 'create' }))
+  await handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{ kind: 'upsertFunction', value: { id: 'fn-agent', name: 'analyze' } }],
+  })
+  const edited = payload(await handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{
+      kind: 'setFunctionExecution', functionId: 'fn-agent', value: {
+        kind: 'agent', modelPresetId: 'model-1', agentPrompt: 'Do the work.',
+        outputRoutes: [{ name: 'Success', pattern: '^(?<result>.+)$', outcome: 'success', resultTemplate: '{{tool_capture::result}}' }],
+      },
+    }],
+  }))
+
+  expect(edited.tool.functions[0].execution).toMatchObject({ systemPrompt: '', userPrompt: 'Do the work.', allowedTools: [] })
+  expect(edited.tool.functions[0].execution.outputRoutes[0]).toMatchObject({ modelTemplate: '{{tool_capture::result}}', actions: [] })
+
+  const promptsEdited = payload(await handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{
+      kind: 'setFunctionExecution', functionId: 'fn-agent', value: {
+        kind: 'agent', modelPresetId: 'model-1', prompts: 'Do the work again.',
+        outputRoutes: [{ name: 'Success', pattern: '^(?<result>.+)$', outcome: 'success', modelTemplate: '{{tool_capture::result}}' }],
+      },
+    }],
+  }))
+  expect(promptsEdited.tool.functions[0].execution).toMatchObject({ systemPrompt: '', userPrompt: 'Do the work again.' })
+  expect(promptsEdited.warnings.join('\n')).toContain('execution.prompts was normalized')
+})
+
+test('rejects conflicting canonical agent fields and malformed prompt arrays', async () => {
+  const handler = new ToolPackageHandler()
+  const started = payload(await handler.handle('risu-start-tool-draft', { mode: 'create' }))
+  await handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{ kind: 'upsertFunction', value: { id: 'fn-agent', name: 'analyze' } }],
+  })
+
+  await expect(handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{
+      kind: 'setFunctionExecution', functionId: 'fn-agent', value: {
+        kind: 'agent', modelPresetId: 'canonical', modelPreset: 'alias', outputRoutes: [],
+      },
+    }],
+  })).rejects.toThrow('conflicts with canonical field execution.modelPresetId')
+
+  await expect(handler.handle('risu-edit-tool-draft', {
+    draftId: started.draftId,
+    operations: [{
+      kind: 'setFunctionExecution', functionId: 'fn-agent', value: {
+        kind: 'agent', modelPresetId: 'model-1', prompts: [{ role: 'assistant', content: 'bad' }], outputRoutes: [],
+      },
+    }],
+  })).rejects.toThrow('role must be system or user')
 })
 
 test('sanitizes asset paths when reading a tool', async () => {

@@ -74,6 +74,156 @@ const draftIdSchema = {
   draftId: { type: 'string', description: 'Draft ID returned by risu-start-tool-draft.' },
 }
 
+const callableToolSchema = {
+  anyOf: [
+    {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['managed'] },
+        toolId: { type: 'string' },
+        functionId: { type: 'string' },
+      },
+      required: ['kind', 'toolId', 'functionId'],
+    },
+    {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['external'] },
+        name: { type: 'string' },
+      },
+      required: ['kind', 'name'],
+    },
+  ],
+}
+
+const agentStateActionSchema = {
+  anyOf: [
+    ...['setVariable', 'appendList', 'replaceList'].map((kind) => ({
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        kind: { type: 'string', enum: [kind] },
+        name: { type: 'string' },
+        valueTemplate: { type: 'string' },
+      },
+      required: ['id', 'kind', 'name', 'valueTemplate'],
+    })),
+    {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        kind: { type: 'string', enum: ['upsertMemory'] },
+        scope: { type: 'string', enum: ['global', 'character', 'chat'] },
+        memoryIdTemplate: { type: 'string' },
+        titleTemplate: { type: 'string' },
+        contentTemplate: { type: 'string' },
+        tagsTemplate: { type: 'string' },
+        importanceTemplate: { type: 'string' },
+      },
+      required: ['id', 'kind', 'scope', 'titleTemplate', 'contentTemplate'],
+    },
+  ],
+}
+
+const agentOutputRouteSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    pattern: { type: 'string', description: 'Regular expression matched against the raw agent response.' },
+    flags: { type: 'string' },
+    outcome: { type: 'string', enum: ['success', 'error'] },
+    modelTemplate: { type: 'string', description: 'Text returned to the model. This canonical field is required.' },
+    cardTemplate: { type: 'string' },
+    actions: { type: 'array', items: agentStateActionSchema },
+  },
+  required: ['id', 'name', 'pattern', 'outcome', 'modelTemplate', 'actions'],
+}
+
+const agentExecutionSchema = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['agent'] },
+    modelPresetId: { type: 'string', description: 'Use an exact id from modelPresets returned in this context.' },
+    systemPrompt: { type: 'string' },
+    userPrompt: { type: 'string' },
+    allowedTools: { type: 'array', items: callableToolSchema },
+    outputRoutes: { type: 'array', items: agentOutputRouteSchema },
+  },
+  required: ['kind', 'modelPresetId', 'systemPrompt', 'userPrompt', 'allowedTools', 'outputRoutes'],
+}
+
+function sameValue(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function assignAlias(
+  target: Record<string, any>,
+  canonical: string,
+  alias: string,
+  value: unknown,
+  warnings: string[],
+  path = 'execution',
+) {
+  if (target[canonical] !== undefined && !sameValue(target[canonical], value)) {
+    throw new Error(`${path}.${alias} conflicts with canonical field ${path}.${canonical}.`)
+  }
+  target[canonical] = value
+  delete target[alias]
+  warnings.push(`${path}.${alias} was normalized to ${path}.${canonical}.`)
+}
+
+function normalizeAgentExecutionInput(value: Record<string, any>) {
+  const execution = safeStructuredClone(value) as Record<string, any>
+  const warnings: string[] = []
+
+  if (execution.modelPreset !== undefined) {
+    if (typeof execution.modelPreset !== 'string') throw new Error('execution.modelPreset must be a model preset ID string.')
+    assignAlias(execution, 'modelPresetId', 'modelPreset', execution.modelPreset, warnings)
+  }
+  if (execution.agentPrompt !== undefined) {
+    if (typeof execution.agentPrompt !== 'string') throw new Error('execution.agentPrompt must be text.')
+    assignAlias(execution, 'userPrompt', 'agentPrompt', execution.agentPrompt, warnings)
+  }
+  if (execution.prompts !== undefined) {
+    if (typeof execution.prompts === 'string') {
+      assignAlias(execution, 'userPrompt', 'prompts', execution.prompts, warnings)
+    } else if (Array.isArray(execution.prompts)) {
+      const promptText: Record<'system' | 'user', string[]> = { system: [], user: [] }
+      for (const [index, prompt] of execution.prompts.entries()) {
+        if (!prompt || typeof prompt !== 'object' || Array.isArray(prompt)) throw new Error(`execution.prompts[${index}] must be an object.`)
+        if (prompt.role !== 'system' && prompt.role !== 'user') throw new Error(`execution.prompts[${index}].role must be system or user.`)
+        if (typeof prompt.content !== 'string') throw new Error(`execution.prompts[${index}].content must be text.`)
+        promptText[prompt.role].push(prompt.content)
+      }
+      for (const role of ['system', 'user'] as const) {
+        if (promptText[role].length > 0) assignAlias(execution, `${role}Prompt`, 'prompts', promptText[role].join('\n\n'), warnings)
+      }
+      delete execution.prompts
+    } else {
+      throw new Error('execution.prompts must be text or an array of system/user prompt objects.')
+    }
+  }
+
+  execution.systemPrompt ??= ''
+  execution.userPrompt ??= ''
+  execution.allowedTools ??= []
+  execution.outputRoutes ??= []
+  if (!Array.isArray(execution.outputRoutes)) throw new Error('outputRoutes must be an array.')
+  for (const [routeIndex, route] of execution.outputRoutes.entries()) {
+    if (!route || typeof route !== 'object' || Array.isArray(route)) throw new Error('Each output route must be an object.')
+    const routePath = `execution.outputRoutes[${routeIndex}]`
+    for (const alias of ['resultTemplate', 'modelResultTemplate']) {
+      if (route[alias] !== undefined) {
+        if (typeof route[alias] !== 'string') throw new Error(`${routePath}.${alias} must be text.`)
+        assignAlias(route, 'modelTemplate', alias, route[alias], warnings, routePath)
+      }
+    }
+  }
+
+  return { execution, warnings: [...new Set(warnings)] }
+}
+
 function response(value: unknown): RPCToolCallContent[] {
   return [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
 }
@@ -169,7 +319,7 @@ function normalizeList(value: Record<string, any>, current?: RisuToolList): Risu
   }
 }
 
-function draftResult(draft: ToolDraft, errors: string[] = []) {
+function draftResult(draft: ToolDraft, errors: string[] = [], warnings: string[] = []) {
   return {
     draftId: draft.id,
     mode: draft.mode,
@@ -177,6 +327,7 @@ function draftResult(draft: ToolDraft, errors: string[] = []) {
     activation: draft.activation,
     tool: publicTool(draft.tool),
     errors,
+    warnings,
   }
 }
 
@@ -201,7 +352,7 @@ export class ToolPackageHandler extends MCPToolHandler {
       },
       {
         name: 'risu-get-tool-authoring-context',
-        description: 'Get model presets, callable tools, supported schemas, template tokens, and authoring examples for managed tools.',
+        description: 'Get model presets, exact operation schemas, compatibility aliases, template tokens, and authoring examples. Call this before setFunctionExecution.',
         inputSchema: { type: 'object', properties: {}, required: [] },
       },
       {
@@ -223,7 +374,7 @@ export class ToolPackageHandler extends MCPToolHandler {
       },
       {
         name: 'risu-edit-tool-draft',
-        description: `Apply a batch of in-memory draft operations. Kinds: ${operationKinds.join(', ')}. New functions, parameters, variables, and lists receive IDs automatically.`,
+        description: `Apply a batch of in-memory draft operations. Kinds: ${operationKinds.join(', ')}. Before setFunctionExecution, call risu-get-tool-authoring-context. Canonical agent fields are kind, modelPresetId, systemPrompt, userPrompt, allowedTools, and outputRoutes; each route uses modelTemplate. New functions, parameters, variables, and lists receive IDs automatically.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -238,7 +389,7 @@ export class ToolPackageHandler extends MCPToolHandler {
                   functionId: { type: 'string', description: 'Parent function ID for parameter/execution/presentation operations.' },
                   index: { type: 'integer', description: 'Regex or trigger index. Omit on upsert to append.' },
                   scope: { type: 'string', enum: ['unchanged', 'disabled', 'global', 'character', 'chat'] },
-                  value: { type: 'object', description: 'Operation-specific fields or complete regex/trigger object.' },
+                  value: { type: 'object', description: 'Operation-specific fields. For setFunctionExecution use the exact operationSchemas.setFunctionExecution schema returned by risu-get-tool-authoring-context.' },
                 },
                 required: ['kind'],
               },
@@ -333,14 +484,58 @@ export class ToolPackageHandler extends MCPToolHandler {
     const db = getDatabase()
     const { getMCPTools } = await import('../mcp')
     const external = await getMCPTools()
+    const modelPresets = (db.modelPresets ?? []).map((preset) => ({ id: preset.id, name: preset.name, toolUse: preset.toolUse === true }))
+    const examplePreset = modelPresets[0]
     return {
-      modelPresets: (db.modelPresets ?? []).map((preset) => ({ id: preset.id, name: preset.name, toolUse: preset.toolUse === true })),
+      schemaVersion: 1,
+      modelPresets,
       managedTools: db.tools.flatMap((tool) => tool.functions.map((fn) => ({ kind: 'managed', toolId: tool.id, functionId: fn.id, name: `${tool.namespace}__${fn.name}` }))),
       externalTools: external.map((tool) => ({ kind: 'external', name: tool.name, source: tool.mcpURL, description: tool.description })),
       parameterTypes: ['string', 'number', 'integer', 'boolean', 'json', 'string[]', 'number[]'],
       valueTypes: ['string', 'number', 'boolean', 'json'],
       scopes: ['global', 'character', 'chat'],
       executionKinds: ['script', 'agent'],
+      operationSchemas: {
+        setFunctionExecution: {
+          anyOf: [
+            { type: 'object', properties: { kind: { type: 'string', enum: ['script'] } }, required: ['kind'] },
+            agentExecutionSchema,
+          ],
+        },
+        agentOutputRoute: agentOutputRouteSchema,
+        agentStateAction: agentStateActionSchema,
+      },
+      authoringExamples: {
+        setFunctionExecutionAgent: examplePreset ? {
+          kind: 'agent',
+          modelPresetId: examplePreset.id,
+          systemPrompt: 'Analyze the request carefully and return the result.',
+          userPrompt: '{{tool_args}}',
+          allowedTools: [],
+          outputRoutes: [{
+            id: 'success',
+            name: 'Success',
+            pattern: '^(?<result>[\\s\\S]+)$',
+            flags: '',
+            outcome: 'success',
+            modelTemplate: '{{tool_capture::result}}',
+            cardTemplate: '{{tool_capture::result}}',
+            actions: [],
+          }],
+        } : null,
+      },
+      compatibilityAliases: {
+        modelPreset: 'modelPresetId',
+        agentPrompt: 'userPrompt',
+        prompts: 'systemPrompt/userPrompt',
+        resultTemplate: 'modelTemplate',
+        modelResultTemplate: 'modelTemplate',
+      },
+      authoringNotes: [
+        'Use an exact modelPresets[].id as modelPresetId; there is no separate agent model registry.',
+        'systemPrompt and userPrompt must both be strings, and at least one must contain text.',
+        'Compatibility aliases are accepted on input but only canonical fields are stored.',
+      ],
       templateTokens: ['{{tool_args}}', '{{tool_arg::name}}', '{{tool_last_user}}', '{{tool_chat_history}}', '{{tool_character}}', '{{tool_state::chat}}', '{{tool_capture::name}}', '{{tool_result}}', '{{tool_updates}}', '{{tool_asset::filename}}'],
       pluginApi: ['registerFunction', 'askUser', 'requestDiceRoll', 'getVariable', 'setVariable', 'resetVariable', 'getList', 'setList', 'memoryList', 'memorySearch', 'memoryRead', 'memoryUpsert', 'memoryDelete', 'nativeFetch', 'databaseGet', 'databaseSet'],
       pluginExample: "await risuai.registerFunction('run', async (args) => ({ ok: true, value: args.value }))",
@@ -388,7 +583,7 @@ export class ToolPackageHandler extends MCPToolHandler {
     return draftResult(draft, await this.validateDraft(draft))
   }
 
-  private applyOperation(draft: ToolDraft, operation: DraftOperation) {
+  private applyOperation(draft: ToolDraft, operation: DraftOperation, warnings: string[]) {
     const tool = draft.tool
     const value = operation.value === undefined ? {} : objectValue(operation.value, `${operation.kind} value`)
     const requireFunction = () => {
@@ -432,7 +627,9 @@ export class ToolPackageHandler extends MCPToolHandler {
         const fn = requireFunction()
         if (value.kind === 'script') fn.execution = { kind: 'script' }
         else if (value.kind === 'agent') {
-          const execution = safeStructuredClone(value) as ToolFunctionExecution
+          const normalized = normalizeAgentExecutionInput(value)
+          warnings.push(...normalized.warnings)
+          const execution = normalized.execution as ToolFunctionExecution
           if (execution.kind !== 'agent') throw new Error('Invalid agent execution.')
           execution.allowedTools ??= []
           execution.outputRoutes ??= []
@@ -509,12 +706,13 @@ export class ToolPackageHandler extends MCPToolHandler {
     const current = this.requireDraft(id)
     if (!Array.isArray(operations) || operations.length === 0) throw new Error('At least one draft operation is required.')
     const draft = safeStructuredClone(current) as ToolDraft
+    const warnings: string[] = []
     for (const operation of operations) {
       if (!operation || typeof operation !== 'object') throw new Error('Draft operations must be objects.')
-      this.applyOperation(draft, operation)
+      this.applyOperation(draft, operation, warnings)
     }
     this.drafts.set(id, draft)
-    return draftResult(draft, await this.validateDraft(draft))
+    return draftResult(draft, await this.validateDraft(draft), [...new Set(warnings)])
   }
 
   private async validateDraft(draft: ToolDraft) {
@@ -527,8 +725,9 @@ export class ToolPackageHandler extends MCPToolHandler {
     for (const fn of draft.tool.functions) {
       const execution = fn.execution
       if (execution?.kind !== 'agent') continue
-      const preset = (db.modelPresets ?? []).find((item) => item.id === execution.modelPresetId)
-      if (!preset) errors.push(`Model preset not found for agent function ${fn.name}.`)
+      const hasPresetId = typeof execution.modelPresetId === 'string' && Boolean(execution.modelPresetId.trim())
+      const preset = hasPresetId ? (db.modelPresets ?? []).find((item) => item.id === execution.modelPresetId) : undefined
+      if (hasPresetId && !preset) errors.push(`Model preset ID "${execution.modelPresetId}" was not found for agent function ${fn.name}; use an exact modelPresets[].id from risu-get-tool-authoring-context.`)
       const allowedTools = Array.isArray(execution.allowedTools) ? execution.allowedTools : []
       if (allowedTools.length > 0 && preset?.toolUse !== true) errors.push(`Tool use is disabled on the model preset for ${fn.name}.`)
       for (const ref of allowedTools) {

@@ -111,11 +111,11 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
         const execution = fn.execution
         if (execution && execution.kind !== 'script' && execution.kind !== 'agent') errors.push(`Invalid execution kind for ${fn.name}.`)
         if (execution?.kind === 'agent') {
-            if (typeof execution.modelPresetId !== 'string' || !execution.modelPresetId.trim()) errors.push(`Model preset is required for agent function ${fn.name}.`)
+            if (typeof execution.modelPresetId !== 'string' || !execution.modelPresetId.trim()) errors.push(`execution.modelPresetId is required for agent function ${fn.name}.`)
             const systemPrompt = typeof execution.systemPrompt === 'string' ? execution.systemPrompt : ''
             const userPrompt = typeof execution.userPrompt === 'string' ? execution.userPrompt : ''
-            if (typeof execution.systemPrompt !== 'string' || typeof execution.userPrompt !== 'string') errors.push(`Agent prompts must be text for ${fn.name}.`)
-            if (!systemPrompt.trim() && !userPrompt.trim()) errors.push(`Agent prompt is required for ${fn.name}.`)
+            if (typeof execution.systemPrompt !== 'string' || typeof execution.userPrompt !== 'string') errors.push(`execution.systemPrompt and execution.userPrompt must both be text for agent function ${fn.name}.`)
+            if (!systemPrompt.trim() && !userPrompt.trim()) errors.push(`At least one of execution.systemPrompt or execution.userPrompt is required for agent function ${fn.name}.`)
             if (!Array.isArray(execution.allowedTools)) errors.push(`Allowed tools must be an array for ${fn.name}.`)
             else {
                 for (const ref of execution.allowedTools) {
@@ -131,10 +131,12 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
                     continue
                 }
                 if (typeof route.id !== 'string' || !route.id.trim()) errors.push(`Output route ID is required in ${fn.name}.`)
+                if (route.outcome !== 'success' && route.outcome !== 'error') errors.push(`Output route outcome must be success or error in ${fn.name}: ${route.name || route.id}`)
+                if (route.flags !== undefined && typeof route.flags !== 'string') errors.push(`Output route flags must be text in ${fn.name}: ${route.name || route.id}`)
                 if (typeof route.pattern !== 'string') errors.push(`Output route pattern must be text in ${fn.name}: ${route.name || route.id}`)
                 else try { new RegExp(route.pattern, normalizeRegexFlags(typeof route.flags === 'string' ? route.flags : '')) }
                 catch { errors.push(`Invalid output route regex in ${fn.name}: ${route.name || route.id}`) }
-                if (typeof route.modelTemplate !== 'string' || !route.modelTemplate) errors.push(`Model result template is required in ${fn.name}: ${route.name || route.id}`)
+                if (typeof route.modelTemplate !== 'string' || !route.modelTemplate) errors.push(`Output route modelTemplate is required in ${fn.name}: ${route.name || route.id}`)
                 if (!Array.isArray(route.actions)) errors.push(`Output route actions must be an array in ${fn.name}: ${route.name || route.id}`)
                 for (const action of Array.isArray(route.actions) ? route.actions : []) {
                     if (!isObject(action)) {

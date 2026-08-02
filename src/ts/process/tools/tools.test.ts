@@ -177,9 +177,25 @@ describe('tool package validation', () => {
         expect(() => validateToolPackage(tool)).not.toThrow()
         const errors = validateToolPackage(tool).join('\n')
         expect(errors).toContain('Plugin permissions must be an array')
-        expect(errors).toContain('Agent prompts must be text')
+        expect(errors).toContain('execution.systemPrompt and execution.userPrompt must both be text')
         expect(errors).toContain('Allowed tools must be an array')
         expect(errors).toContain('At least one output route is required')
+    })
+
+    test('reports canonical agent route fields and rejects invalid route metadata', () => {
+        const tool = sampleTool()
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: '', userPrompt: 'prompt', allowedTools: [],
+            outputRoutes: [{
+                id: 'route-1', name: 'Route', pattern: '.*', flags: 1, outcome: 'unknown',
+                modelTemplate: '', actions: [],
+            }],
+        } as never
+
+        const errors = validateToolPackage(tool).join('\n')
+        expect(errors).toContain('Output route outcome must be success or error')
+        expect(errors).toContain('Output route flags must be text')
+        expect(errors).toContain('Output route modelTemplate is required')
     })
 
     test('passes approved low-level access to active tool triggers', () => {
