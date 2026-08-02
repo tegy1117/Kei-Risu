@@ -103,6 +103,7 @@ export async function runWithConcurrency<T, R>(
 }
 
 export function applyPostOutput(base: string, output: string, placement: AgentPostPlacement): string {
+    if(placement === 'none') return base
     if(placement === 'replace') return output
     if(!output) return base
     if(!base) return output

@@ -8,7 +8,7 @@
     import ShInput from 'src/lib/UI/GUI/ShInput.svelte'
     import ShSelect from 'src/lib/UI/GUI/ShSelect.svelte'
     import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
-    import type { AgentPipelineNode, AgentPreset, AgentWorkerNode } from 'src/ts/agent/types'
+    import type { AgentPipelineNode, AgentPostPlacement, AgentPreset, AgentWorkerNode } from 'src/ts/agent/types'
     import { createAgentPreset, validateAgentPreset } from 'src/ts/agent/pipeline'
 
     let editingId = $state(DBState.db.agentPresets?.[0]?.id ?? '')
@@ -156,6 +156,11 @@
             ? [...new Set([...current, sourceId])]
             : current.filter((id) => id !== sourceId)
     }
+
+    function setPostPlacement(node: AgentWorkerNode, placement: AgentPostPlacement){
+        node.post.placement = placement
+        if(placement === 'none') node.post.includeInHistory = false
+    }
 </script>
 
 <SettingPage title={language.agent.menu}>
@@ -233,12 +238,15 @@
                                 <label class="flex gap-2 items-center text-sm"><input type="checkbox" bind:checked={node.usePromptPresetParams}/>{language.agent.promptParams}</label>
                                 {#if validation && stageIndex > validation.mainStageIndex}
                                     <div class="text-xs text-textcolor2">{language.agent.postPlacement}</div>
-                                    <ShSelect bind:value={node.post.placement}>
+                                    <ShSelect value={node.post.placement} onchange={(event) => setPostPlacement(node, event.currentTarget.value as AgentPostPlacement)}>
                                         <OptionInput value="prepend">{language.agent.prepend}</OptionInput>
                                         <OptionInput value="append">{language.agent.append}</OptionInput>
                                         <OptionInput value="replace">{language.agent.replace}</OptionInput>
+                                        <OptionInput value="none">{language.agent.noEffect}</OptionInput>
                                     </ShSelect>
-                                    <label class="flex gap-2 items-center text-sm"><input type="checkbox" bind:checked={node.post.includeInHistory}/>{language.agent.includeHistory}</label>
+                                    {#if node.post.placement !== 'none'}
+                                        <label class="flex gap-2 items-center text-sm"><input type="checkbox" bind:checked={node.post.includeInHistory}/>{language.agent.includeHistory}</label>
+                                    {/if}
                                 {/if}
                             {:else}
                                 <div class="text-xs text-textcolor2">{language.agent.mappingPrompt}</div>
@@ -253,14 +261,19 @@
                                     <div class="text-xs text-textcolor2">{language.agent.noInfoCards}</div>
                                 {/if}
                                 {#each infoCards(node) as card (card.id)}
+                                    {@const sources = earlierNodes(node)}
                                     <div class="rounded border border-darkborderc p-2 mb-2">
-                                        <div class="text-sm mb-1">{card.name || card.id}</div>
-                                        {#each earlierNodes(node) as source (source.id)}
-                                            <label class="flex gap-2 items-center text-xs py-1">
-                                                <input type="checkbox" checked={isBound(node, card.id, source.id)} onchange={(event) => toggleBinding(node, card.id, source.id, event.currentTarget.checked)}/>
-                                                {source.name}
-                                            </label>
-                                        {/each}
+                                        <div class="text-sm mb-1">{language.agent.insertionPoint}: {card.name || language.agentInfo}</div>
+                                        {#if sources.length === 0}
+                                            <div class="text-xs text-textcolor2">{language.agent.noEarlierOutputs}</div>
+                                        {:else}
+                                            {#each sources as source (source.id)}
+                                                <label class="flex gap-2 items-center text-xs py-1">
+                                                    <input type="checkbox" checked={isBound(node, card.id, source.id)} onchange={(event) => toggleBinding(node, card.id, source.id, event.currentTarget.checked)}/>
+                                                    {source.name}
+                                                </label>
+                                            {/each}
+                                        {/if}
                                     </div>
                                 {/each}
                             </div>

@@ -222,6 +222,12 @@ export function setDatabase(data:Database){
                     node.modelPresetId ??= ''
                     node.usePromptPresetParams ??= false
                     node.post ??= { placement: 'append', includeInHistory: true }
+                    if(!['prepend', 'append', 'replace', 'none'].includes(node.post.placement)){
+                        node.post.placement = 'append'
+                    }
+                    node.post.includeInHistory = node.post.placement === 'none'
+                        ? false
+                        : node.post.includeInHistory ?? true
                 }
             }
         }

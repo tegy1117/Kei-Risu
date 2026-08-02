@@ -293,6 +293,10 @@
             {/if}
         </SelectInput>
 
+        {#if promptItem.type === 'agentInfo'}
+            <div class="text-xs text-textcolor2 mb-4">{language.agentInfoDescription}</div>
+        {/if}
+
         {#if promptItem.type === 'plain' || promptItem.type === 'jailbreak' || promptItem.type === 'cot'}
             <span class="mt-2">{language.specialType}</span>
             <SelectInput className="mt-2 mb-4" bind:value={promptItem.type2}>

@@ -1,4 +1,4 @@
-export type AgentPostPlacement = 'prepend' | 'append' | 'replace'
+export type AgentPostPlacement = 'prepend' | 'append' | 'replace' | 'none'
 
 export type AgentInfoBindings = Record<string, Record<string, string[]>>
 
