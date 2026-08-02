@@ -1,5 +1,12 @@
 import { describe, expect, test, vi } from 'vitest'
-import { collectToolStream, runToolLoop, type ToolLoopDeps } from './toolLoop'
+import {
+    collectToolStream,
+    runToolLoop,
+    resolveToolLoopMaxSteps,
+    DEFAULT_TOOL_LOOP_MAX_STEPS,
+    MAX_TOOL_LOOP_MAX_STEPS,
+    type ToolLoopDeps,
+} from './toolLoop'
 import type { AdapterChatMessage, AdapterChatResponse, AdapterChatStreamDelta, AdapterToolCall } from './types'
 
 const NL2 = String.fromCharCode(10, 10) // blank-line separator the loop joins with
@@ -26,6 +33,19 @@ function scriptedSend(responses: AdapterChatResponse[]) {
 }
 
 const initial: AdapterChatMessage[] = [{ role: 'user', content: 'hi' }]
+
+describe('resolveToolLoopMaxSteps', () => {
+    test('uses the default for an unset or invalid value', () => {
+        expect(resolveToolLoopMaxSteps(undefined)).toBe(DEFAULT_TOOL_LOOP_MAX_STEPS)
+        expect(resolveToolLoopMaxSteps(Number.NaN)).toBe(DEFAULT_TOOL_LOOP_MAX_STEPS)
+    })
+
+    test('normalizes configured values to a finite safe range', () => {
+        expect(resolveToolLoopMaxSteps(24.9)).toBe(24)
+        expect(resolveToolLoopMaxSteps(0)).toBe(1)
+        expect(resolveToolLoopMaxSteps(10_000)).toBe(MAX_TOOL_LOOP_MAX_STEPS)
+    })
+})
 
 describe('runToolLoop', () => {
     test('returns text directly when the model requests no tools', async () => {

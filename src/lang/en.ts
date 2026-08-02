@@ -1558,6 +1558,8 @@ export const languageEnglish = {
     decoupledStreamingHelp: "Send the request over the streaming wire but display the full response at once after it completes. Bypasses some providers' non-streaming output limits and timeouts, and avoids token-by-token render cost.",
     modelPresetToolUse: "Tool use",
     modelPresetToolUseHelp: "Let this preset call your configured tools (MCP). Off by default. Tool runs are sent without streaming.",
+    modelPresetMaxToolSteps: "Maximum tool steps",
+    modelPresetMaxToolStepsHelp: "Tool-execution rounds allowed per request. Default 8, maximum 128. Increase this for longer agent workflows.",
     modelPresetAbilities: "Model abilities",
     modelPresetPickSuggestion: "Choose from suggestions…",
     modelPresetSnapshotEmpty: "This preset's profile data is empty. Re-download or replace the profile to restore its settings.",

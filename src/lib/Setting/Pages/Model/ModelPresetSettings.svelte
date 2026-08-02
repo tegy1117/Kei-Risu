@@ -25,6 +25,7 @@
     import { getOfficialRegistry, getPresetUpdateStatus, syncRemoteRegistry } from "src/ts/preset/registry";
     import { buildSeenMap, computeRegistryNotice, noticeCount } from "src/ts/preset/registry/notice";
     import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS } from "src/ts/preset/types";
+    import { DEFAULT_TOOL_LOOP_MAX_STEPS, MAX_TOOL_LOOP_MAX_STEPS } from "src/ts/preset/adapter";
     import { onMount } from "svelte";
     import { v4 as uuidv4 } from "uuid";
 
@@ -296,6 +297,21 @@
                                     <ShSwitch checked={!!editingPreset.toolUse} onCheckedChange={(v) => { editingPreset.toolUse = v }} />
                                 </div>
                             </div>
+                            {#if editingPreset.toolUse}
+                                <div class="flex items-center justify-between gap-3 pl-4">
+                                    <div class="flex flex-col gap-0.5 min-w-0">
+                                        <span class="text-sm text-textcolor">{language.modelPresetMaxToolSteps}</span>
+                                        <span class="text-xs text-textcolor2">{language.modelPresetMaxToolStepsHelp}</span>
+                                    </div>
+                                    <NumberInput
+                                        bind:value={editingPreset.maxToolSteps as number}
+                                        placeholder={String(DEFAULT_TOOL_LOOP_MAX_STEPS)}
+                                        min={1}
+                                        max={MAX_TOOL_LOOP_MAX_STEPS}
+                                        className="w-32 shrink-0"
+                                    />
+                                </div>
+                            {/if}
                         {/if}
                     </div>
                 {/if}

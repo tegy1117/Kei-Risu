@@ -292,6 +292,9 @@ export interface ModelPreset {
     // bound chats are never routed through the tool loop. Only meaningful when
     // the profile declares the 'tools' capability. Tool runs force non-streaming.
     toolUse?: boolean
+    // Maximum tool-execution rounds allowed for one request. Undefined keeps the
+    // default (8); runtime validation clamps configured values to the safe range.
+    maxToolSteps?: number
     // Per-ModelPreset model-ability flags. The classic (custom model) path lets
     // users toggle LLMFlags directly; the preset path had no equivalent, so it
     // could neither attach images nor normalize system/role for models that need

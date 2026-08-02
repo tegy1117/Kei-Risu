@@ -7,6 +7,16 @@ import type {
     AdapterUsage,
 } from './types'
 
+export const DEFAULT_TOOL_LOOP_MAX_STEPS = 8
+export const MAX_TOOL_LOOP_MAX_STEPS = 128
+
+export function resolveToolLoopMaxSteps(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return DEFAULT_TOOL_LOOP_MAX_STEPS
+    }
+    return Math.min(MAX_TOOL_LOOP_MAX_STEPS, Math.max(1, Math.floor(value)))
+}
+
 // Outcome of executing one tool call. `text` is what the model sees as the tool
 // result; `encoded` is the optional persisted `<tool_call>` marker that lets the
 // turn round-trip on the next request (set only when rememberToolUsage is on and

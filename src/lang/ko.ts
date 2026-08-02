@@ -1584,6 +1584,8 @@ export const languageKorean = {
   decoupledStreamingHelp: "요청은 스트리밍으로 보내되 응답은 완성된 뒤 한 번에 표시합니다. 일부 프로바이더의 비스트리밍 출력 제한·타임아웃을 우회하고, 토큰 단위 렌더 부담을 줄입니다.",
   modelPresetToolUse: "도구 사용",
   modelPresetToolUseHelp: "이 프리셋이 설정된 도구(MCP)를 호출하도록 허용합니다. 기본 꺼짐. 도구 실행 시 스트리밍 없이 전송됩니다.",
+  modelPresetMaxToolSteps: "최대 도구 단계 수",
+  modelPresetMaxToolStepsHelp: "요청 한 번에 허용할 도구 실행 라운드 수입니다. 기본값은 8, 최댓값은 128입니다. 긴 에이전트 작업에는 이 값을 늘리세요.",
   modelPresetAbilities: "모델 능력",
   modelPresetPickSuggestion: "추천에서 선택…",
   modelPresetSnapshotEmpty: "이 프리셋의 프로필 데이터가 비어 있습니다. 프로필을 다시 받거나 교체해 설정을 복구하세요.",

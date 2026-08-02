@@ -26,7 +26,7 @@ import {
     sendChatRequest, streamChatRequest, previewChatRequest,
     sendAnthropicChatRequest, streamAnthropicChatRequest, previewAnthropicChatRequest,
     sendGoogleChatRequest, streamGoogleChatRequest, previewGoogleChatRequest,
-    collectToolStream, runToolLoop,
+    collectToolStream, runToolLoop, resolveToolLoopMaxSteps,
     type AdapterCacheContext,
     type AdapterChatMessage, type AdapterChatOptions, type AdapterChatResponse,
     type AdapterChatStreamDelta, type AdapterCredential,
@@ -694,12 +694,6 @@ function resolvePresetStreaming(preset: ModelPreset, arg: RequestDataArgumentExt
     return !!preset.useStreaming && (arg.useStreaming ?? true)
 }
 
-// Tool-execution rounds allowed per request before we stop and surface a
-// marker. Deliberately separate from the network retry budget (db.requestRetrys,
-// applied by the outer requestChatData loop): conflating them would let a failed
-// follow-up re-run already-executed (possibly write-side) tools.
-const MODEL_PRESET_MAX_TOOL_STEPS = 8
-
 // How often (ms) a streaming response flushes accumulated text to the chat
 // renderer. Adapters yield one delta per token; each emitted chunk forces a full
 // re-parse of the whole message (markdown + sanitize) downstream, so emitting
@@ -1158,7 +1152,9 @@ async function runModelPresetToolLoop(
     let totalUsage: AdapterUsage | undefined
     const toolStarts = new Map<string, number>()
     const result = await runToolLoop(messages, {
-        maxSteps: MODEL_PRESET_MAX_TOOL_STEPS,
+        // Deliberately separate from the network retry budget (db.requestRetrys):
+        // conflating them could re-run already-executed, possibly write-side tools.
+        maxSteps: resolveToolLoopMaxSteps(preset.maxToolSteps),
         formatReasoning: formatPresetReasoning,
         abortSignal: abortSignal ?? undefined,
         send: async (convo) => {

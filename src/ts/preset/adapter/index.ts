@@ -41,5 +41,11 @@ export { parseSseEventBlock, parseSseStream } from './sse'
 export { sendChatRequest, streamChatRequest, previewChatRequest } from './openaiCompatible'
 export { sendAnthropicChatRequest, streamAnthropicChatRequest, previewAnthropicChatRequest } from './anthropicMessages'
 export { sendGoogleChatRequest, streamGoogleChatRequest, previewGoogleChatRequest } from './googleGemini'
-export { collectToolStream, runToolLoop } from './toolLoop'
+export {
+    collectToolStream,
+    runToolLoop,
+    resolveToolLoopMaxSteps,
+    DEFAULT_TOOL_LOOP_MAX_STEPS,
+    MAX_TOOL_LOOP_MAX_STEPS,
+} from './toolLoop'
 export type { ToolLoopDeps, ToolLoopPosition, ToolStepResult } from './toolLoop'
