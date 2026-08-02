@@ -1,18 +1,22 @@
 import { alertConfirm, alertInput, alertSelect, notifyError, notifySuccess } from 'src/ts/alert'
 import { language } from 'src/lang'
-import { downloadFile, fetchNative, type FetchNativeArgs } from 'src/ts/globalApi.svelte'
+import { downloadFile, fetchNative, readImage, saveAsset, type FetchNativeArgs } from 'src/ts/globalApi.svelte'
 import { pluginCodeTranspiler } from 'src/ts/plugins/apiV3/transpiler'
 import { SandboxHost } from 'src/ts/plugins/apiV3/factory'
 import { getCurrentCharacter, getCurrentChat, getDatabase, setDatabase } from 'src/ts/storage/database.svelte'
-import { hasher } from 'src/ts/parser/parser.svelte'
 import { safeStructuredClone } from 'src/ts/polyfill'
 import { selectSingleFile } from 'src/ts/util'
 import { v4 } from 'uuid'
 import type { MCPTool, RPCToolCallContent } from '../mcp/mcplib'
 import type {
     RisuToolExportV1,
+    RisuToolExportV2,
     RisuToolFunction,
     RisuToolPackage,
+    ToolAgentExecution,
+    ToolAgentOutputRoute,
+    ToolAgentStateAction,
+    ToolCallableRef,
     ToolMemoryEntry,
     ToolPackageState,
     ToolPermission,
@@ -27,6 +31,26 @@ const namespacePattern = /^[A-Za-z0-9_-]+$/
 const functionPattern = /^[A-Za-z0-9_-]+$/
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
+
+export interface ToolExecutionContext {
+    stack: string[]
+}
+
+export interface ManagedToolExecutionResult {
+    response: RPCToolCallContent[]
+    success: boolean
+    error?: string
+    presentation?: {
+        toolId: string
+        namespace: string
+        functionId: string
+        functionName: string
+        template?: string
+        rawResult?: unknown
+        captures?: Record<string, string>
+        stateUpdates?: unknown[]
+    }
+}
 type ToolRuntime = {
     source: string
     host: SandboxHost
@@ -63,6 +87,17 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
             if (params.has(param.name)) errors.push(`Duplicate parameter in ${fn.name}: ${param.name}`)
             params.add(param.name)
         }
+        const execution = fn.execution
+        if (execution?.kind === 'agent') {
+            if (!execution.modelPresetId) errors.push(`Model preset is required for agent function ${fn.name}.`)
+            if (!execution.systemPrompt.trim() && !execution.userPrompt.trim()) errors.push(`Agent prompt is required for ${fn.name}.`)
+            if ((execution.outputRoutes ?? []).length === 0) errors.push(`At least one output route is required for ${fn.name}.`)
+            for (const route of execution.outputRoutes ?? []) {
+                try { new RegExp(route.pattern, normalizeRegexFlags(route.flags)) }
+                catch { errors.push(`Invalid output route regex in ${fn.name}: ${route.name || route.id}`) }
+                if (!route.modelTemplate) errors.push(`Model result template is required in ${fn.name}: ${route.name || route.id}`)
+            }
+        }
     }
     const variableNames = new Set<string>()
     for (const variable of tool.variables ?? []) {
@@ -79,6 +114,12 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
         if (!Array.isArray(list.defaultItems) || !list.defaultItems.every((item) => valueMatchesType(item, list.itemType))) {
             errors.push(`Invalid default items for list ${list.name}.`)
         }
+    }
+    const assetNames = new Set<string>()
+    for (const asset of tool.assets ?? []) {
+        if (!asset?.[0]?.trim() || !asset?.[1]?.trim()) errors.push('Tool assets require a name and stored path.')
+        if (assetNames.has(asset[0])) errors.push(`Duplicate tool asset name: ${asset[0]}`)
+        assetNames.add(asset[0])
     }
     return errors
 }
@@ -153,9 +194,10 @@ export async function getManagedTools(): Promise<Array<MCPTool & { managedToolId
     const output: Array<MCPTool & { managedToolId: string }> = []
     for (const { tool, functions } of getActiveToolPackages()) {
         try {
-            const runtime = await ensureRuntime(tool)
+            const scriptFunctions = functions.filter((fn) => fn.execution?.kind !== 'agent')
+            const runtime = scriptFunctions.length > 0 ? await ensureRuntime(tool) : null
             for (const fn of functions) {
-                if (!runtime.handlers.has(fn.name)) continue
+                if (fn.execution?.kind !== 'agent' && !runtime?.handlers.has(fn.name)) continue
                 output.push({
                     name: toolWireName(tool.namespace, fn.name),
                     description: fn.description,
@@ -170,24 +212,68 @@ export async function getManagedTools(): Promise<Array<MCPTool & { managedToolId
     return output
 }
 
-export async function callManagedTool(wireName: string, args: unknown): Promise<RPCToolCallContent[] | null> {
+export async function callManagedToolDetailed(
+    wireName: string,
+    args: unknown,
+    context: ToolExecutionContext = { stack: [] },
+): Promise<ManagedToolExecutionResult | null> {
     const active = getActiveToolPackages()
     for (const { tool, functions } of active) {
         const fn = functions.find((candidate) => toolWireName(tool.namespace, candidate.name) === wireName)
         if (!fn) continue
         const input = isObject(args) ? args : {}
         const validationError = validateArguments(fn, input)
-        if (validationError) return [{ type: 'text', text: JSON.stringify({ ok: false, error: validationError }) }]
+        if (validationError) return managedError(tool, fn, validationError)
+        if (context.stack.includes(wireName)) return managedError(tool, fn, `Recursive tool call blocked: ${[...context.stack, wireName].join(' -> ')}`)
         try {
+            if (fn.execution?.kind === 'agent') {
+                return await executeAgentFunction(tool, fn, fn.execution, input, { stack: [...context.stack, wireName] })
+            }
             const runtime = await ensureRuntime(tool)
             const handler = runtime.handlers.get(fn.name)
             if (!handler) throw new Error(`Handler ${fn.name} is not registered.`)
-            return normalizeToolResult(await handler(input))
+            const rawResult = await handler(input)
+            return {
+                response: normalizeToolResult(rawResult),
+                success: true,
+                presentation: {
+                    toolId: tool.id,
+                    namespace: tool.namespace,
+                    functionId: fn.id,
+                    functionName: fn.name,
+                    template: fn.presentation?.successTemplate,
+                    rawResult,
+                },
+            }
         } catch (error) {
-            return [{ type: 'text', text: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) }]
+            return managedError(tool, fn, error instanceof Error ? error.message : String(error))
         }
     }
     return null
+}
+
+export async function callManagedTool(
+    wireName: string,
+    args: unknown,
+    context?: ToolExecutionContext,
+): Promise<RPCToolCallContent[] | null> {
+    return (await callManagedToolDetailed(wireName, args, context))?.response ?? null
+}
+
+function managedError(tool: RisuToolPackage, fn: RisuToolFunction, error: string): ManagedToolExecutionResult {
+    return {
+        response: [{ type: 'text', text: JSON.stringify({ ok: false, error }) }],
+        success: false,
+        error,
+        presentation: {
+            toolId: tool.id,
+            namespace: tool.namespace,
+            functionId: fn.id,
+            functionName: fn.name,
+            template: fn.presentation?.errorTemplate,
+            rawResult: { ok: false, error },
+        },
+    }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -264,6 +350,12 @@ function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, 
             const answer = await alertInput(question, options.map((option) => [option, option]))
             return answer === '' ? { status: 'cancelled' } : { status: 'answered', answer }
         },
+        requestDiceRoll: async (request: unknown) => {
+            await requirePermission(tool, 'askUser')
+            if (!isObject(request)) throw new Error('Dice roll request must be an object.')
+            const { requestDiceRoll } = await import('./dice')
+            return requestDiceRoll(request as never)
+        },
         getVariable: (name: string) => getVariable(tool, name),
         setVariable: (name: string, value: unknown) => setVariable(tool, name, value),
         resetVariable: (name: string) => resetVariable(tool, name),
@@ -296,6 +388,7 @@ async function requirePermission(tool: RisuToolPackage, permission: ToolPermissi
     if (tool.builtinId && tool.readonly) return
     const db = getDatabase()
     db.toolPermissions ??= {}
+    const { hasher } = await import('src/ts/parser/parser.svelte')
     const codeHash = await hasher(new TextEncoder().encode(tool.plugin.source ?? ''))
     const key = `${codeHash}:${permission}`
     db.toolPermissions[tool.id] ??= {}
@@ -313,6 +406,265 @@ function getToolStates(): ToolStateStore {
     const db = getDatabase()
     db.toolStates ??= {}
     return db.toolStates
+}
+
+function replaceToolTokens(
+    template: string,
+    args: Record<string, unknown>,
+    captures: Record<string, string> = {},
+    result: unknown = '',
+) {
+    return (template ?? '')
+        .replace(/\{\{tool_arg::([^}]+)\}\}/g, (_match, name: string) => stringifyTemplateValue(args[name]))
+        .replace(/\{\{tool_capture::([^}]+)\}\}/g, (_match, name: string) => captures[name] ?? '')
+        .replace(/\{\{tool_result(?:::(.*?))?\}\}/g, (_match, path: string | undefined) => stringifyTemplateValue(readPath(result, path)))
+}
+
+function stringifyTemplateValue(value: unknown) {
+    if (value === undefined || value === null) return ''
+    return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
+function readPath(value: unknown, path?: string) {
+    if (!path) return value
+    let current = value
+    for (const key of path.split('.').filter(Boolean)) {
+        if (!isObject(current) && !Array.isArray(current)) return undefined
+        current = (current as Record<string, unknown>)[key]
+    }
+    return current
+}
+
+function renderAgentPrompt(template: string, tool: RisuToolPackage, args: Record<string, unknown>) {
+    const character = getCurrentCharacter()
+    const chat = getCurrentChat()
+    const history = (chat?.message ?? []).filter((message) => !message.disabled && !message.isComment).map((message) => ({
+        role: message.role === 'user' ? 'user' : 'assistant',
+        content: message.data,
+    }))
+    const lastUser = [...history].reverse().find((message) => message.role === 'user')?.content ?? ''
+    const characterInfo = character ? {
+        id: character.chaId,
+        name: character.name,
+        description: character.desc,
+        personality: character.personality,
+        scenario: character.scenario,
+    } : null
+    const contextId = (scope: ToolScope) => scope === 'global' ? '' : scope === 'character' ? character?.chaId ?? '' : chat?.id ?? ''
+    return replaceToolTokens(template, args)
+        .replaceAll('{{tool_args}}', JSON.stringify(args))
+        .replaceAll('{{tool_last_user}}', lastUser)
+        .replaceAll('{{tool_chat_history}}', JSON.stringify(history))
+        .replaceAll('{{tool_character}}', JSON.stringify(characterInfo))
+        .replace(/\{\{tool_state::(global|character|chat)\}\}/g, (_match, scope: ToolScope) =>
+            JSON.stringify(readToolScopeState(tool.id, scope, contextId(scope))))
+}
+
+async function resolveAllowedTools(refs: ToolCallableRef[]) {
+    const { getTools } = await import('../mcp/mcp')
+    const available = await getTools()
+    const db = getDatabase()
+    const names = new Set<string>()
+    for (const ref of refs ?? []) {
+        if (ref.kind === 'external') {
+            names.add(ref.name)
+            continue
+        }
+        const tool = (db.tools ?? []).find((item) => item.id === ref.toolId)
+        const fn = tool?.functions?.find((item) => item.id === ref.functionId)
+        if (tool && fn) names.add(toolWireName(tool.namespace, fn.name))
+    }
+    return available.filter((tool) => names.has(tool.name))
+}
+
+async function executeAgentFunction(
+    tool: RisuToolPackage,
+    fn: RisuToolFunction,
+    execution: ToolAgentExecution,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+): Promise<ManagedToolExecutionResult> {
+    const db = getDatabase()
+    const preset = db.modelPresets.find((item) => item.id === execution.modelPresetId)
+    if (!preset) return managedError(tool, fn, 'The configured model preset was not found.')
+    const allowedTools = await resolveAllowedTools(execution.allowedTools)
+    const requestedCount = execution.allowedTools?.length ?? 0
+    if (allowedTools.length !== requestedCount) return managedError(tool, fn, 'One or more allowed tools are unavailable.')
+    if (allowedTools.length > 0 && preset.toolUse !== true) return managedError(tool, fn, 'The selected model preset has tool use disabled.')
+    const formated = [
+        ...(execution.systemPrompt.trim() ? [{ role: 'system' as const, content: renderAgentPrompt(execution.systemPrompt, tool, args) }] : []),
+        ...(execution.userPrompt.trim() ? [{ role: 'user' as const, content: renderAgentPrompt(execution.userPrompt, tool, args) }] : []),
+    ]
+    const { requestAgentModelPreset } = await import('../request/request')
+    const response = await requestAgentModelPreset({
+        formated,
+        bias: {},
+        biasString: [],
+        currentChar: getCurrentCharacter(),
+        useStreaming: true,
+        chatId: `tool-agent:${v4()}`,
+        rememberToolUsage: false,
+        tools: allowedTools,
+        toolExecutionContext: context,
+        persistToolDisplay: false,
+    }, preset)
+    if (!response.ok) return managedError(tool, fn, 'error' in response ? response.error : 'Agent request failed.')
+    const routed = await routeAgentOutput(tool, fn, execution.outputRoutes, args, response.text)
+    if (!routed) return managedError(tool, fn, 'Agent output did not match any configured route.')
+    return routed
+}
+
+export async function routeAgentOutput(
+    tool: RisuToolPackage,
+    fn: RisuToolFunction,
+    routes: ToolAgentOutputRoute[],
+    args: Record<string, unknown>,
+    raw: string,
+): Promise<ManagedToolExecutionResult | null> {
+    for (const route of routes ?? []) {
+        const match = new RegExp(route.pattern, normalizeRegexFlags(route.flags)).exec(raw)
+        if (!match) continue
+        const captures = Object.fromEntries(Object.entries(match.groups ?? {}).map(([key, value]) => [key, value ?? '']))
+        const modelText = replaceToolTokens(route.modelTemplate, args, captures, raw)
+        try {
+            const stateUpdates = await applyAgentStateActions(tool, route.actions ?? [], args, captures, raw)
+            const success = route.outcome === 'success'
+            const response = success
+                ? [{ type: 'text' as const, text: modelText }]
+                : [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: modelText }) }]
+            return {
+                response,
+                success,
+                error: success ? undefined : modelText,
+                presentation: {
+                    toolId: tool.id,
+                    namespace: tool.namespace,
+                    functionId: fn.id,
+                    functionName: fn.name,
+                    template: route.cardTemplate || (success ? fn.presentation?.successTemplate : fn.presentation?.errorTemplate),
+                    rawResult: raw,
+                    captures,
+                    stateUpdates,
+                },
+            }
+        } catch (error) {
+            return managedError(tool, fn, `Agent output state update failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+    }
+    return null
+}
+
+function actionValue(template: string, args: Record<string, unknown>, captures: Record<string, string>, result: unknown) {
+    return replaceToolTokens(template, args, captures, result)
+}
+
+function parseTypedValue(value: string, type: 'string' | 'number' | 'boolean' | 'json') {
+    if (type === 'string') return value
+    if (type === 'number') {
+        const parsed = Number(value)
+        if (!Number.isFinite(parsed)) throw new Error(`Expected a number, received ${value}.`)
+        return parsed
+    }
+    if (type === 'boolean') {
+        if (value === 'true') return true
+        if (value === 'false') return false
+        throw new Error(`Expected true or false, received ${value}.`)
+    }
+    const parsed = JSON.parse(value)
+    if (!isObject(parsed)) throw new Error('Expected a JSON object.')
+    return parsed
+}
+
+async function applyAgentStateActions(
+    tool: RisuToolPackage,
+    actions: ToolAgentStateAction[],
+    args: Record<string, unknown>,
+    captures: Record<string, string>,
+    result: unknown,
+) {
+    if (actions.length === 0) return []
+    const character = getCurrentCharacter()
+    const chat = getCurrentChat()
+    if (chat && !chat.id) chat.id = v4()
+    const contextId = (scope: ToolScope) => scope === 'global' ? '' : scope === 'character' ? character?.chaId ?? '' : chat?.id ?? ''
+    const drafts = new Map<ToolScope, ToolScopeState>()
+    const updates: unknown[] = []
+    const draft = (scope: ToolScope) => {
+        if (scope !== 'global' && !contextId(scope)) throw new Error(`No active ${scope} context.`)
+        if (!drafts.has(scope)) drafts.set(scope, readToolScopeState(tool.id, scope, contextId(scope)))
+        return drafts.get(scope)!
+    }
+    for (const action of actions) {
+        if (action.kind === 'setVariable') {
+            const definition = tool.variables.find((item) => item.name === action.name)
+            if (!definition) throw new Error(`Variable ${action.name} is not declared.`)
+            draft(definition.scope).variables[action.name] = parseTypedValue(actionValue(action.valueTemplate, args, captures, result), definition.type)
+            updates.push({ kind: action.kind, scope: definition.scope, name: action.name, value: draft(definition.scope).variables[action.name] })
+            continue
+        }
+        if (action.kind === 'appendList' || action.kind === 'replaceList') {
+            const definition = tool.lists.find((item) => item.name === action.name)
+            if (!definition) throw new Error(`List ${action.name} is not declared.`)
+            const state = draft(definition.scope)
+            if (action.kind === 'replaceList') {
+                const value = JSON.parse(actionValue(action.valueTemplate, args, captures, result))
+                if (!Array.isArray(value)) throw new Error(`Replacement for ${action.name} must be an array.`)
+                state.lists[action.name] = value
+                updates.push({ kind: action.kind, scope: definition.scope, name: action.name, value })
+            } else {
+                const current = state.lists[action.name] ?? safeStructuredClone(definition.defaultItems ?? [])
+                current.push(parseTypedValue(actionValue(action.valueTemplate, args, captures, result), definition.itemType))
+                state.lists[action.name] = current
+                updates.push({ kind: action.kind, scope: definition.scope, name: action.name, value: current.at(-1) })
+            }
+            continue
+        }
+        const state = draft(action.scope)
+        state.memories ??= []
+        const id = action.memoryIdTemplate ? actionValue(action.memoryIdTemplate, args, captures, result) : v4()
+        const now = Date.now()
+        const index = state.memories.findIndex((entry) => entry.id === id)
+        const rawTags = action.tagsTemplate ? actionValue(action.tagsTemplate, args, captures, result) : '[]'
+        let tags: string[]
+        try {
+            const parsed = JSON.parse(rawTags)
+            tags = Array.isArray(parsed) ? parsed.map(String) : []
+        } catch { tags = rawTags.split(',').map((tag) => tag.trim()).filter(Boolean) }
+        const memory: ToolMemoryEntry = {
+            id,
+            title: actionValue(action.titleTemplate, args, captures, result),
+            content: actionValue(action.contentTemplate, args, captures, result),
+            tags,
+            importance: Number(action.importanceTemplate ? actionValue(action.importanceTemplate, args, captures, result) : 3),
+            createdAt: index >= 0 ? state.memories[index].createdAt : now,
+            updatedAt: now,
+        }
+        if (index >= 0) state.memories[index] = memory
+        else state.memories.push(memory)
+        updates.push({ kind: action.kind, scope: action.scope, id: memory.id, title: memory.title })
+    }
+    for (const [scope, state] of drafts) {
+        const errors = validateToolScopeState(tool, scope, state)
+        if (errors.length) throw new Error(errors.join('\n'))
+    }
+    for (const [scope, state] of drafts) writeToolScopeState(tool.id, scope, contextId(scope), state)
+    return updates
+}
+
+export function getActiveToolFeaturePackages(): RisuToolPackage[] {
+    const db = getDatabase()
+    const character = getCurrentCharacter()
+    const chat = getCurrentChat()
+    const activeIds = new Set([
+        ...(db.enabledTools ?? []),
+        ...(character?.tools ?? []),
+        ...(chat?.tools ?? []),
+    ])
+    const policy = normalizePolicy(db.toolPolicy)
+    return (db.tools ?? []).filter((tool) => {
+        const value = packagePolicy(tool, policy)
+        return value === 'on' || (value === 'inherit' && activeIds.has(tool.id))
+    })
 }
 
 export function createToolScopeStateSnapshot(state?: ToolScopeState): ToolScopeState {
@@ -399,6 +751,10 @@ export function validateToolScopeState(tool: RisuToolPackage, scope: ToolScope, 
         if (!Number.isFinite(entry.createdAt) || !Number.isFinite(entry.updatedAt)) errors.push(`Invalid timestamps for memory ${entry.id || '(new)'}.`)
     }
     return errors
+}
+
+function normalizeRegexFlags(flags = '') {
+    return [...new Set(flags.replace(/[^dgimsuvy]/g, '').split(''))].join('')
 }
 
 function scopeState(toolId: string, scope: ToolScope, create = true): ToolScopeState | undefined {
@@ -557,9 +913,27 @@ export function unloadToolRuntime(toolId?: string) {
 }
 
 export async function exportTool(tool: RisuToolPackage, includeState = false) {
-    const payload = createToolExportPayload(tool, includeState ? getToolStates()[tool.id] : undefined)
+    const payload = await createToolExportPayloadV2(tool, includeState ? getToolStates()[tool.id] : undefined)
     await downloadFile(`${tool.namespace}.risutool`, Buffer.from(JSON.stringify(payload, null, 2)))
     notifySuccess(language.toolExported)
+}
+
+export async function createToolExportPayloadV2(tool: RisuToolPackage, state?: ToolPackageState): Promise<RisuToolExportV2> {
+    const clean = safeStructuredClone(tool)
+    clean.id = v4()
+    clean.builtinId = undefined
+    clean.readonly = false
+    const assets: RisuToolExportV2['assets'] = []
+    clean.assets = []
+    for (const [index, asset] of (tool.assets ?? []).entries()) {
+        const data = await readImage(asset[1])
+        const placeholder = `__tool_asset:${index}`
+        clean.assets.push([asset[0], placeholder, asset[2]])
+        assets.push({ name: asset[0], extension: asset[2], data: Buffer.from(data).toString('base64') })
+    }
+    const payload: RisuToolExportV2 = { type: 'risuTool', version: 2, tool: clean, assets }
+    if (state) payload.state = safeStructuredClone(state)
+    return payload
 }
 
 export function createToolExportPayload(tool: RisuToolPackage, state?: ToolPackageState): RisuToolExportV1 {
@@ -572,14 +946,27 @@ export function createToolExportPayload(tool: RisuToolPackage, state?: ToolPacka
     return payload
 }
 
-export function parseToolExport(text: string): RisuToolExportV1 {
-    const payload = JSON.parse(text) as RisuToolExportV1
-    if (payload.type !== 'risuTool' || payload.version !== 1 || !payload.tool) throw new Error('Invalid .risutool file.')
+export function parseToolExport(text: string): RisuToolExportV1 | RisuToolExportV2 {
+    const payload = JSON.parse(text) as RisuToolExportV1 | RisuToolExportV2
+    if (payload.type !== 'risuTool' || (payload.version !== 1 && payload.version !== 2) || !payload.tool) throw new Error('Invalid .risutool file.')
     payload.tool.functions ??= []
     payload.tool.variables ??= []
     payload.tool.lists ??= []
+    payload.tool.regex ??= []
+    payload.tool.trigger ??= []
+    payload.tool.assets ??= []
     payload.tool.plugin ??= { language: 'javascript', source: '', permissions: [] }
     payload.tool.plugin.permissions ??= []
+    for (const fn of payload.tool.functions) {
+        fn.execution ??= { kind: 'script' }
+        if (fn.execution.kind === 'agent') {
+            fn.execution.allowedTools ??= []
+            fn.execution.outputRoutes ??= []
+            for (const route of fn.execution.outputRoutes) route.actions ??= []
+        }
+        fn.presentation ??= {}
+    }
+    if (payload.version === 2) payload.assets ??= []
     return payload
 }
 
@@ -611,6 +998,13 @@ export async function importTool() {
         }
         const errors = validateToolPackage(tool, db.tools ?? [])
         if (errors.length) throw new Error(errors.join('\n'))
+        if (payload.version === 2) {
+            for (const [index, asset] of payload.assets.entries()) {
+                const target = tool.assets?.find((entry) => entry[1] === `__tool_asset:${index}`)
+                if (!target) throw new Error(`Missing tool asset manifest entry: ${index}`)
+                target[1] = await saveAsset(Buffer.from(asset.data, 'base64'), '', asset.extension)
+            }
+        }
         db.tools.push(tool)
         if (payload.state) {
             db.toolStates ??= {}

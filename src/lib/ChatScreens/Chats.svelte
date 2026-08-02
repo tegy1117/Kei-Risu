@@ -7,6 +7,7 @@
     import { chatFoldedStateMessageIndex } from 'src/ts/globalApi.svelte';
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
+    import ToolDiceInteractionCard from './ToolDiceInteractionCard.svelte';
     
     const getCurrentChatRoomId = () => {
         const charId = get(selectedCharID);
@@ -256,4 +257,5 @@
 
 </script>
 
+<ToolDiceInteractionCard />
 <div class="flex flex-col-reverse" bind:this={chatBody}></div>

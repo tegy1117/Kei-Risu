@@ -1516,6 +1516,12 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
         }
     }
 
+    if (db.tools) {
+        for (const tool of db.tools) {
+            for (const asset of tool.assets ?? []) addUncleanable(asset[1])
+        }
+    }
+
     if (db.personas) {
         db.personas.map((v) => {
             addUncleanable(v.icon);
@@ -1590,6 +1596,9 @@ export function replaceDbResources(db: Database, replacer: { [key: string]: stri
                 cha.additionalAssets[i][1] = replaceData(cha.additionalAssets[i][1]);
             }
         }
+    }
+    for (const tool of db.tools ?? []) {
+        for (const asset of tool.assets ?? []) asset[1] = replaceData(asset[1])
     }
     return db;
 }

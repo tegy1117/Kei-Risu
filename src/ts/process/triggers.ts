@@ -3,6 +3,7 @@ import { risuChatParser } from "../parser/parser.svelte";
 import { getCurrentCharacter, getCurrentChat, getDatabase, setCurrentCharacter, setDatabase, type Chat, type character } from "../storage/database.svelte";
 import { tokenize } from "../tokenizer";
 import { getModuleTriggers } from "./modules";
+import { getToolTriggers } from './tools/features'
 import { get } from "svelte/store";
 import { ReloadChatPointer, ReloadGUIPointer, selectedCharID, CurrentTriggerIdStore } from "../stores.svelte";
 import { processMultiCommand } from "./command";
@@ -1069,7 +1070,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
     const triggers = char.triggerscript.map((v) => {
         v.lowLevelAccess = CharacterlowLevelAccess
         return v
-    }).concat(getModuleTriggers())
+    }).concat(getModuleTriggers()).concat(getToolTriggers())
     const db = getDatabase()
     const defaultVariables = parseKeyValue(char.defaultVariables).concat(parseKeyValue(db.templateDefaultVariables))
     let chat = arg.displayMode ? arg.chat : safeStructuredClone(arg.chat ?? char.chats[char.chatPage])

@@ -5,7 +5,7 @@ import { base64url, simplifySchema } from "src/ts/util"
 import { v4 } from "uuid"
 import { saveInlayedSignature, setInlayAsset, writeInlayImage, type InlaySignature } from "../files/inlays"
 import { extractJSON, getGeneralJSONSchema } from "../templates/jsonSchema"
-import { callTool, decodeToolCall, encodeToolCall } from "../mcp/mcp"
+import { callToolDetailed, decodeToolCall, encodeToolExecution } from "../mcp/mcp"
 import { notifyError } from "src/ts/alert";
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from './request'
 import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type LLMParameter } from './shared'
@@ -877,7 +877,8 @@ async function requestGoogle(url:string, body:any, headers:{[key:string]:string}
             
             const tool = tools.find((t) => t.name === functionName)
             if(tool){
-                const result = (await callTool(tool.name, functionArgs)).filter((r) => {
+                const executed = await callToolDetailed(tool.name, functionArgs, arg.toolExecutionContext)
+                const result = executed.response.filter((r) => {
                     return r.type === 'text'
                 })
                 if(result.length === 0){
@@ -890,16 +891,7 @@ async function requestGoogle(url:string, body:any, headers:{[key:string]:string}
                 }
                 
                 // Store the encoded tool call history for later use
-                if(arg.rememberToolUsage){
-                    callCodes.push(await encodeToolCall({
-                        call: {
-                            id: call.id,
-                            name: call.name,
-                            arg: call.args
-                        },
-                        response: result
-                    }))
-                }
+                if(arg.persistToolDisplay !== false) callCodes.push(await encodeToolExecution({ id: call.id, name: call.name, arg: call.args }, executed, arg.rememberToolUsage === true))
                 
                 for(let i=0;i<result.length;i++){
                     let response:any = result[i].text
@@ -1195,7 +1187,8 @@ function wrapToolStream(
                             const functionArgs = call.args
                             const tool = tools.find((t) => t.name === functionName)
                             if(tool){
-                                const result = (await callTool(tool.name, functionArgs)).filter((r) => {
+                                const executed = await callToolDetailed(tool.name, functionArgs, arg.toolExecutionContext)
+                                const result = executed.response.filter((r) => {
                                     return r.type === 'text'
                                 })
                                 if(result.length === 0){
@@ -1207,16 +1200,7 @@ function wrapToolStream(
                                     })
                                 }
                                 // Store the encoded tool call history for later use
-                                if(arg.rememberToolUsage){
-                                    callCodes.push(await encodeToolCall({
-                                        call: {
-                                            id: call.id,
-                                            name: call.name,
-                                            arg: call.args
-                                        },
-                                        response: result
-                                    }))
-                                }
+                                if(arg.persistToolDisplay !== false) callCodes.push(await encodeToolExecution({ id: call.id, name: call.name, arg: call.args }, executed, arg.rememberToolUsage === true))
                                 for(let i=0;i<result.length;i++){
                                     let response:any = result[i].text
                                     try {

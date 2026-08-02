@@ -5144,6 +5144,11 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
             add(m?.icon);
         }
     }
+    if (Array.isArray(dbObj.tools)) {
+        for (const tool of dbObj.tools) {
+            if (Array.isArray(tool?.assets)) for (const asset of tool.assets) add(asset?.[1]);
+        }
+    }
     if (Array.isArray(dbObj.personas)) {
         for (const p of dbObj.personas) {
             add(p?.icon);

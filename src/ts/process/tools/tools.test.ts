@@ -7,7 +7,10 @@ vi.mock('src/ts/alert', () => ({
     alertConfirm: vi.fn(), alertInput: vi.fn(), alertSelect: vi.fn(),
     notifyError: vi.fn(), notifySuccess: vi.fn(),
 }))
-vi.mock('src/ts/globalApi.svelte', () => ({ downloadFile: vi.fn(), fetchNative: vi.fn() }))
+vi.mock('src/ts/globalApi.svelte', () => ({
+    downloadFile: vi.fn(), fetchNative: vi.fn(), saveAsset: vi.fn(),
+    readImage: vi.fn(async () => Uint8Array.from([60, 115, 118, 103, 47, 62])),
+}))
 vi.mock('src/ts/plugins/apiV3/transpiler', () => ({ pluginCodeTranspiler: vi.fn((source) => source) }))
 vi.mock('src/ts/plugins/apiV3/factory', () => ({ SandboxHost: class {} }))
 vi.mock('src/ts/storage/database.svelte', () => ({
@@ -23,11 +26,13 @@ import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
 import {
     createToolScopeStateSnapshot,
     createToolExportPayload,
+    createToolExportPayloadV2,
     createMemoryToolResult,
     deleteToolScopeState,
     parseToolExport,
     readToolScopeState,
     resolveActiveToolPackages,
+    routeAgentOutput,
     toolWireName,
     validateToolScopeState,
     validateToolPackage,
@@ -51,10 +56,12 @@ beforeEach(() => {
 })
 
 describe('built-in tool packages', () => {
-    test('ships Question, Localtime, and Memory as read-only packages', () => {
+    test('ships Dice, Question, Localtime, and Memory as read-only packages', () => {
         const tools = createBuiltinTools()
-        expect(tools.map((tool) => tool.builtinId)).toEqual(['question', 'localtime', 'memory'])
+        expect(tools.map((tool) => tool.builtinId)).toEqual(['dice', 'question', 'localtime', 'memory'])
         expect(tools.every((tool) => tool.readonly)).toBe(true)
+        expect(tools.find((tool) => tool.builtinId === 'dice')?.functions[0].parameters.find((parameter) => parameter.name === 'kind')?.enum)
+            .toEqual(['coin', 'd4', 'd6', 'd10', 'd20', 'd100', 'range'])
         expect(tools.find((tool) => tool.builtinId === 'memory')?.functions.map((fn) => fn.name))
             .toEqual(['list', 'search', 'read', 'upsert', 'delete'])
     })
@@ -67,7 +74,8 @@ describe('built-in tool packages', () => {
         const reconciled = reconcileBuiltinTools([...current, userTool])
         expect(reconciled[0].description).not.toBe('stale')
         expect(reconciled[0].functions[0].enabled).toBe(false)
-        expect(reconciled.at(-1)).toEqual(userTool)
+        expect(reconciled.at(-1)).toMatchObject(userTool)
+        expect(reconciled.at(-1)?.functions[0].execution).toEqual({ kind: 'script' })
     })
 
     test('each bundled plugin registers every declared function', async () => {
@@ -160,6 +168,30 @@ describe('tool activation policy', () => {
     })
 })
 
+describe('sub-agent output routing', () => {
+    test('uses the first matching regex, exposes decisions, and commits state updates', async () => {
+        const tool = sampleTool()
+        tool.variables = [{ id: 'v1', name: 'decision', description: '', type: 'string', scope: 'global', defaultValue: '' }]
+        const routed = await routeAgentOutput(tool, tool.functions[0], [
+            { id: 'skip', name: 'skip', pattern: '^NO$', outcome: 'error', modelTemplate: 'no', actions: [] },
+            {
+                id: 'ok', name: 'ok', pattern: '^OK:(?<choice>.+)$', outcome: 'success',
+                modelTemplate: 'Selected {{tool_capture::choice}}', cardTemplate: 'Decision: {{tool_capture::choice}}',
+                actions: [{ id: 'a1', kind: 'setVariable', name: 'decision', valueTemplate: '{{tool_capture::choice}}' }],
+            },
+        ], {}, 'OK:door-a')
+        expect(routed?.response).toEqual([{ type: 'text', text: 'Selected door-a' }])
+        expect(routed?.presentation?.captures).toEqual({ choice: 'door-a' })
+        expect(routed?.presentation?.stateUpdates).toEqual([{ kind: 'setVariable', scope: 'global', name: 'decision', value: 'door-a' }])
+        expect(readToolScopeState(tool.id, 'global').variables.decision).toBe('door-a')
+    })
+
+    test('returns no result when raw output matches no configured route', async () => {
+        const tool = sampleTool()
+        expect(await routeAgentOutput(tool, tool.functions[0], [{ id: 'only', name: 'only', pattern: '^OK$', outcome: 'success', modelTemplate: 'ok', actions: [] }], {}, 'unexpected')).toBeNull()
+    })
+})
+
 describe('.risutool definition format', () => {
     test('exports a cloneable definition and includes state only when requested', () => {
         const tool = { ...sampleTool(), builtinId: 'question', readonly: true } as RisuToolPackage
@@ -182,6 +214,33 @@ describe('.risutool definition format', () => {
         expect(parsed.tool.variables).toEqual([])
         expect(parsed.tool.lists).toEqual([])
         expect(parsed.tool.plugin.permissions).toEqual([])
+        expect(parsed.tool.functions[0].execution).toEqual({ kind: 'script' })
+        expect(parsed.tool.regex).toEqual([])
+        expect(parsed.tool.trigger).toEqual([])
+        expect(parsed.tool.assets).toEqual([])
+    })
+
+    test('parses a self-contained v2 definition with agent routes and assets', () => {
+        const tool = sampleTool()
+        tool.assets = [['badge.svg', '__tool_asset:0', 'svg']]
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: 'system', userPrompt: '{{tool_args}}', allowedTools: [],
+            outputRoutes: [{ id: 'route-1', name: 'ok', pattern: '^(?<value>.+)$', outcome: 'success', modelTemplate: '{{tool_capture::value}}', actions: [] }],
+        }
+        const parsed = parseToolExport(JSON.stringify({ type: 'risuTool', version: 2, tool, assets: [{ name: 'badge.svg', extension: 'svg', data: 'PHN2Zy8+' }] }))
+        expect(parsed.version).toBe(2)
+        expect(parsed.tool.functions[0].execution?.kind).toBe('agent')
+        expect(parsed.tool.assets?.[0][1]).toBe('__tool_asset:0')
+        if (parsed.version === 2) expect(parsed.assets[0].name).toBe('badge.svg')
+    })
+
+    test('embeds asset bytes and replaces stored paths in a v2 export', async () => {
+        const tool = sampleTool()
+        tool.assets = [['badge.svg', 'assets/local.svg', 'svg']]
+        const exported = await createToolExportPayloadV2(tool)
+        expect(exported.version).toBe(2)
+        expect(exported.tool.assets).toEqual([['badge.svg', '__tool_asset:0', 'svg']])
+        expect(Buffer.from(exported.assets[0].data, 'base64').toString()).toBe('<svg/>')
     })
 
     test('rejects an unsupported payload', () => {

@@ -13,6 +13,7 @@ import type { OpenAIChat, MultiModal } from "./index.svelte";
 import { requestChatData, type StreamResponseChunk } from "./request/request";
 import { v4 } from "uuid";
 import { getModuleLorebooks, getModuleTriggers } from "./modules";
+import { getToolTriggers } from './tools/features'
 import { Mutex } from "../mutex";
 import { tokenize } from "../tokenizer";
 import { fetchNative, readImage } from "../globalApi.svelte";
@@ -1394,7 +1395,7 @@ export async function runLuaEditTrigger<T extends string|OpenAIChat[]>(char:char
         const triggers = char.triggerscript.map((v) => {
             v.lowLevelAccess = false
             return v
-        }).concat(getModuleTriggers())
+        }).concat(getModuleTriggers()).concat(getToolTriggers())
     
         for(let trigger of triggers){
             if(trigger?.effect?.[0]?.type === 'triggerlua'){
@@ -1422,7 +1423,7 @@ export async function runLuaButtonTrigger(char:character|simpleCharacterArgument
         const triggers = char.triggerscript.map<triggerscript>((v) => ({
             ...v,
             lowLevelAccess: char.type !== 'simple' ? char.lowLevelAccess ?? false : false
-        })).concat(getModuleTriggers())
+        })).concat(getModuleTriggers()).concat(getToolTriggers())
 
         for(let trigger of triggers){
             if(trigger?.effect?.[0]?.type === 'triggerlua'){

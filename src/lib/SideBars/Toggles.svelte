@@ -1,5 +1,6 @@
 <script lang="ts">
     import { getModuleToggles } from "src/ts/process/modules";
+    import { getToolToggles } from 'src/ts/process/tools/features';
     import { DBState, selectedCharID } from "src/ts/stores.svelte";
     import { parseToggleSyntax, type sidebarToggle, type sidebarToggleGroup } from "src/ts/util";
     import { language } from "src/lang";
@@ -121,6 +122,7 @@
         const ungrouped = parseToggleSyntax(
             DBState.db.customPromptTemplateToggle + '\n' +
             getModuleToggles() + '\n' +
+            getToolToggles() + '\n' +
             ((DBState.db?.characters?.[$selectedCharID] as character)?.customModuleToggle ?? '')
         )
 

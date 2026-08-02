@@ -6,6 +6,8 @@
     import TextInput from 'src/lib/UI/GUI/TextInput.svelte'
     import type { RisuToolPackage, ToolPermission, ToolScope, ToolValueType } from 'src/ts/process/tools/types'
     import { v4 } from 'uuid'
+    import ToolFunctionExecutionEditor from './ToolFunctionExecutionEditor.svelte'
+    import ToolModuleEditor from './ToolModuleEditor.svelte'
 
     interface Props {
         currentTool: RisuToolPackage
@@ -31,7 +33,7 @@
     }
 
     function addFunction() {
-        currentTool.functions.push({ id: v4(), name: 'function_name', description: '', enabled: true, parameters: [] })
+        currentTool.functions.push({ id: v4(), name: 'function_name', description: '', enabled: true, parameters: [], execution: { kind: 'script' }, presentation: {} })
         currentTool.functions = currentTool.functions
     }
 
@@ -56,7 +58,7 @@
 </script>
 
 <div class="flex border border-darkborderc rounded-md overflow-x-auto mb-4 shrink-0">
-    {#each [language.basicInfo, language.toolFunctions, language.toolVariables, language.toolLists, language.toolPlugin] as label, index}
+    {#each [language.basicInfo, language.toolFunctions, language.toolVariables, language.toolLists, language.toolModules, language.toolPlugin] as label, index}
         <button class="p-2 min-w-24 flex-1 border-r border-darkborderc last:border-r-0" class:bg-darkbutton={tab === index} onclick={() => { tab = index }}>
             {label}
         </button>
@@ -103,6 +105,7 @@
                         </div>
                         <TextInput bind:value={parameter.description} placeholder={language.description} />
                     {/each}
+                    <ToolFunctionExecutionEditor bind:currentTool fn={currentTool.functions[functionIndex]} />
                 {/if}
             </div>
         {/each}
@@ -144,6 +147,12 @@
         {/each}
         {#if !readonly}<button class="border border-dashed border-darkborderc rounded-md p-3 hover:text-primary flex justify-center" onclick={addList}><PlusIcon size={20}/></button>{/if}
     </div>
+{:else if tab === 4}
+    {#if readonly}
+        <div class="flex flex-col gap-3"><strong>{language.toolCustomToggle}</strong><pre class="bg-darkbg border border-darkborderc rounded-md p-3 whitespace-pre-wrap">{currentTool.customToggle ?? ''}</pre><strong>{language.toolBackgroundEmbedding}</strong><pre class="bg-darkbg border border-darkborderc rounded-md p-3 whitespace-pre-wrap">{currentTool.backgroundEmbedding ?? ''}</pre><strong>{language.toolAssets}</strong>{#each currentTool.assets ?? [] as asset}<code>{asset[0]}</code>{/each}</div>
+    {:else}
+        <ToolModuleEditor bind:currentTool />
+    {/if}
 {:else}
     <div class="flex flex-col gap-2">
         <div class="flex items-center gap-2">

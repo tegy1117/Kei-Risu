@@ -7,6 +7,7 @@
     import { addMetadataToElement, getDistance, ParseMarkdown, postTranslationParse, resolveInlayPlaceholders, trimMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
     import { getLLMCache, translateHTML } from "../../ts/translator/translator"
     import { getModuleAssets } from "src/ts/process/modules";
+    import { getToolAssets } from 'src/ts/process/tools/features';
     import { getCurrentCharacter } from "src/ts/storage/database.svelte";
     import { getFileSrc } from "src/ts/globalApi.svelte";
 
@@ -179,7 +180,7 @@
         if (imgs.length > 0) {
             const currentCharacter = getCurrentCharacter()
             const styl = currentCharacter.prebuiltAssetStyle
-            const assets = getModuleAssets().concat(currentCharacter.additionalAssets ?? [])
+            const assets = getModuleAssets().concat(getToolAssets()).concat(currentCharacter.additionalAssets ?? [])
             const normalizedAssets = assets.map((asset) => {
                 return {
                     name: asset[0].toLocaleLowerCase(),

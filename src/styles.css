@@ -603,6 +603,19 @@ html {
   @apply border border-darkborderc bg-darkbg text-textcolor rounded-md shadow-xs focus:outline-hidden transition-colors duration-200 px-4 py-2 min-w-0;
 }
 
+.x-risu-tool-call-rich { margin-block: 0.5rem; overflow: hidden; }
+.x-risu-tool-call-title { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.x-risu-tool-call-rich[data-tool-status="success"] { border-left: 3px solid rgb(34 197 94); }
+.x-risu-tool-call-rich[data-tool-status="error"], .x-risu-tool-call-rich[data-tool-status="cancelled"] { border-left: 3px solid rgb(248 113 113); }
+.x-risu-tool-call-rich summary { cursor: pointer; font-weight: 600; }
+.x-risu-tool-call-rich pre { margin-top: 0.5rem; overflow-x: auto; white-space: pre-wrap; color: var(--textcolor2); }
+.x-risu-dice-interaction { margin: 0.75rem 0; }
+.x-risu-dice-roll-button { @apply mt-2 w-full rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition-transform hover:bg-blue-500 active:scale-95; }
+.x-risu-dice-rolling { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.x-risu-dice-rolling span { min-width: 3rem; border-radius: 0.5rem; padding: 0.5rem; text-align: center; font-weight: 700; background: color-mix(in srgb, currentColor 10%, transparent); animation: risu-dice-spin 180ms linear infinite; }
+@keyframes risu-dice-spin { 50% { transform: rotate(8deg) scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .x-risu-dice-rolling span { animation: none; } }
+
 .root-loaded-image {
   /* This class is used to indicate that the image has been with root-loaded method */
   /* We need to style it to centered and pretty */

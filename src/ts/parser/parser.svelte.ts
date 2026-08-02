@@ -14,6 +14,7 @@ import { findCharacterbyId, getPersonaPrompt, getUserIcon, getUserName, pickHash
 
 import { getInlayInfosBatch } from '../process/files/inlays';
 import { getModuleAssets, getModuleLorebooks, getModules } from '../process/modules';
+import { getToolAssets } from '../process/tools/features';
 import hljs from 'highlight.js/lib/core'
 import 'highlight.js/styles/atom-one-dark.min.css'
 import { language } from 'src/lang';
@@ -472,7 +473,7 @@ $effect.root(() => {
 
         const charAssets = char.additionalAssets ?? []
         const emoAssets = char.emotionImages ?? []
-        const moduleAssets = getModuleAssets()
+        const moduleAssets = getModuleAssets().concat(getToolAssets())
 
         resetAssetsCache(charAssets, emoAssets, moduleAssets)
     })
@@ -485,7 +486,7 @@ async function parseAdditionalAssets(data:string, char:simpleCharacterArgument|c
     const assetWidthString = (DBState.db.assetWidth && DBState.db.assetWidth !== -1 || DBState.db.assetWidth === 0) ? `max-width:${DBState.db.assetWidth}rem;` : ''
 
     if (char.type === 'character' && (!assetsCache || !emoAssetsCache)) {
-        resetAssetsCache(char.additionalAssets ?? [], char.emotionImages, getModuleAssets())
+        resetAssetsCache(char.additionalAssets ?? [], char.emotionImages, getModuleAssets().concat(getToolAssets()))
     }
 
     const assetPaths = assetsCache ?? {}
@@ -877,7 +878,67 @@ export interface simpleCharacterArgument{
     triggerscript?: triggerscript[]
 }
 
-function parseThoughtsAndTools(data:string){
+function htmlEscape(value: unknown) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[char] ?? char))
+}
+
+function toolDisplayValue(value: unknown) {
+    if (value === undefined || value === null) return ''
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+function toolDisplayPath(value: unknown, path?: string) {
+    if (!path) return value
+    let current = value
+    for (const part of path.split('.').filter(Boolean)) {
+        if (!current || typeof current !== 'object') return undefined
+        current = (current as Record<string, unknown>)[part]
+    }
+    return current
+}
+
+async function renderToolCallMarker(marker: string, wireName: string) {
+    const { decodeToolCall } = await import('../process/mcp/mcp')
+    const decoded = await decodeToolCall(marker)
+    const presentation = decoded?.presentation
+    if (!decoded || !presentation) {
+        return `<div class="x-risu-tool-call">🛠️ ${htmlEscape(language.toolCalled.replace('{{tool}}', wireName || 'unknown'))}</div>\n\n`
+    }
+    let args: Record<string, unknown> = {}
+    try {
+        const rawArgs = decoded.call.arg
+        args = typeof rawArgs === 'string' ? JSON.parse(rawArgs || '{}') : rawArgs ?? {}
+    } catch { args = { raw: decoded.call.arg } }
+    const captures = presentation.captures ?? {}
+    const result = presentation.result ?? decoded.response
+    let body = presentation.template ?? ''
+    body = body
+        .replace(/\{\{tool_arg::([^}]+)\}\}/g, (_match, name: string) => toolDisplayValue(args[name]))
+        .replace(/\{\{tool_capture::([^}]+)\}\}/g, (_match, name: string) => captures[name] ?? '')
+        .replace(/\{\{tool_result(?:::(.*?))?\}\}/g, (_match, path: string | undefined) => toolDisplayValue(toolDisplayPath(result, path)))
+        .replaceAll('{{tool_status}}', presentation.status)
+        .replaceAll('{{tool_name}}', presentation.functionName || decoded.call.name)
+        .replaceAll('{{tool_updates}}', toolDisplayValue(presentation.stateUpdates ?? []))
+    body = await replaceAsync(body, /\{\{tool_asset::([^}]+)\}\}/g, async (_match, name: string) => {
+        const path = presentation.assets?.[name]
+        return path ? await getFileSrc(path) : ''
+    })
+    if (!body.trim()) {
+        const responseText = decoded.response.filter((part) => part.type === 'text').map((part) => part.text).join('\n')
+        body = `<div class="x-risu-tool-call-title"><strong>${htmlEscape(decoded.call.name)}</strong><span>${htmlEscape(presentation.status)}</span></div>`
+            + `<details><summary>Details</summary><div><strong>Arguments</strong><pre>${htmlEscape(JSON.stringify(args, null, 2))}</pre>`
+            + `<strong>Result</strong><pre>${htmlEscape(responseText)}</pre>`
+            + (Object.keys(captures).length ? `<strong>Decisions</strong><pre>${htmlEscape(JSON.stringify(captures, null, 2))}</pre>` : '')
+            + (presentation.stateUpdates?.length ? `<strong>Updates</strong><pre>${htmlEscape(JSON.stringify(presentation.stateUpdates, null, 2))}</pre>` : '')
+            + `</div></details>`
+    }
+    body = await renderHighlightableMarkdown(body)
+    return `<section class="x-risu-tool-call x-risu-tool-call-rich" data-tool-namespace="${htmlEscape(presentation.namespace ?? '')}" data-tool-function="${htmlEscape(presentation.functionName ?? '')}" data-tool-status="${htmlEscape(presentation.status)}">${body}</section>\n\n`
+}
+
+async function parseThoughtsAndTools(data:string){
     let result = '', i = 0
     while (i < data.length) {
         if (data.slice(i, i + 10) === '<Thoughts>') {
@@ -895,8 +956,8 @@ function parseThoughtsAndTools(data:string){
         }
         result += data[i++]
     }
-    return result.replace(/<tool_call>(.+?)<\/tool_call>/gms, (full, txt:string) => {
-        return `<div class="x-risu-tool-call">🛠️ ${language.toolCalled.replace('{{tool}}',txt.split('\uf100')?.[1] ?? 'unknown')}</div>\n\n`
+    return await replaceAsync(result, /<tool_(?:call|display)>(.+?)<\/tool_(?:call|display)>/gms, async (full, txt:string) => {
+        return await renderToolCallMarker(full, txt.split('\uf100')?.[1] ?? 'unknown')
     })
 }
 
@@ -930,7 +991,7 @@ export async function ParseMarkdown(
 
     data = parseInlayAssets(data ?? '')
 
-    data = parseThoughtsAndTools(data)
+    data = await parseThoughtsAndTools(data)
 
     data = encodeStyle(data)
     if(mode === 'normal' || mode === 'notrim'){
@@ -955,7 +1016,7 @@ export function trimMarkdown(data:string){
     if (cached !== undefined) return cached
     cached = decodeStyle(DOMPurify.sanitize(data, {
         ADD_TAGS: ["iframe", "style", "risu-style", "x-em", 'annotation', 'semantics', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac', 'msqrt'],
-        ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "scrolling", "risu-ctrl" ,"risu-btn", 'risu-trigger', 'risu-mark', 'risu-id', 'x-hl-lang', 'x-hl-text', 'data-inlay-id', 'data-inlay-type'],
+        ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "scrolling", "risu-ctrl" ,"risu-btn", 'risu-trigger', 'risu-mark', 'risu-id', 'x-hl-lang', 'x-hl-text', 'data-inlay-id', 'data-inlay-type', 'data-tool-namespace', 'data-tool-function', 'data-tool-status'],
     }))
     if (trimCache.size >= TRIM_CACHE_MAX) {
         // evict oldest entry

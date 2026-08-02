@@ -26,6 +26,7 @@ import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
+import { getToolAssets, getToolToggles } from './tools/features'
 import { readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
@@ -251,7 +252,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     }[] = []
     if(DBState.db.promptInfoInsideChat){
         initialPresetNameForPromptInfo = DBState.db.botPresets[DBState.db.botPresetsId]?.name ?? ''
-        initialPromptTogglesForPromptInfo = parseToggleSyntax(DBState.db.customPromptTemplateToggle + getModuleToggles())
+        initialPromptTogglesForPromptInfo = parseToggleSyntax(DBState.db.customPromptTemplateToggle + '\n' + getModuleToggles() + '\n' + getToolToggles())
             .flatMap(toggle => {
                 const raw = DBState.db.globalChatVariables[`toggle_${toggle.key}`]
                 if (toggle.type === 'select' || toggle.type === 'text') {
@@ -955,7 +956,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
 
         const assetPromises:Promise<void>[] = []
         formatedChat = formatedChat.replace(/\{\{asset_?prompt::(.+?)\}\}/gmsiu, (match, p1) => {
-            const moduleAssets = getModuleAssets()
+            const moduleAssets = getModuleAssets().concat(getToolAssets())
             const assets = (currentChar.additionalAssets ?? []).concat(moduleAssets)
             const asset = assets.find(v => {
                 return v[0] === p1

@@ -18,7 +18,58 @@ export interface RisuToolFunction {
     description: string
     enabled: boolean
     parameters: RisuToolParameter[]
+    execution?: ToolFunctionExecution
+    presentation?: ToolFunctionPresentation
 }
+
+export type ToolCallableRef =
+    | { kind: 'managed', toolId: string, functionId: string }
+    | { kind: 'external', name: string }
+
+export interface ToolFunctionPresentation {
+    pendingTemplate?: string
+    successTemplate?: string
+    errorTemplate?: string
+}
+
+export type ToolAgentRouteOutcome = 'success' | 'error'
+
+export type ToolAgentStateAction =
+    | { id: string, kind: 'setVariable', name: string, valueTemplate: string }
+    | { id: string, kind: 'appendList', name: string, valueTemplate: string }
+    | { id: string, kind: 'replaceList', name: string, valueTemplate: string }
+    | {
+        id: string
+        kind: 'upsertMemory'
+        scope: ToolScope
+        memoryIdTemplate?: string
+        titleTemplate: string
+        contentTemplate: string
+        tagsTemplate?: string
+        importanceTemplate?: string
+    }
+
+export interface ToolAgentOutputRoute {
+    id: string
+    name: string
+    pattern: string
+    flags?: string
+    outcome: ToolAgentRouteOutcome
+    modelTemplate: string
+    cardTemplate?: string
+    actions: ToolAgentStateAction[]
+}
+
+export interface ToolAgentExecution {
+    kind: 'agent'
+    modelPresetId: string
+    systemPrompt: string
+    userPrompt: string
+    allowedTools: ToolCallableRef[]
+    outputRoutes: ToolAgentOutputRoute[]
+}
+
+export type ToolFunctionExecution = { kind: 'script' } | ToolAgentExecution
 
 export interface RisuToolVariable {
     id: string
@@ -46,11 +97,16 @@ export interface RisuToolPackage {
     description: string
     namespace: string
     version: string
-    builtinId?: 'question' | 'localtime' | 'memory'
+    builtinId?: 'question' | 'localtime' | 'memory' | 'dice'
     readonly?: boolean
     functions: RisuToolFunction[]
     variables: RisuToolVariable[]
     lists: RisuToolList[]
+    customToggle?: string
+    backgroundEmbedding?: string
+    regex?: import('src/ts/storage/database.svelte').customscript[]
+    trigger?: import('src/ts/storage/database.svelte').triggerscript[]
+    assets?: [string, string, string][]
     plugin: {
         language: 'javascript' | 'typescript'
         source: string
@@ -92,6 +148,20 @@ export interface RisuToolExportV1 {
     version: 1
     tool: RisuToolPackage
     state?: ToolPackageState
+}
+
+export interface RisuToolExportAssetV2 {
+    name: string
+    extension: string
+    data: string
+}
+
+export interface RisuToolExportV2 {
+    type: 'risuTool'
+    version: 2
+    tool: RisuToolPackage
+    state?: ToolPackageState
+    assets: RisuToolExportAssetV2[]
 }
 
 export const emptyToolPromptPolicy = (): ToolPromptPolicy => ({

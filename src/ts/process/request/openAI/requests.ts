@@ -26,7 +26,7 @@ function getLocalNetworkRequestOptions(url: string, force: boolean = false): Loc
 import { extractJSON, getOpenAIJSONSchema } from "../../templates/jsonSchema"
 import { applyChatTemplate } from "../../templates/chatTemplate"
 import { supportsInlayImage } from "../../files/inlays"
-import { callTool, decodeToolCall, encodeToolCall } from "../../mcp/mcp"
+import { callToolDetailed, decodeToolCall, encodeToolExecution } from "../../mcp/mcp"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from '../request'
 import { applyAdditionalParameters, applyParameters, getAdditionalParameters } from '../shared'
 
@@ -732,23 +732,15 @@ async function requestHTTPOpenAI(replacerURL:string,body:any, headers:Record<str
                             }
                             else{
                                 const parsed = functionArgs
-                                const x = (await callTool(tool.name, parsed)).filter(m => m.type === 'text')
+                                const executed = await callToolDetailed(tool.name, parsed, arg.toolExecutionContext)
+                                const x = executed.response.filter(m => m.type === 'text')
                                 if(x.length > 0){
                                     messages.push({
                                         role: 'tool',
                                         content: x[0].text,
                                         tool_call_id: toolCall.id
                                     })
-                                    if(arg.rememberToolUsage){
-                                        callCodes.push(await encodeToolCall({
-                                            call: {
-                                                id: toolCall.id,
-                                                name: toolCall.function.name,
-                                                arg: toolCall.function.arguments
-                                            },
-                                            response: x
-                                        }))
-                                    }
+                                    if(arg.persistToolDisplay !== false) callCodes.push(await encodeToolExecution({ id: toolCall.id, name: toolCall.function.name, arg: parsed }, executed, arg.rememberToolUsage === true))
                                 }
                                 else{
                                     messages.push({
@@ -1332,23 +1324,15 @@ function wrapToolStream(
                                     }
                                     else{
                                         const parsed = functionArgs
-                                        const x = (await callTool(tool.name, parsed)).filter(m => m.type === 'text')
+                                        const executed = await callToolDetailed(tool.name, parsed, arg.toolExecutionContext)
+                                        const x = executed.response.filter(m => m.type === 'text')
                                         if(x.length > 0){
                                             messages.push({
                                                 role: 'tool',
                                                 content: x[0].text,
                                                 tool_call_id: toolCall.id
                                             })
-                                            if(arg.rememberToolUsage){
-                                                callCodes.push(await encodeToolCall({
-                                                    call: {
-                                                        id: toolCall.id,
-                                                        name: toolCall.function.name,
-                                                        arg: toolCall.function.arguments
-                                                    },
-                                                    response: x
-                                                }))
-                                            }
+                                            if(arg.persistToolDisplay !== false) callCodes.push(await encodeToolExecution({ id: toolCall.id, name: toolCall.function.name, arg: parsed }, executed, arg.rememberToolUsage === true))
                                         }
                                         else{
                                             messages.push({

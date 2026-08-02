@@ -9,8 +9,9 @@ import { tokenizeNum, encodeWithTokenizer } from "../../tokenizer";
 import { v4 as uuidv4 } from "uuid";
 import { simplifySchema, sleep } from "../../util";
 import type { OpenAIChat } from "../index.svelte";
-import { getTools, callTool, encodeToolCall, decodeToolCall } from "../mcp/mcp";
+import { getTools, callToolDetailed, encodeToolCall, decodeToolCall, stripToolDisplayMarkers } from "../mcp/mcp";
 import type { MCPTool, RPCToolCallContent } from "../mcp/mcplib";
+import type { ToolExecutionContext } from "../tools/tools";
 import { NovelAIBadWordIds, stringlizeNAIChat } from "../models/nai";
 import { OobaParams } from "../prompt";
 import { getStopStrings, stringlizeAINChat, unstringlizeAIN, unstringlizeChat } from "../stringlize";
@@ -77,6 +78,8 @@ interface requestDataArgument{
     escape?:boolean
     tools?: MCPTool[]
     rememberToolUsage?: boolean
+    persistToolDisplay?: boolean
+    toolExecutionContext?: ToolExecutionContext
     forceStreaming?: boolean
     blockPlugins?: boolean
     forceLocalNetwork?: boolean
@@ -135,6 +138,13 @@ export interface StreamResponseChunk{[key:string]:string}
 
 export async function requestChatData(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = getDatabase()
+    arg = {
+        ...arg,
+        formated: arg.formated.map((message) => ({
+            ...message,
+            content: typeof message.content === 'string' ? stripToolDisplayMarkers(message.content) : message.content,
+        })),
+    }
     const fallBackModels:string[] = safeStructuredClone(db?.fallbackModels?.[model] ?? [])
     const tools = arg.tools ?? (await getTools())
     fallBackModels.push('')
@@ -1225,11 +1235,27 @@ async function runModelPresetToolLoop(
             // and a propagated error could trigger an outer re-run). Skip the
             // round-trip marker on failure instead.
             let encoded: string | undefined
-            if (arg.rememberToolUsage && executed.response.length > 0) {
+            if (arg.persistToolDisplay !== false && (executed.response.length > 0 || executed.error)) {
                 try {
                     encoded = await encodeToolCall({
                         call: { id: call.id, name: call.name, arg: call.arguments },
                         response: executed.response,
+                        includeInModelHistory: arg.rememberToolUsage === true,
+                        presentation: {
+                            status: executed.success ? 'success' : 'error',
+                            toolId: executed.presentation?.toolId,
+                            namespace: executed.presentation?.namespace,
+                            functionId: executed.presentation?.functionId,
+                            functionName: executed.presentation?.functionName,
+                            template: executed.presentation?.template,
+                            args: toolArgumentsForTrace(call),
+                            result: executed.presentation?.rawResult ?? executed.response,
+                            captures: executed.presentation?.captures,
+                            stateUpdates: executed.presentation?.stateUpdates,
+                            assets: executed.presentation?.toolId
+                                ? Object.fromEntries((getDatabase().tools.find((item) => item.id === executed.presentation?.toolId)?.assets ?? []).map((asset) => [asset[0], asset[1]]))
+                                : undefined,
+                        },
                     })
                 } catch (e) {
                     console.error('[ModelPreset] tool-call persistence failed', e)
@@ -1370,7 +1396,13 @@ function formatToolDuration(ms: number): string {
 async function executeModelPresetTool(
     arg: RequestDataArgumentExtended,
     call: AdapterToolCall,
-): Promise<{ text: string, response: RPCToolCallContent[], success: boolean, error?: string }> {
+): Promise<{
+    text: string
+    response: RPCToolCallContent[]
+    success: boolean
+    error?: string
+    presentation?: import('../mcp/mcp').ToolExecutionPresentation
+}> {
     const tool = (arg.tools ?? []).find(t => t.name === call.name)
     if (!tool) {
         const error = 'No tool found with name: ' + call.name
@@ -1384,14 +1416,16 @@ async function executeModelPresetTool(
         return { text: error, response: [], success: false, error }
     }
     try {
-        const response = await callTool(call.name, parsedArgs)
+        const detailed = await callToolDetailed(call.name, parsedArgs, arg.toolExecutionContext)
+        const response = detailed.response
         const text = toolResponseText(response)
-        const reportedError = toolResponseError(response)
+        const reportedError = detailed.error ?? toolResponseError(response)
         return {
             text: text.length > 0 ? text : 'Tool call returned no text response',
             response,
-            success: !reportedError,
+            success: detailed.success && !reportedError,
             error: reportedError,
+            presentation: detailed.presentation,
         }
     } catch (e) {
         const error = 'Tool call failed: ' + (e instanceof Error ? e.message : String(e))

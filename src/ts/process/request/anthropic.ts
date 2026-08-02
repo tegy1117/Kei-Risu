@@ -9,7 +9,7 @@ import { replaceAsync, simplifySchema, sleep } from "src/ts/util"
 import { v4 } from "uuid"
 import type { MultiModal } from "../index.svelte"
 import { extractJSON } from "../templates/jsonSchema"
-import { callTool, decodeToolCall, encodeToolCall } from "../mcp/mcp"
+import { callToolDetailed, decodeToolCall, encodeToolExecution } from "../mcp/mcp"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from './request'
 import { applyAdditionalParameters, applyParameters, getAdditionalParameters } from './shared'
 
@@ -1018,7 +1018,8 @@ async function requestClaudeHTTP(replacerURL:string, headers:{[key:string]:strin
             }
 
             if(content.type === 'tool_use'){
-                const used = await callTool(content.name, content.input)
+                const executed = await callToolDetailed(content.name, content.input, arg.toolExecutionContext)
+                const used = executed.response
                 const r:Claude3ToolResponseBlock = {
                     type: 'tool_result',
                     tool_use_id: content.id,
@@ -1050,16 +1051,9 @@ async function requestClaudeHTTP(replacerURL:string, headers:{[key:string]:strin
                     })
                 }
                 response.content.push(r)
-                if(arg.rememberToolUsage){
+                if(arg.persistToolDisplay !== false){
                     arg.additionalOutput ??= ''
-                    arg.additionalOutput += await encodeToolCall({
-                        call: {
-                            id: content.id,
-                            name: content.name,
-                            arg: content.input
-                        },
-                        response: used
-                    })
+                    arg.additionalOutput += await encodeToolExecution({ id: content.id, name: content.name, arg: content.input }, executed, arg.rememberToolUsage === true)
                 }
             }
 

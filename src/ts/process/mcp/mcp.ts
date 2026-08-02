@@ -8,7 +8,7 @@ import type { MCPClientLike } from "./internalmcp";
 import { sleep } from "src/ts/util";
 import { registeredCustomPluginMCPs } from "./pluginmcp";
 import { makeEncodedStorageKey, readPersistentJson, writePersistentJson } from "src/ts/storage/persistentKv";
-import { callManagedTool, getManagedTools } from "../tools/tools";
+import { callManagedTool, callManagedToolDetailed, getManagedTools, type ManagedToolExecutionResult, type ToolExecutionContext } from "../tools/tools";
 
 export type MCPToolWithURL = MCPTool & {
     mcpURL: string;
@@ -193,6 +193,25 @@ export async function callTool(methodName:string, args:any) {
     return await callMCPTool(methodName, args);
 }
 
+export type ToolExecutionPresentation = NonNullable<ManagedToolExecutionResult['presentation']>
+
+export interface ToolExecutionDetailed {
+    response: RPCToolCallContent[]
+    success: boolean
+    error?: string
+    presentation?: ToolExecutionPresentation
+}
+
+export async function callToolDetailed(
+    methodName: string,
+    args: unknown,
+    context?: ToolExecutionContext,
+): Promise<ToolExecutionDetailed> {
+    const managed = await callManagedToolDetailed(methodName, args, context)
+    if (managed) return managed
+    return { response: await callMCPTool(methodName, args), success: true }
+}
+
 export async function importMCPModule(){
     const x = await alertInput('Please enter the URL of the MCP module to import:', [
         ['internal:aiaccess', 'LLM Call Client (internal:aiaccess)'],
@@ -260,6 +279,20 @@ export type toolCallData = {
         arg: any
     },
     response: RPCToolCallContent[],
+    includeInModelHistory?: boolean
+    presentation?: {
+        status: 'success' | 'error' | 'cancelled'
+        toolId?: string
+        namespace?: string
+        functionId?: string
+        functionName?: string
+        template?: string
+        args?: unknown
+        result?: unknown
+        captures?: Record<string, string>
+        stateUpdates?: unknown[]
+        assets?: Record<string, string>
+    }
 }
 
 const toolCallCache = new Map<string, toolCallData>();
@@ -269,7 +302,36 @@ export async function encodeToolCall(call:toolCallData){
     call.call.id = call.call.id || v4();
     toolCallCache.set(call.call.id, call)
     await writePersistentJson(makeEncodedStorageKey(toolCallCachePrefix, call.call.id), call)
-    return `<tool_call>${call.call.id}\uf100${call.call.name}</tool_call>\n\n`;
+    const tag = call.includeInModelHistory === false ? 'tool_display' : 'tool_call'
+    return `<${tag}>${call.call.id}\uf100${call.call.name}</${tag}>\n\n`;
+}
+
+export async function encodeToolExecution(
+    call: { id: string, name: string, arg: unknown },
+    executed: ToolExecutionDetailed,
+    includeInModelHistory: boolean,
+) {
+    const presentation = executed.presentation
+    return encodeToolCall({
+        call,
+        response: executed.response,
+        includeInModelHistory,
+        presentation: {
+            status: executed.success ? 'success' : 'error',
+            toolId: presentation?.toolId,
+            namespace: presentation?.namespace,
+            functionId: presentation?.functionId,
+            functionName: presentation?.functionName,
+            template: presentation?.template,
+            args: call.arg,
+            result: presentation?.rawResult ?? executed.response,
+            captures: presentation?.captures,
+            stateUpdates: presentation?.stateUpdates,
+            assets: presentation?.toolId
+                ? Object.fromEntries((getDatabase().tools.find((item) => item.id === presentation.toolId)?.assets ?? []).map((asset) => [asset[0], asset[1]]))
+                : undefined,
+        },
+    })
 }
 
 export async function decodeToolCall(text:string):Promise<toolCallData|undefined> {
@@ -277,8 +339,14 @@ export async function decodeToolCall(text:string):Promise<toolCallData|undefined
     if(text.startsWith('<tool_call>')){
         text = text.slice('<tool_call>'.length).trim();
     }
+    if(text.startsWith('<tool_display>')){
+        text = text.slice('<tool_display>'.length).trim();
+    }
     if(text.endsWith('</tool_call>')){
         text = text.slice(0, -'</tool_call>'.length).trim();
+    }
+    if(text.endsWith('</tool_display>')){
+        text = text.slice(0, -'</tool_display>'.length).trim();
     }
     const [callId, callName] = text.split('\uf100');
     if(!callId) {
@@ -293,4 +361,8 @@ export async function decodeToolCall(text:string):Promise<toolCallData|undefined
         toolCallCache.set(callId, persisted);
     }
     return persisted ?? undefined;
+}
+
+export function stripToolDisplayMarkers(text: string) {
+    return (text ?? '').replace(/<tool_display>.*?<\/tool_display>/gms, '')
 }

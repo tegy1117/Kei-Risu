@@ -19,7 +19,7 @@
     let currentTool = $state<RisuToolPackage>(blankTool())
 
     function blankTool(): RisuToolPackage {
-        return { id: v4(), name: '', description: '', namespace: '', version: '1.0.0', functions: [], variables: [], lists: [], plugin: { language: 'javascript', source: '', permissions: [] } }
+        return { id: v4(), name: '', description: '', namespace: '', version: '1.0.0', functions: [], variables: [], lists: [], regex: [], trigger: [], assets: [], customToggle: '', backgroundEmbedding: '', plugin: { language: 'javascript', source: '', permissions: [] } }
     }
 
     function uniqueNamespace(base: string) {

@@ -7,6 +7,7 @@ import { language } from "src/lang";
 import { selectSingleFile } from "../util";
 import { assetRegex, type CbsConditions, risuChatParser as risuChatParserOrg, type simpleCharacterArgument } from "../parser/parser.svelte";
 import { getModuleAssets, getModuleRegexScripts } from "./modules";
+import { getToolAssets, getToolRegexScripts } from './tools/features'
 import { HypaProcesser } from "./memory/hypamemory";
 import { runLuaEditTrigger } from "./scriptings";
 import { pluginV2 } from "../plugins/plugins.svelte";
@@ -131,7 +132,7 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
     }
 
     data = risuChatParser(data, { chatID: chatID, cbsConditions })
-    const scripts = (db.presetRegex ?? []).concat(char.customscript).concat(getModuleRegexScripts())
+    const scripts = (db.presetRegex ?? []).concat(char.customscript).concat(getModuleRegexScripts()).concat(getToolRegexScripts())
     const hash = generateScriptCacheKey(scripts, data, mode, chatID, cbsConditions)
     const cached = getScriptCache(hash)
     if(cached){
@@ -351,7 +352,7 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
         }
         const assetNames = char.additionalAssets.map((v) => v[0])
 
-        const moduleAssets = getModuleAssets()
+        const moduleAssets = getModuleAssets().concat(getToolAssets())
         if(moduleAssets.length > 0){
             for(const asset of moduleAssets){
                 assetNames.push(asset[0])

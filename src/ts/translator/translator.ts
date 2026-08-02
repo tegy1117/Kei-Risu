@@ -14,6 +14,7 @@ import { applyMarkdownToNode, type simpleCharacterArgument } from "../parser/par
 import { selectedCharID } from "../stores.svelte"
 import { clearPersistentPrefix, listPersistentKeys, makeHashedStorageKey, readPersistentJson, writePersistentJson } from "../storage/persistentKv"
 import { getModuleRegexScripts } from "../process/modules"
+import { getToolRegexScripts } from '../process/tools/features'
 import { getNodetextToSentence, sleep } from "../util"
 import { processScriptFull } from "../process/scripts"
 import { playNotificationSound } from '../notificationSound'
@@ -687,6 +688,7 @@ function applyEdittransRegex(
       // which script wins on overlapping matches.)
       scripts = (getDatabase().presetRegex ?? [])
           .concat(getModuleRegexScripts() ?? [])
+          .concat(getToolRegexScripts())
           .concat(alwaysExistChar?.customscript ?? [])
 
       for (const script of scripts) {

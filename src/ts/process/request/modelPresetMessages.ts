@@ -22,7 +22,7 @@ export async function expandAdapterMessages(
 ): Promise<AdapterChatMessage[]> {
     const out: AdapterChatMessage[] = []
     for (const m of formated) {
-        if (m.role === 'assistant' && typeof m.content === 'string' && m.content.includes('<tool_call>')) {
+        if (m.role === 'assistant' && typeof m.content === 'string' && (m.content.includes('<tool_call>') || m.content.includes('<tool_display>'))) {
             // Tool-call assistant turns carry no image attachments; expand as-is.
             out.push(...await expandToolCallMessage(m, decode))
             continue
@@ -63,10 +63,13 @@ async function expandToolCallMessage(
     m: OpenAIChat,
     decode: DecodeToolCall,
 ): Promise<AdapterChatMessage[]> {
-    const segments = (m.content ?? '').split(/(<tool_call>.*?<\/tool_call>)/gms)
+    const segments = (m.content ?? '').split(/(<tool_(?:call|display)>.*?<\/tool_(?:call|display)>)/gms)
     const out: AdapterChatMessage[] = []
     let pending = ''
     for (const segment of segments) {
+        if (/^<tool_display>.*<\/tool_display>$/s.test(segment)) {
+            continue
+        }
         if (/^<tool_call>.*<\/tool_call>$/s.test(segment)) {
             const decoded = await decode(segment)
             if (!decoded) { pending += segment; continue }

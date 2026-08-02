@@ -55,6 +55,15 @@ describe('expandAdapterMessages', () => {
         expect(out[0].toolCalls).toBeUndefined()
     })
 
+    test('omits display-only tool cards from model history', async () => {
+        const decode = vi.fn(makeDecoder({ display: { name: 'dice__roll', arg: { kind: 'd20' }, text: '20' } }))
+        const out = await expandAdapterMessages([
+            { role: 'assistant', content: 'before<tool_display>display</tool_display>after' },
+        ], decode)
+        expect(out).toEqual([{ role: 'assistant', content: 'beforeafter' }])
+        expect(decode).not.toHaveBeenCalled()
+    })
+
     test('classic↔preset history is interchangeable (multiple markers in one turn)', async () => {
         const decode = makeDecoder({
             a: { name: 'roll', arg: {}, text: '6' },

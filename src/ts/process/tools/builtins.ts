@@ -33,14 +33,51 @@ await risuai.registerFunction('upsert', async (args) => risuai.memoryUpsert(args
 await risuai.registerFunction('delete', async (args) => risuai.memoryDelete(args || {}))
 `.trim()
 
+const diceSource = `
+await risuai.registerFunction('roll', async (args) => {
+    return await risuai.requestDiceRoll(args || {})
+})
+`.trim()
+
 export const BUILTIN_TOOL_IDS = {
     question: 'builtin-tool-question',
     localtime: 'builtin-tool-localtime',
     memory: 'builtin-tool-memory',
+    dice: 'builtin-tool-dice',
 } as const
 
 export function createBuiltinTools(): RisuToolPackage[] {
     return [
+        {
+            id: BUILTIN_TOOL_IDS.dice,
+            builtinId: 'dice',
+            readonly: true,
+            name: 'Dice',
+            description: 'Ask the user to roll TRPG dice or an arbitrary integer roulette.',
+            namespace: 'dice',
+            version: '1.0.0',
+            functions: [{
+                id: 'dice-roll', name: 'roll', enabled: true,
+                description: 'Show an interactive roll card. The random result is chosen only when the user presses Roll.',
+                parameters: [
+                    { id: 'dice-kind', name: 'kind', description: 'coin, d4, d6, d10, d20, d100, or range.', type: 'string', required: true, enum: ['coin', 'd4', 'd6', 'd10', 'd20', 'd100', 'range'] },
+                    { id: 'dice-count', name: 'count', description: 'Number of dice, 1 to 100. Ignored for range.', type: 'integer' },
+                    { id: 'dice-modifier', name: 'modifier', description: 'One modifier applied after all dice are totaled.', type: 'integer' },
+                    { id: 'dice-min', name: 'min', description: 'Inclusive minimum for range roulette.', type: 'integer' },
+                    { id: 'dice-max', name: 'max', description: 'Inclusive maximum for range roulette.', type: 'integer' },
+                    { id: 'dice-reason', name: 'reason', description: 'Short explanation shown on the roll card.', type: 'string' },
+                ],
+                execution: { kind: 'script' },
+                presentation: {
+                    pendingTemplate: 'Waiting for a {{tool_arg::kind}} roll',
+                    successTemplate: '🎲 **{{tool_arg::kind}}** → **{{tool_result::total}}**\n\nRolls: `{{tool_result::rolls}}`',
+                    errorTemplate: 'Dice roll cancelled or failed: {{tool_result::error}}',
+                },
+            }],
+            variables: [], lists: [],
+            backgroundEmbedding: '<style>.x-risu-dice-interaction{border-color:color-mix(in srgb,currentColor 24%,transparent)}</style>',
+            plugin: { language: 'javascript', source: diceSource, permissions: ['askUser'] },
+        },
         {
             id: BUILTIN_TOOL_IDS.question,
             builtinId: 'question',
@@ -136,6 +173,29 @@ export function reconcileBuiltinTools(tools: RisuToolPackage[] | undefined): Ris
                 functions: builtin.functions.map((fn) => ({ ...fn, enabled: enabledByName.get(fn.name) ?? fn.enabled })),
             }
         }),
-        ...userTools,
+        ...userTools.map(normalizeUserTool),
     ]
+}
+
+function normalizeUserTool(tool: RisuToolPackage): RisuToolPackage {
+    return {
+        ...tool,
+        functions: (tool.functions ?? []).map((fn) => ({
+            ...fn,
+            parameters: fn.parameters ?? [],
+            execution: fn.execution ?? { kind: 'script' },
+            ...(fn.execution?.kind === 'agent' ? {
+                execution: {
+                    ...fn.execution,
+                    allowedTools: fn.execution.allowedTools ?? [],
+                    outputRoutes: (fn.execution.outputRoutes ?? []).map((route) => ({ ...route, actions: route.actions ?? [] })),
+                },
+            } : {}),
+        })),
+        variables: tool.variables ?? [],
+        lists: tool.lists ?? [],
+        regex: tool.regex ?? [],
+        trigger: tool.trigger ?? [],
+        assets: tool.assets ?? [],
+    }
 }
