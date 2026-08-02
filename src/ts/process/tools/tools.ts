@@ -29,6 +29,11 @@ import type {
 
 const namespacePattern = /^[A-Za-z0-9_-]+$/
 const functionPattern = /^[A-Za-z0-9_-]+$/
+const parameterTypes = new Set(['string', 'number', 'integer', 'boolean', 'json', 'string[]', 'number[]'])
+const valueTypes = new Set(['string', 'number', 'boolean', 'json'])
+const toolScopes = new Set(['global', 'character', 'chat'])
+const regexTypes = new Set(['editdisplay', 'editinput', 'editoutput', 'editprocess', 'edittrans'])
+const triggerTypes = new Set(['start', 'manual', 'output', 'input', 'display', 'request'])
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
 
@@ -74,47 +79,122 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
     }
     if (tool.plugin?.language !== 'javascript' && tool.plugin?.language !== 'typescript') errors.push('Plugin language must be JavaScript or TypeScript.')
     if (typeof tool.plugin?.source !== 'string') errors.push('Plugin source must be text.')
-    for (const permission of tool.plugin?.permissions ?? []) {
-        if (!allowedPermissions.includes(permission)) errors.push(`Unknown permission: ${permission}`)
+    if (tool.lowLevelAccess !== undefined && typeof tool.lowLevelAccess !== 'boolean') errors.push('Low-level access must be a boolean.')
+    const pluginPermissions: unknown = tool.plugin?.permissions
+    if (!Array.isArray(pluginPermissions)) errors.push('Plugin permissions must be an array.')
+    else {
+        for (const permission of pluginPermissions) {
+            if (!allowedPermissions.includes(permission)) errors.push(`Unknown permission: ${String(permission)}`)
+        }
     }
     const names = new Set<string>()
+    const functionIds = new Set<string>()
     for (const fn of tool.functions ?? []) {
+        if (!fn.id?.trim() || functionIds.has(fn.id)) errors.push(`Invalid or duplicate function ID: ${fn.id || '(empty)'}`)
+        functionIds.add(fn.id)
         if (!functionPattern.test(fn.name ?? '')) errors.push(`Invalid function name: ${fn.name || '(empty)'}`)
         if (names.has(fn.name)) errors.push(`Duplicate function name: ${fn.name}`)
         names.add(fn.name)
         const params = new Set<string>()
+        const paramIds = new Set<string>()
         for (const param of fn.parameters ?? []) {
+            if (!param.id?.trim() || paramIds.has(param.id)) errors.push(`Invalid or duplicate parameter ID in ${fn.name}: ${param.id || '(empty)'}`)
+            paramIds.add(param.id)
             if (!functionPattern.test(param.name ?? '')) errors.push(`Invalid parameter name: ${param.name || '(empty)'}`)
             if (params.has(param.name)) errors.push(`Duplicate parameter in ${fn.name}: ${param.name}`)
             params.add(param.name)
+            if (!parameterTypes.has(param.type)) errors.push(`Invalid parameter type in ${fn.name}: ${param.type}`)
+            if (param.enum !== undefined && (!Array.isArray(param.enum) || !param.enum.every((value) => typeof value === 'string'))) {
+                errors.push(`Invalid enum in ${fn.name}: ${param.name}`)
+            }
         }
         const execution = fn.execution
+        if (execution && execution.kind !== 'script' && execution.kind !== 'agent') errors.push(`Invalid execution kind for ${fn.name}.`)
         if (execution?.kind === 'agent') {
-            if (!execution.modelPresetId) errors.push(`Model preset is required for agent function ${fn.name}.`)
-            if (!execution.systemPrompt.trim() && !execution.userPrompt.trim()) errors.push(`Agent prompt is required for ${fn.name}.`)
-            if ((execution.outputRoutes ?? []).length === 0) errors.push(`At least one output route is required for ${fn.name}.`)
-            for (const route of execution.outputRoutes ?? []) {
-                try { new RegExp(route.pattern, normalizeRegexFlags(route.flags)) }
+            if (typeof execution.modelPresetId !== 'string' || !execution.modelPresetId.trim()) errors.push(`Model preset is required for agent function ${fn.name}.`)
+            const systemPrompt = typeof execution.systemPrompt === 'string' ? execution.systemPrompt : ''
+            const userPrompt = typeof execution.userPrompt === 'string' ? execution.userPrompt : ''
+            if (typeof execution.systemPrompt !== 'string' || typeof execution.userPrompt !== 'string') errors.push(`Agent prompts must be text for ${fn.name}.`)
+            if (!systemPrompt.trim() && !userPrompt.trim()) errors.push(`Agent prompt is required for ${fn.name}.`)
+            if (!Array.isArray(execution.allowedTools)) errors.push(`Allowed tools must be an array for ${fn.name}.`)
+            else {
+                for (const ref of execution.allowedTools) {
+                    if (!isObject(ref) || (ref.kind !== 'managed' && ref.kind !== 'external')) errors.push(`Invalid allowed tool reference in ${fn.name}.`)
+                    else if (ref.kind === 'managed' && (typeof ref.toolId !== 'string' || typeof ref.functionId !== 'string')) errors.push(`Invalid managed tool reference in ${fn.name}.`)
+                    else if (ref.kind === 'external' && typeof ref.name !== 'string') errors.push(`Invalid external tool reference in ${fn.name}.`)
+                }
+            }
+            if (!Array.isArray(execution.outputRoutes) || execution.outputRoutes.length === 0) errors.push(`At least one output route is required for ${fn.name}.`)
+            for (const route of Array.isArray(execution.outputRoutes) ? execution.outputRoutes : []) {
+                if (!isObject(route)) {
+                    errors.push(`Invalid output route in ${fn.name}.`)
+                    continue
+                }
+                if (typeof route.id !== 'string' || !route.id.trim()) errors.push(`Output route ID is required in ${fn.name}.`)
+                if (typeof route.pattern !== 'string') errors.push(`Output route pattern must be text in ${fn.name}: ${route.name || route.id}`)
+                else try { new RegExp(route.pattern, normalizeRegexFlags(typeof route.flags === 'string' ? route.flags : '')) }
                 catch { errors.push(`Invalid output route regex in ${fn.name}: ${route.name || route.id}`) }
-                if (!route.modelTemplate) errors.push(`Model result template is required in ${fn.name}: ${route.name || route.id}`)
+                if (typeof route.modelTemplate !== 'string' || !route.modelTemplate) errors.push(`Model result template is required in ${fn.name}: ${route.name || route.id}`)
+                if (!Array.isArray(route.actions)) errors.push(`Output route actions must be an array in ${fn.name}: ${route.name || route.id}`)
+                for (const action of Array.isArray(route.actions) ? route.actions : []) {
+                    if (!isObject(action)) {
+                        errors.push(`Invalid state action in ${fn.name}.`)
+                        continue
+                    }
+                    if (typeof action.id !== 'string' || !action.id.trim()) errors.push(`State action ID is required in ${fn.name}.`)
+                    if (action.kind === 'setVariable' && !(tool.variables ?? []).some((item) => item.name === action.name)) {
+                        errors.push(`Unknown variable in ${fn.name}: ${action.name}`)
+                    }
+                    if ((action.kind === 'appendList' || action.kind === 'replaceList') && !(tool.lists ?? []).some((item) => item.name === action.name)) {
+                        errors.push(`Unknown list in ${fn.name}: ${action.name}`)
+                    }
+                    if (action.kind === 'upsertMemory' && !toolScopes.has(String(action.scope))) errors.push(`Invalid memory scope in ${fn.name}.`)
+                    if (!['setVariable', 'appendList', 'replaceList', 'upsertMemory'].includes(String(action.kind))) errors.push(`Invalid state action kind in ${fn.name}.`)
+                }
             }
         }
     }
     const variableNames = new Set<string>()
+    const variableIds = new Set<string>()
     for (const variable of tool.variables ?? []) {
+        if (!variable.id?.trim() || variableIds.has(variable.id)) errors.push(`Invalid or duplicate variable ID: ${variable.id || '(empty)'}`)
+        variableIds.add(variable.id)
         if (!functionPattern.test(variable.name ?? '')) errors.push(`Invalid variable name: ${variable.name || '(empty)'}`)
         if (variableNames.has(variable.name)) errors.push(`Duplicate variable name: ${variable.name}`)
         variableNames.add(variable.name)
+        if (!valueTypes.has(variable.type)) errors.push(`Invalid variable type for ${variable.name}: ${variable.type}`)
+        if (!toolScopes.has(variable.scope)) errors.push(`Invalid variable scope for ${variable.name}: ${variable.scope}`)
         if (!valueMatchesType(variable.defaultValue, variable.type)) errors.push(`Invalid default value for variable ${variable.name}.`)
     }
     const listNames = new Set<string>()
+    const listIds = new Set<string>()
     for (const list of tool.lists ?? []) {
+        if (!list.id?.trim() || listIds.has(list.id)) errors.push(`Invalid or duplicate list ID: ${list.id || '(empty)'}`)
+        listIds.add(list.id)
         if (!functionPattern.test(list.name ?? '')) errors.push(`Invalid list name: ${list.name || '(empty)'}`)
         if (listNames.has(list.name)) errors.push(`Duplicate list name: ${list.name}`)
         listNames.add(list.name)
+        if (!valueTypes.has(list.itemType)) errors.push(`Invalid list item type for ${list.name}: ${list.itemType}`)
+        if (!toolScopes.has(list.scope)) errors.push(`Invalid list scope for ${list.name}: ${list.scope}`)
         if (!Array.isArray(list.defaultItems) || !list.defaultItems.every((item) => valueMatchesType(item, list.itemType))) {
             errors.push(`Invalid default items for list ${list.name}.`)
         }
+    }
+    for (const script of tool.regex ?? []) {
+        if (!script || typeof script.comment !== 'string' || typeof script.in !== 'string' || typeof script.out !== 'string') {
+            errors.push('Regex scripts require comment, in, and out text fields.')
+            continue
+        }
+        if (!regexTypes.has(script.type)) errors.push(`Invalid regex type: ${script.type}`)
+        try { new RegExp(script.in, script.ableFlag ? script.flag : 'g') }
+        catch { errors.push(`Invalid regex script: ${script.comment || script.in}`) }
+    }
+    for (const trigger of tool.trigger ?? []) {
+        if (!trigger || typeof trigger.comment !== 'string' || !triggerTypes.has(trigger.type) || !Array.isArray(trigger.conditions) || !Array.isArray(trigger.effect)) {
+            errors.push(`Invalid trigger structure: ${trigger?.comment || '(unnamed)'}`)
+            continue
+        }
+        if (trigger.effect.some((effect) => !effect || typeof effect.type !== 'string' || !effect.type)) errors.push(`Invalid trigger effect in ${trigger.comment || '(unnamed)'}.`)
     }
     const assetNames = new Set<string>()
     for (const asset of tool.assets ?? []) {
@@ -762,6 +842,17 @@ export function validateToolScopeState(tool: RisuToolPackage, scope: ToolScope, 
     return errors
 }
 
+export async function validateToolPluginSource(tool: RisuToolPackage): Promise<string[]> {
+    try {
+        const source = tool.plugin.language === 'typescript' ? await pluginCodeTranspiler(tool.plugin.source) : tool.plugin.source
+        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<unknown>
+        new AsyncFunction('risuai', source)
+        return []
+    } catch (error) {
+        return [`Plugin source is invalid: ${error instanceof Error ? error.message : String(error)}`]
+    }
+}
+
 function normalizeRegexFlags(flags = '') {
     return [...new Set(flags.replace(/[^dgimsuvy]/g, '').split(''))].join('')
 }
@@ -964,17 +1055,27 @@ export function parseToolExport(text: string): RisuToolExportV1 | RisuToolExport
     payload.tool.regex ??= []
     payload.tool.trigger ??= []
     payload.tool.assets ??= []
+    payload.tool.lowLevelAccess ??= false
     payload.tool.plugin ??= { language: 'javascript', source: '', permissions: [] }
     payload.tool.plugin.permissions ??= []
     for (const fn of payload.tool.functions) {
+        fn.id ||= v4()
+        fn.parameters ??= []
+        for (const parameter of fn.parameters) parameter.id ||= v4()
         fn.execution ??= { kind: 'script' }
         if (fn.execution.kind === 'agent') {
             fn.execution.allowedTools ??= []
             fn.execution.outputRoutes ??= []
-            for (const route of fn.execution.outputRoutes) route.actions ??= []
+            for (const route of fn.execution.outputRoutes) {
+                route.id ||= v4()
+                route.actions ??= []
+                for (const action of route.actions) action.id ||= v4()
+            }
         }
         fn.presentation ??= {}
     }
+    for (const variable of payload.tool.variables) variable.id ||= v4()
+    for (const list of payload.tool.lists) list.id ||= v4()
     if (payload.version === 2) payload.assets ??= []
     return payload
 }
@@ -997,6 +1098,7 @@ export async function importTool() {
             .replace('{permissions}', permissionSummary)
             .replace('{state}', payload.state ? language.yes : language.no))
         if (!shouldImport) return
+        if (tool.lowLevelAccess && !(await alertConfirm(language.lowLevelAccessConfirm))) return
         const base = tool.namespace
         if ((db.tools ?? []).some((item) => item.namespace === tool.namespace)) {
             let suffix = 2

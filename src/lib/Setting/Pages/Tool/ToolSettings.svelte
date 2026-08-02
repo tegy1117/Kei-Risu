@@ -6,7 +6,8 @@
     import TextInput from 'src/lib/UI/GUI/TextInput.svelte'
     import { alertConfirm, alertSelect, notifyError, notifySuccess } from 'src/ts/alert'
     import { safeStructuredClone } from 'src/ts/polyfill'
-    import { exportTool, importTool, unloadToolRuntime, validateToolPackage } from 'src/ts/process/tools/tools'
+    import { createManagedToolPackage, deleteManagedToolPackage, replaceManagedToolPackage } from 'src/ts/process/tools/management'
+    import { exportTool, importTool, validateToolPackage, validateToolPluginSource } from 'src/ts/process/tools/tools'
     import type { RisuToolPackage } from 'src/ts/process/tools/types'
     import { DBState } from 'src/ts/stores.svelte'
     import { v4 } from 'uuid'
@@ -19,7 +20,7 @@
     let currentTool = $state<RisuToolPackage>(blankTool())
 
     function blankTool(): RisuToolPackage {
-        return { id: v4(), name: '', description: '', namespace: '', version: '1.0.0', functions: [], variables: [], lists: [], regex: [], trigger: [], assets: [], customToggle: '', backgroundEmbedding: '', plugin: { language: 'javascript', source: '', permissions: [] } }
+        return { id: v4(), name: '', description: '', namespace: '', version: '1.0.0', functions: [], variables: [], lists: [], regex: [], trigger: [], assets: [], customToggle: '', backgroundEmbedding: '', lowLevelAccess: false, plugin: { language: 'javascript', source: '', permissions: [] } }
     }
 
     function uniqueNamespace(base: string) {
@@ -35,10 +36,11 @@
         mode = 'edit'
     }
 
-    function cloneTool(tool: RisuToolPackage) {
+    async function cloneTool(tool: RisuToolPackage) {
         const copy = safeStructuredClone(tool)
         copy.id = v4(); copy.name = `${tool.name} Copy`; copy.namespace = uniqueNamespace(tool.namespace); copy.builtinId = undefined; copy.readonly = false
-        DBState.db.tools.push(copy)
+        if (copy.lowLevelAccess && !(await alertConfirm(language.lowLevelAccessConfirm))) return
+        createManagedToolPackage(copy)
         notifySuccess(language.toolCreated)
     }
 
@@ -47,35 +49,13 @@
         mode = 'state'
     }
 
-    function saveTool() {
-        const errors = validateToolPackage(currentTool, DBState.db.tools)
+    async function saveTool() {
+        const errors = [...validateToolPackage(currentTool, DBState.db.tools), ...await validateToolPluginSource(currentTool)]
         if (errors.length) { notifyError(errors.join('\n')); return }
-        if (mode === 'create') DBState.db.tools.push(currentTool)
-        else {
-            const previous = DBState.db.tools[editIndex]
-            unloadToolRuntime(currentTool.id)
-            if (previous.plugin.source !== currentTool.plugin.source) delete DBState.db.toolPermissions[currentTool.id]
-            const currentFunctionNames = new Set(currentTool.functions.map((fn) => fn.name))
-            if (previous.namespace !== currentTool.namespace) {
-                const policy = DBState.db.toolPolicy
-                if (policy.tools[previous.namespace] !== undefined) {
-                    policy.tools[currentTool.namespace] = policy.tools[previous.namespace]
-                    delete policy.tools[previous.namespace]
-                }
-                for (const fn of previous.functions) {
-                    const oldName = `${previous.namespace}__${fn.name}`
-                    const newName = `${currentTool.namespace}__${fn.name}`
-                    if (currentFunctionNames.has(fn.name) && policy.functions[oldName] !== undefined) policy.functions[newName] = policy.functions[oldName]
-                    delete policy.functions[oldName]
-                }
-            } else {
-                for (const fn of previous.functions) {
-                    if (!currentFunctionNames.has(fn.name)) delete DBState.db.toolPolicy.functions[`${previous.namespace}__${fn.name}`]
-                }
-            }
-            DBState.db.tools[editIndex] = currentTool
-            DBState.db.tools = DBState.db.tools
-        }
+        const previous = mode === 'edit' ? DBState.db.tools[editIndex] : undefined
+        if (currentTool.lowLevelAccess && !previous?.lowLevelAccess && !(await alertConfirm(language.lowLevelAccessConfirm))) return
+        if (mode === 'create') createManagedToolPackage(currentTool)
+        else if (previous) replaceManagedToolPackage(previous, currentTool)
         notifySuccess(mode === 'create' ? language.toolCreated : language.toolUpdated)
         mode = 'list'
     }
@@ -107,7 +87,7 @@
                         <button class="text-textcolor2 hover:text-primary" title={language.toolExport} onclick={() => download(tool)}><DownloadIcon size={18}/></button>
                         <button class="text-textcolor2 hover:text-primary" title={language.toolClone} onclick={() => cloneTool(tool)}><CopyIcon size={18}/></button>
                         <button class="text-textcolor2 hover:text-primary" title={language.editTool} onclick={() => openEdit(tool)}><SquarePenIcon size={18}/></button>
-                        {#if !tool.readonly}<button class="text-textcolor2 hover:text-red-400" title={language.remove} onclick={async () => { if (await alertConfirm(language.removeConfirm + tool.name)) { unloadToolRuntime(tool.id); DBState.db.enabledTools = DBState.db.enabledTools.filter((id) => id !== tool.id); DBState.db.tools = DBState.db.tools.filter((item) => item.id !== tool.id); delete DBState.db.toolStates[tool.id]; delete DBState.db.toolPermissions[tool.id]; delete DBState.db.toolPolicy.tools[tool.namespace]; for (const fn of tool.functions) delete DBState.db.toolPolicy.functions[`${tool.namespace}__${fn.name}`]; notifySuccess(language.toolDeleted) } }}><TrashIcon size={18}/></button>{/if}
+                        {#if !tool.readonly}<button class="text-textcolor2 hover:text-red-400" title={language.remove} onclick={async () => { if (await alertConfirm(language.removeConfirm + tool.name)) { deleteManagedToolPackage(tool.id); notifySuccess(language.toolDeleted) } }}><TrashIcon size={18}/></button>{/if}
                     </div>
                 </div>
             {/each}

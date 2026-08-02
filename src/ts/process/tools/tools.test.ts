@@ -28,6 +28,7 @@ vi.mock('../mcp/mcp', () => ({ getTools: vi.fn(async () => []) }))
 vi.mock('../request/request', () => ({ requestAgentModelPreset: requestMocks.requestAgentModelPreset }))
 
 import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
+import { getToolTriggers } from './features'
 import {
     createToolScopeStateSnapshot,
     createToolExportPayload,
@@ -42,6 +43,7 @@ import {
     toolWireName,
     validateToolScopeState,
     validateToolPackage,
+    validateToolPluginSource,
     writeToolScopeState,
 } from './tools'
 
@@ -149,6 +151,46 @@ describe('tool state management', () => {
         expect(errors.join('\n')).toContain('expected string')
         expect(errors.join('\n')).toContain('Memory title and content are required')
         expect(errors.join('\n')).toContain('Invalid importance')
+    })
+})
+
+describe('tool package validation', () => {
+    test('validates plugin syntax and managed feature structures', async () => {
+        const tool = sampleTool()
+        tool.plugin.source = 'await risuai.registerFunction('
+        tool.lowLevelAccess = true
+        tool.regex = [{ comment: 'bad', in: '[', out: '', type: 'editdisplay', ableFlag: true, flag: 'g' }]
+        tool.trigger = [{ comment: 'bad', type: 'manual', conditions: [], effect: [{ type: '' } as never] }]
+        expect(validateToolPackage(tool).join('\n')).toContain('Invalid regex script')
+        expect(validateToolPackage(tool).join('\n')).toContain('Invalid trigger effect')
+        expect((await validateToolPluginSource(tool)).join('\n')).toContain('Plugin source is invalid')
+    })
+
+    test('reports malformed nested agent settings instead of throwing', () => {
+        const tool = sampleTool()
+        tool.plugin.permissions = 'network' as never
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: 1,
+            userPrompt: null, allowedTools: 'bad', outputRoutes: { bad: true },
+        } as never
+
+        expect(() => validateToolPackage(tool)).not.toThrow()
+        const errors = validateToolPackage(tool).join('\n')
+        expect(errors).toContain('Plugin permissions must be an array')
+        expect(errors).toContain('Agent prompts must be text')
+        expect(errors).toContain('Allowed tools must be an array')
+        expect(errors).toContain('At least one output route is required')
+    })
+
+    test('passes approved low-level access to active tool triggers', () => {
+        const tool = sampleTool()
+        tool.lowLevelAccess = true
+        tool.trigger = [{ comment: 'lua', type: 'start', conditions: [], effect: [{ type: 'triggerlua', code: 'print(1)' }] }]
+        mockDb.tools = [tool]
+        mockDb.enabledTools = [tool.id]
+        expect(getToolTriggers()[0].lowLevelAccess).toBe(true)
+        tool.lowLevelAccess = false
+        expect(getToolTriggers()[0].lowLevelAccess).toBe(false)
     })
 })
 

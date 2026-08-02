@@ -1,4 +1,5 @@
 import type { RisuToolPackage } from './types'
+import { v4 } from 'uuid'
 
 const questionSource = `
 await risuai.registerFunction('ask', async (args) => {
@@ -182,18 +183,24 @@ function normalizeUserTool(tool: RisuToolPackage): RisuToolPackage {
         ...tool,
         functions: (tool.functions ?? []).map((fn) => ({
             ...fn,
-            parameters: fn.parameters ?? [],
+            id: fn.id || v4(),
+            parameters: (fn.parameters ?? []).map((parameter) => ({ ...parameter, id: parameter.id || v4() })),
             execution: fn.execution ?? { kind: 'script' },
             ...(fn.execution?.kind === 'agent' ? {
                 execution: {
                     ...fn.execution,
                     allowedTools: fn.execution.allowedTools ?? [],
-                    outputRoutes: (fn.execution.outputRoutes ?? []).map((route) => ({ ...route, actions: route.actions ?? [] })),
+                    outputRoutes: (fn.execution.outputRoutes ?? []).map((route) => ({
+                        ...route,
+                        id: route.id || v4(),
+                        actions: (route.actions ?? []).map((action) => ({ ...action, id: action.id || v4() })),
+                    })),
                 },
             } : {}),
         })),
-        variables: tool.variables ?? [],
-        lists: tool.lists ?? [],
+        variables: (tool.variables ?? []).map((variable) => ({ ...variable, id: variable.id || v4() })),
+        lists: (tool.lists ?? []).map((list) => ({ ...list, id: list.id || v4() })),
+        lowLevelAccess: tool.lowLevelAccess === true,
         regex: tool.regex ?? [],
         trigger: tool.trigger ?? [],
         assets: tool.assets ?? [],

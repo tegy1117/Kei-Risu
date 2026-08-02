@@ -4,6 +4,7 @@
     import RegexList from 'src/lib/SideBars/Scripts/RegexList.svelte'
     import TriggerList from 'src/lib/SideBars/Scripts/TriggerList.svelte'
     import TextAreaInput from 'src/lib/UI/GUI/TextAreaInput.svelte'
+    import CheckInput from 'src/lib/UI/GUI/CheckInput.svelte'
     import type { RisuToolPackage } from 'src/ts/process/tools/types'
     import { saveAsset } from 'src/ts/globalApi.svelte'
     import { selectMultipleFile } from 'src/ts/util'
@@ -17,6 +18,7 @@
         currentTool.assets ??= []
         currentTool.customToggle ??= ''
         currentTool.backgroundEmbedding ??= ''
+        currentTool.lowLevelAccess ??= false
     })
 
     async function addAssets() {
@@ -52,5 +54,8 @@
     <RegexList bind:value={currentTool.regex} buttons={true} />
 
     <strong>{language.toolTriggers}</strong>
-    <TriggerList bind:value={currentTool.trigger} lowLevelAble={false} />
+    <div class="flex items-center gap-2">
+        <CheckInput bind:check={currentTool.lowLevelAccess} name={language.lowLevelAccess} margin={false} />
+    </div>
+    <TriggerList bind:value={currentTool.trigger} lowLevelAble={currentTool.lowLevelAccess} />
 </div>

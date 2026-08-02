@@ -104,6 +104,7 @@ export interface RisuToolPackage {
     lists: RisuToolList[]
     customToggle?: string
     backgroundEmbedding?: string
+    lowLevelAccess?: boolean
     regex?: import('src/ts/storage/database.svelte').customscript[]
     trigger?: import('src/ts/storage/database.svelte').triggerscript[]
     assets?: [string, string, string][]

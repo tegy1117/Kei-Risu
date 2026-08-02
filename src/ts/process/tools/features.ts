@@ -11,7 +11,7 @@ export function getToolRegexScripts(): customscript[] {
 
 export function getToolTriggers(): triggerscript[] {
     return getActiveToolFeaturePackages().flatMap((tool) =>
-        (tool.trigger ?? []).map((trigger) => ({ ...trigger, lowLevelAccess: false })))
+        (tool.trigger ?? []).map((trigger) => ({ ...trigger, lowLevelAccess: tool.lowLevelAccess === true })))
 }
 
 export function getToolToggles(): string {
