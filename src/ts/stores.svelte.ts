@@ -87,6 +87,9 @@ export const InlayGallerySubmenuIndex = writable(0)
 // List-view tab of the Model Preset page (Presets / API keys / Options).
 // Distinct from the editor's own sub-tabs, which stay page-local.
 export const ModelPresetListTabIndex = writable(0)
+// Last agent preset opened in settings. Kept outside the page component so
+// switching settings routes does not reset the editor to the first preset.
+export const AgentPresetEditId = writable<string | undefined>(undefined)
 export const ReloadGUIPointer = writable(0)
 export const ReloadChatPointer = writable({} as Record<number, number>)
 export const ScrollToMessageStore = $state({ value: -1 })

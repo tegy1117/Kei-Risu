@@ -2,7 +2,7 @@
     import { v4 } from 'uuid'
     import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, Trash2Icon } from '@lucide/svelte'
     import { language } from 'src/lang'
-    import { DBState } from 'src/ts/stores.svelte'
+    import { AgentPresetEditId, DBState } from 'src/ts/stores.svelte'
     import SettingPage from 'src/lib/UI/GUI/SettingPage.svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import ShInput from 'src/lib/UI/GUI/ShInput.svelte'
@@ -11,20 +11,27 @@
     import type { AgentPipelineNode, AgentPostPlacement, AgentPreset, AgentWorkerNode } from 'src/ts/agent/types'
     import { createAgentPreset, validateAgentPreset } from 'src/ts/agent/pipeline'
 
-    let editingId = $state(DBState.db.agentPresets?.[0]?.id ?? '')
     let mappingPromptId = $state(DBState.db.botPresets?.[DBState.db.botPresetsId]?.id ?? '')
     let draggedNodeId = $state('')
 
-    let preset = $derived(DBState.db.agentPresets.find((entry) => entry.id === editingId) ?? null)
+    let preset = $derived(DBState.db.agentPresets.find((entry) => entry.id === $AgentPresetEditId) ?? null)
     let validation = $derived(preset ? validateAgentPreset(preset, {
         promptPresetIds: new Set(DBState.db.botPresets.map((entry) => entry.id).filter(Boolean)),
         modelPresetIds: new Set(DBState.db.modelPresets.map((entry) => entry.id)),
     }) : null)
 
+    $effect(() => {
+        if($AgentPresetEditId === undefined){
+            $AgentPresetEditId = DBState.db.agentPresets?.[0]?.id ?? ''
+        } else if($AgentPresetEditId && !DBState.db.agentPresets.some((entry) => entry.id === $AgentPresetEditId)){
+            $AgentPresetEditId = DBState.db.agentPresets?.[0]?.id ?? ''
+        }
+    })
+
     function addPreset(){
         const created = createAgentPreset(language.agent.newPreset)
         DBState.db.agentPresets.push(created)
-        editingId = created.id
+        $AgentPresetEditId = created.id
     }
 
     function duplicatePreset(source: AgentPreset){
@@ -49,14 +56,14 @@
             })),
         }
         DBState.db.agentPresets.push(copy)
-        editingId = copy.id
+        $AgentPresetEditId = copy.id
     }
 
     function removePreset(id: string){
         const index = DBState.db.agentPresets.findIndex((entry) => entry.id === id)
         if(index < 0) return
         DBState.db.agentPresets.splice(index, 1)
-        editingId = DBState.db.agentPresets[Math.max(0, index - 1)]?.id ?? ''
+        $AgentPresetEditId = DBState.db.agentPresets[Math.max(0, index - 1)]?.id ?? ''
     }
 
     function addStage(){
@@ -152,9 +159,53 @@
         node.agentInfoBindings ??= {}
         node.agentInfoBindings[promptId] ??= {}
         const current = node.agentInfoBindings[promptId][cardId] ?? []
-        node.agentInfoBindings[promptId][cardId] = checked
+        const next = checked
             ? [...new Set([...current, sourceId])]
             : current.filter((id) => id !== sourceId)
+        if(next.length > 0){
+            node.agentInfoBindings[promptId][cardId] = next
+        } else {
+            delete node.agentInfoBindings[promptId][cardId]
+            if(Object.keys(node.agentInfoBindings[promptId]).length === 0){
+                delete node.agentInfoBindings[promptId]
+            }
+        }
+    }
+
+    function boundConnections(node: AgentPipelineNode): { cardId: string, sourceId: string }[] {
+        const promptId = promptIdFor(node)
+        const sourceIds = new Set(earlierNodes(node).map((source) => source.id))
+        return infoCards(node).flatMap((card) =>
+            (node.agentInfoBindings?.[promptId]?.[card.id] ?? [])
+                .filter((sourceId) => sourceIds.has(sourceId))
+                .map((sourceId) => ({ cardId: card.id, sourceId })),
+        )
+    }
+
+    function nextAvailableConnection(node: AgentPipelineNode): { cardId: string, sourceId: string } | null {
+        for(const card of infoCards(node)){
+            for(const source of earlierNodes(node)){
+                if(!isBound(node, card.id, source.id)) return { cardId: card.id, sourceId: source.id }
+            }
+        }
+        return null
+    }
+
+    function addConnection(node: AgentPipelineNode){
+        const connection = nextAvailableConnection(node)
+        if(connection) toggleBinding(node, connection.cardId, connection.sourceId, true)
+    }
+
+    function replaceConnectionSource(node: AgentPipelineNode, cardId: string, oldSourceId: string, sourceId: string){
+        if(sourceId === oldSourceId) return
+        toggleBinding(node, cardId, sourceId, true)
+        toggleBinding(node, cardId, oldSourceId, false)
+    }
+
+    function replaceConnectionCard(node: AgentPipelineNode, oldCardId: string, sourceId: string, cardId: string){
+        if(cardId === oldCardId) return
+        toggleBinding(node, cardId, sourceId, true)
+        toggleBinding(node, oldCardId, sourceId, false)
     }
 
     function setPostPlacement(node: AgentWorkerNode, placement: AgentPostPlacement){
@@ -165,7 +216,7 @@
 
 <SettingPage title={language.agent.menu}>
     <div class="flex gap-2 items-center mt-2">
-        <ShSelect className="flex-1" bind:value={editingId}>
+        <ShSelect className="flex-1" value={$AgentPresetEditId ?? ''} onchange={(event) => { $AgentPresetEditId = event.currentTarget.value }}>
             <OptionInput value="">{language.none}</OptionInput>
             {#each DBState.db.agentPresets as entry (entry.id)}
                 <OptionInput value={entry.id}>{entry.name}</OptionInput>
@@ -208,6 +259,9 @@
                     </header>
 
                     {#each stage.nodes as node, nodeIndex (node.id)}
+                        {@const cards = infoCards(node)}
+                        {@const sources = earlierNodes(node)}
+                        {@const connections = boundConnections(node)}
                         <div
                             role="listitem"
                             class="border border-selected rounded-md p-3 mb-2 flex flex-col gap-2"
@@ -256,26 +310,44 @@
                             {/if}
 
                             <div class="mt-2 border-t border-darkborderc pt-2">
-                                <div class="text-xs text-textcolor2 mb-2">{language.agent.sourceOutputs}</div>
-                                {#if infoCards(node).length === 0}
+                                <div class="flex items-center justify-between gap-2 mb-2">
+                                    <div class="text-xs text-textcolor2">{language.agent.sourceOutputs}</div>
+                                    <ShButton size="xs" onclick={() => addConnection(node)} disabled={!nextAvailableConnection(node)}>
+                                        <PlusIcon size={14}/>{language.agent.addConnection}
+                                    </ShButton>
+                                </div>
+                                {#if cards.length === 0}
                                     <div class="text-xs text-textcolor2">{language.agent.noInfoCards}</div>
+                                {:else if sources.length === 0}
+                                    <div class="text-xs text-textcolor2">{language.agent.noEarlierOutputs}</div>
+                                {:else}
+                                    {#if connections.length === 0}
+                                        <div class="text-xs text-textcolor2 mb-2">{language.agent.noConnections}</div>
+                                    {/if}
+                                    {#each connections as connection (`${connection.cardId}:${connection.sourceId}`)}
+                                        <div class="rounded border border-darkborderc p-2 mb-2 flex gap-2 items-end">
+                                            <div class="flex-1 min-w-0">
+                                                <div class="text-xs text-textcolor2 mb-1">{language.agent.connectedAgent}</div>
+                                                <ShSelect value={connection.sourceId} onchange={(event) => replaceConnectionSource(node, connection.cardId, connection.sourceId, event.currentTarget.value)}>
+                                                    {#each sources as source (source.id)}
+                                                        <OptionInput value={source.id}>{source.name}</OptionInput>
+                                                    {/each}
+                                                </ShSelect>
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="text-xs text-textcolor2 mb-1">{language.agent.insertionPoint}</div>
+                                                <ShSelect value={connection.cardId} onchange={(event) => replaceConnectionCard(node, connection.cardId, connection.sourceId, event.currentTarget.value)}>
+                                                    {#each cards as card (card.id)}
+                                                        <OptionInput value={card.id}>{card.name || language.agentInfo}</OptionInput>
+                                                    {/each}
+                                                </ShSelect>
+                                            </div>
+                                            <ShButton size="icon-sm" variant="destructive" title={language.agent.removeConnection} onclick={() => toggleBinding(node, connection.cardId, connection.sourceId, false)}>
+                                                <Trash2Icon size={16}/>
+                                            </ShButton>
+                                        </div>
+                                    {/each}
                                 {/if}
-                                {#each infoCards(node) as card (card.id)}
-                                    {@const sources = earlierNodes(node)}
-                                    <div class="rounded border border-darkborderc p-2 mb-2">
-                                        <div class="text-sm mb-1">{language.agent.insertionPoint}: {card.name || language.agentInfo}</div>
-                                        {#if sources.length === 0}
-                                            <div class="text-xs text-textcolor2">{language.agent.noEarlierOutputs}</div>
-                                        {:else}
-                                            {#each sources as source (source.id)}
-                                                <label class="flex gap-2 items-center text-xs py-1">
-                                                    <input type="checkbox" checked={isBound(node, card.id, source.id)} onchange={(event) => toggleBinding(node, card.id, source.id, event.currentTarget.checked)}/>
-                                                    {source.name}
-                                                </label>
-                                            {/each}
-                                        {/if}
-                                    </div>
-                                {/each}
                             </div>
                         </div>
                     {/each}
