@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from 'svelte'
     import { v4 } from 'uuid'
     import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, Trash2Icon } from '@lucide/svelte'
     import { language } from 'src/lang'
@@ -8,11 +9,14 @@
     import ShInput from 'src/lib/UI/GUI/ShInput.svelte'
     import ShSelect from 'src/lib/UI/GUI/ShSelect.svelte'
     import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
+    import { saveCurrentPreset } from 'src/ts/storage/database.svelte'
     import type { AgentPipelineNode, AgentPostPlacement, AgentPreset, AgentWorkerNode } from 'src/ts/agent/types'
     import { createAgentPreset, validateAgentPreset } from 'src/ts/agent/pipeline'
 
     let mappingPromptId = $state(DBState.db.botPresets?.[DBState.db.botPresetsId]?.id ?? '')
     let draggedNodeId = $state('')
+
+    onMount(() => saveCurrentPreset())
 
     let preset = $derived(DBState.db.agentPresets.find((entry) => entry.id === $AgentPresetEditId) ?? null)
     let validation = $derived(preset ? validateAgentPreset(preset, {
