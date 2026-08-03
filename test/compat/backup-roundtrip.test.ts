@@ -154,6 +154,59 @@ describe('asset round-trip', () => {
   })
 })
 
+describe('server-side backup', () => {
+  test('keeps tool state and agent presets in the downloadable archive', async () => {
+    const srv = await spawnServer()
+    servers.push(srv)
+    const client = await createClient(srv.port, srv.password)
+    const seed = createSeedBackup({
+      includeAssets: true,
+      databaseOverrides: {
+        tools: [{ id: 'tool-1', name: 'Stateful Tool', namespace: 'stateful-tool' }],
+        enabledTools: ['tool-1'],
+        toolStates: {
+          'tool-1': {
+            global: { variables: { counter: 7 }, lists: {}, memories: [] },
+            character: {},
+            chat: {},
+          },
+        },
+        toolPolicy: { tools: { 'tool-1': true }, functions: {} },
+        agentPresets: [{ id: 'agent-1', name: 'Review Pipeline', maxParallel: 2, stages: [] }],
+        defaultAgentPresetId: 'agent-1',
+      },
+    })
+    expect((await client.importBackup(seed)).ok).toBe(true)
+
+    const saveResponse = await client.fetch('/api/backup/server/save', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-session-id': 'server-backup-test',
+      },
+    })
+    expect(saveResponse.ok).toBe(true)
+    const messages = (await saveResponse.text())
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+    const done = messages.find(message => message.type === 'done')
+    expect(done?.ok).toBe(true)
+
+    const download = await client.fetch(`/api/backup/server/download/${encodeURIComponent(done.filename)}`)
+    expect(download.ok).toBe(true)
+    const downloaded = Buffer.from(await download.arrayBuffer())
+    const { raw } = normalizeBackup(downloaded)
+    expect((raw.tools as any[])[0].name).toBe('Stateful Tool')
+    expect(raw.enabledTools).toEqual(['tool-1'])
+    expect((raw.toolStates as any)['tool-1'].global.variables.counter).toBe(7)
+    expect((raw.toolPolicy as any).tools['tool-1']).toBe(true)
+    expect((raw.agentPresets as any[])[0].name).toBe('Review Pipeline')
+    expect(raw.defaultAgentPresetId).toBe('agent-1')
+    expect(fingerprintAssets(downloaded)).toEqual(fingerprintAssets(seed))
+  })
+})
+
 // ─── Upstream-compatible export ────────────────────────────────────────────
 
 describe('upstream-compatible backup export', () => {
@@ -212,6 +265,75 @@ describe('upstream-compatible backup export', () => {
     const regularDb = normalizeBackup(await client.exportBackup()).normalized
     const upstreamDb = normalizeBackup(upstreamBackup).normalized
     expect(upstreamDb).toEqual(regularDb)
+  })
+})
+
+describe('PocketRisu-compatible backup export', () => {
+  test('preserves the complete archive and survives a round-trip import', async () => {
+    const source = await spawnServer()
+    servers.push(source)
+    const sourceClient = await createClient(source.port, source.password)
+
+    const seed = Buffer.concat([
+      createSeedBackup({
+        characterCount: 2,
+        includeAssets: true,
+        databaseOverrides: {
+          tools: [{ id: 'tool-pocket', name: 'Pocket Round Trip Tool', namespace: 'pocket-tool' }],
+          toolStates: { 'tool-pocket': { global: { variables: { kept: true }, lists: {}, memories: [] } } },
+          agentPresets: [{ id: 'agent-pocket', name: 'Pocket Round Trip Agent', maxParallel: 1, stages: [] }],
+        },
+      }),
+      encodeBackup([
+        { name: 'inlay/pocket-inlay.png', data: Buffer.from('pocket-inlay-image') },
+        {
+          name: 'inlay_sidecar/pocket-inlay',
+          data: Buffer.from(JSON.stringify({
+            ext: 'png',
+            name: 'pocket-inlay.png',
+            type: 'image',
+          })),
+        },
+        {
+          name: 'inlay_meta/pocket-inlay',
+          data: Buffer.from(JSON.stringify({
+            createdAt: 1,
+            updatedAt: 2,
+            charId: 'test-char-0',
+            chatId: 'chat-0-0',
+          })),
+        },
+      ]),
+    ])
+
+    expect((await sourceClient.importBackup(seed)).ok).toBe(true)
+
+    const response = await sourceClient.fetch('/api/backup/export?target=pocketrisu')
+    expect(response.ok).toBe(true)
+    expect(response.headers.get('content-disposition')).toContain('-pocketrisu.bin')
+    const pocketBackup = Buffer.from(await response.arrayBuffer())
+    expect(Number(response.headers.get('content-length'))).toBe(pocketBackup.length)
+
+    const names = decodeBackup(pocketBackup).map(entry => entry.name)
+    expect(names).toEqual(expect.arrayContaining([
+      'database.risudat',
+      'inlay/pocket-inlay.png',
+      'inlay_sidecar/pocket-inlay',
+      'inlay_meta/pocket-inlay',
+    ]))
+    const { raw: pocketRaw } = normalizeBackup(pocketBackup)
+    expect((pocketRaw.tools as any[])[0].name).toBe('Pocket Round Trip Tool')
+    expect((pocketRaw.toolStates as any)['tool-pocket'].global.variables.kept).toBe(true)
+    expect((pocketRaw.agentPresets as any[])[0].name).toBe('Pocket Round Trip Agent')
+
+    const target = await spawnServer()
+    servers.push(target)
+    const targetClient = await createClient(target.port, target.password)
+    expect((await targetClient.importBackup(pocketBackup)).ok).toBe(true)
+
+    const roundTripped = await targetClient.exportBackup()
+    expect(normalizeBackup(roundTripped).normalized).toEqual(normalizeBackup(pocketBackup).normalized)
+    expect(fingerprintAssets(roundTripped)).toEqual(fingerprintAssets(pocketBackup))
   })
 })
 

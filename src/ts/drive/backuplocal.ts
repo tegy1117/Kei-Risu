@@ -136,6 +136,18 @@ export async function SaveLocalBackupForUpstream(){
     }
 }
 
+export async function SaveLocalBackupForPocketRisu(){
+    try {
+        alertWait("Saving PocketRisu backup...")
+        const response = await forageStorage.exportBackup({ target: 'pocketrisu' })
+        await streamBackupToDisk(response, `risu-backup-${Date.now()}-pocketrisu.bin`)
+        notifySuccess('Success')
+    } catch (error) {
+        console.error(error)
+        alertError('Failed')
+    }
+}
+
 /**
  * Saves a partial local backup with only critical assets.
  * 

@@ -37,6 +37,8 @@ export interface SeedOptions {
   includeAssets?: boolean
   /** Cold storage character stubs to include in the backup. */
   coldStorageCharacters?: ColdStorageCharacterSpec[]
+  /** Extra root database fields to merge into the generated seed. */
+  databaseOverrides?: Record<string, unknown>
 }
 
 export function createSeedBackup(opts: SeedOptions = {}): Buffer {
@@ -46,6 +48,7 @@ export function createSeedBackup(opts: SeedOptions = {}): Buffer {
     messagesPerChat = 2,
     includeAssets = false,
     coldStorageCharacters = [],
+    databaseOverrides = {},
   } = opts
 
   const characters = Array.from({ length: characterCount }, (_, ci) => {
@@ -91,6 +94,7 @@ export function createSeedBackup(opts: SeedOptions = {}): Buffer {
     botPresetsId: 0,
     moduleIntergration: [],
     selectedCharacter: 0,
+    ...databaseOverrides,
   }
 
   // Add cold storage character stubs to the database

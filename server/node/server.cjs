@@ -4004,7 +4004,11 @@ app.get('/api/backup/export', async (req, res, next) => {
         // which upstream RisuAI's import treats as a path under assets/ and
         // fails with ENOENT. The export becomes lossy on inlay images but
         // imports cleanly into upstream.
-        const target = req.query.target === 'upstream' ? 'upstream' : 'nodeonly';
+        const target = req.query.target === 'upstream'
+            ? 'upstream'
+            : req.query.target === 'pocketrisu'
+                ? 'pocketrisu'
+                : 'nodeonly';
         // ?mode=settings drops characters, chats and inlay images — see
         // buildSettingsOnlyPlan above. &moduleAssets=0 additionally leaves out
         // asset-pack module images, which is where the bulk usually lives.
@@ -4095,7 +4099,13 @@ app.get('/api/backup/export', async (req, res, next) => {
         // reused across instances, so they have to be tellable apart from a full
         // backup months later.
         const filenameBase = settingsOnly ? 'risu-settings' : 'risu-backup';
-        const filenameSuffix = settingsOnly ? '' : target === 'upstream' ? '-upstream' : '';
+        const filenameSuffix = settingsOnly
+            ? ''
+            : target === 'upstream'
+                ? '-upstream'
+                : target === 'pocketrisu'
+                    ? '-pocketrisu'
+                    : '';
         res.setHeader('content-type', 'application/octet-stream');
         res.setHeader('content-disposition', `attachment; filename="${filenameBase}-${Date.now()}${filenameSuffix}.bin"`);
         res.setHeader('content-length', totalBytes);

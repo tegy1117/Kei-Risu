@@ -55,8 +55,8 @@ export interface PatchItemResult {
 }
 
 export interface ExportBackupOptions {
-    /** Strip NodeOnly-only inlay namespaces so upstream RisuAI can import it. */
-    target?: 'upstream'
+    /** Select a named compatibility target; upstream strips inlays, PocketRisu keeps the full archive. */
+    target?: 'upstream' | 'pocketrisu'
     /** Drop characters, chats and inlay images — a seed for a fresh instance. */
     mode?: 'settings'
     /**
@@ -481,7 +481,7 @@ export class NodeStorage{
 
     async exportBackup(opts?: ExportBackupOptions): Promise<Response> {
         const params = new URLSearchParams()
-        if (opts?.target === 'upstream') params.set('target', 'upstream')
+        if (opts?.target) params.set('target', opts.target)
         if (opts?.mode === 'settings') params.set('mode', 'settings')
         if (opts?.moduleAssets === false) params.set('moduleAssets', '0')
         const query = params.toString()

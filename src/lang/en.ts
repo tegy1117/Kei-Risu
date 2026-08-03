@@ -2245,7 +2245,7 @@ export const languageEnglish = {
 
     // Data migration (formerly "Account & Files")
     migration: "Data Migration",
-    migrationDesc: "Move data between RisuAI (or compatible systems) and Kei-Risu: import from upstream, or export to upstream-compatible format.",
+    migrationDesc: "Move data between PocketRisu, the original RisuAI, and Kei-Risu using compatible backup files.",
     migrationInfoBackupMoved: "Server backups, local backups, and DB snapshots have moved to [System → Backups].",
     migrationGotoBackupTab: "Open Backups tab",
     migrationLegacyAccordion: "RisuAI-style backup (legacy)",
@@ -2253,6 +2253,11 @@ export const languageEnglish = {
     migrationSaveFolderAccordion: "Import save folder from NodeRisu",
     migrationSaveFolderDesc: "Use this to bring data over from a NodeRisu / RisuAI save folder you used previously.",
     migrationLoadUpstreamBackup: "Load upstream RisuAI local backup",
+    migrationPocketRisu: "PocketRisu migration",
+    migrationPocketRisuDesc: "Move a complete backup in either direction between PocketRisu and Kei-Risu. Import replaces the current data. Kei-Risu-only tools and agent presets remain stored in the backup even though PocketRisu does not run them.",
+    saveBackupForPocketRisu: "Export backup for PocketRisu",
+    saveBackupForPocketRisuConfirm: "Create a complete backup for PocketRisu? Characters, chats, assets, inlay images, tools, tool state, and agent presets are included. PocketRisu ignores Kei-Risu-only features but keeps their data for a later return to Kei-Risu.",
+    migrationLoadPocketRisuBackup: "Load PocketRisu backup",
 
     // System → Backups tab
     systemBackups: "Backups",
@@ -2329,10 +2334,10 @@ export const languageEnglish = {
     backupLocalRestoreDesc: "Restore from a backup file on your device.",
 
     backupSettingsOnly: "Export settings only",
-    backupSettingsOnlyDesc: "Export settings without characters, chats or inlay images. Modules, plugins, prompt presets, personas, lorebooks, theme and API keys are all included. Use this to seed a new instance.",
+    backupSettingsOnlyDesc: "Export settings without characters, chats or inlay images. Modules, plugins, prompt presets, tools and their state, agent presets, personas, lorebooks, theme and API keys are all included. Use this to seed a new instance.",
     backupSettingsOnlyEstimating: "Calculating size...",
     backupSettingsOnlyConfirm: (size: string) =>
-        `Build a settings backup to carry over to a new instance. About ${size}.\n\n• Included: settings, API keys, modules, plugins, presets, personas, lorebooks, theme\n• Left out: characters, chat history, inlay images\n\nRestoring overwrites the existing data on that device. Prefer a fresh instance over one that already has characters.`,
+        `Build a settings backup to carry over to a new instance. About ${size}.\n\n• Included: settings, API keys, modules, plugins, prompt presets, tools and their state, agent presets, personas, lorebooks, theme\n• Left out: characters, chat history, inlay images\n\nRestoring overwrites the existing data on that device. Prefer a fresh instance over one that already has characters.`,
     backupSettingsOnlyBreakdown: (
         baseSize: string,
         moduleCount: number,

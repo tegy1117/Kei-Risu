@@ -51,6 +51,7 @@ const MODULE_ASSET = 'module-asset-fff.png'
 const MODULE_ICON = 'module-icon-iii.png'
 const NAI_REF_IMAGE = 'nai-ref-ggg.png'
 const USER_ICON = 'user-icon-hhh.png'
+const TOOL_ASSET = 'tool-asset-kkk.txt'
 /**
  * Referenced by both a module's asset list and a persona's icon. Excluding
  * module assets must not drop it — the exclusion is computed as a set
@@ -62,7 +63,7 @@ const SHARED_ASSET = 'shared-asset-jjj.png'
 /** Assets that must survive a settings-only export. */
 const SETTINGS_ASSETS = [
   PERSONA_ICON, BACKGROUND, SOUND, MODULE_ASSET, MODULE_ICON,
-  NAI_REF_IMAGE, USER_ICON, SHARED_ASSET,
+  NAI_REF_IMAGE, USER_ICON, SHARED_ASSET, TOOL_ASSET,
 ]
 /** Assets that must NOT survive it. */
 const CHARACTER_ASSETS = [CHAR_IMAGE, CHAR_EMOTION]
@@ -70,7 +71,7 @@ const CHARACTER_ASSETS = [CHAR_IMAGE, CHAR_EMOTION]
 const MODULE_ONLY_ASSETS = [MODULE_ASSET]
 /** Assets that survive even with module assets excluded. */
 const NON_MODULE_ASSETS = [
-  PERSONA_ICON, BACKGROUND, SOUND, MODULE_ICON, NAI_REF_IMAGE, USER_ICON, SHARED_ASSET,
+  PERSONA_ICON, BACKGROUND, SOUND, MODULE_ICON, NAI_REF_IMAGE, USER_ICON, SHARED_ASSET, TOOL_ASSET,
 ]
 
 const COLD_KEY = '11111111-2222-3333-4444-555555555555'
@@ -144,8 +145,37 @@ function createRichSeed(): Buffer {
         ],
       },
     ],
-    botPresets: [{ name: 'Preset A', image: 'data:image/jpeg;base64,AAAA' }],
+    botPresets: [{
+      name: 'Preset A',
+      image: 'data:image/jpeg;base64,AAAA',
+      toolPolicy: { tools: { 'tool-1': true }, functions: {} },
+    }],
     botPresetsId: 0,
+    tools: [{
+      id: 'tool-1',
+      name: 'Stateful Tool',
+      namespace: 'stateful-tool',
+      assets: [['manual', `assets/${TOOL_ASSET}`, 'txt']],
+    }],
+    enabledTools: ['tool-1'],
+    toolStates: {
+      'tool-1': {
+        global: { variables: { counter: 3 }, lists: {}, memories: [] },
+        character: {},
+        chat: {},
+      },
+    },
+    toolPolicy: { tools: { 'tool-1': true }, functions: {} },
+    agentPresets: [{
+      id: 'agent-preset-1',
+      name: 'Review Pipeline',
+      maxParallel: 2,
+      stages: [{
+        id: 'stage-1',
+        nodes: [{ id: 'main-1', name: 'Main Output', kind: 'main', agentInfoBindings: {} }],
+      }],
+    }],
+    defaultAgentPresetId: 'agent-preset-1',
     plugins: [{ name: 'TestPlugin', script: '// noop' }],
     loreBook: [{ name: 'Global Lore', data: [] }],
     loreBookPage: 0,
@@ -237,12 +267,20 @@ describe('settings-only export', () => {
     expect((raw.modules as any[])[0].name).toBe('TestModule')
     expect(Array.isArray(raw.plugins) && (raw.plugins as any[]).length).toBe(1)
     expect(Array.isArray(raw.botPresets) && (raw.botPresets as any[]).length).toBe(1)
+    expect(Array.isArray(raw.tools) && (raw.tools as any[]).length).toBe(1)
+    expect(raw.enabledTools).toEqual(['tool-1'])
+    expect((raw.toolStates as any)['tool-1'].global.variables.counter).toBe(3)
+    expect((raw.toolPolicy as any).tools['tool-1']).toBe(true)
+    expect(Array.isArray(raw.agentPresets) && (raw.agentPresets as any[]).length).toBe(1)
+    expect((raw.agentPresets as any[])[0].name).toBe('Review Pipeline')
+    expect(raw.defaultAgentPresetId).toBe('agent-preset-1')
     expect(Array.isArray(raw.personas) && (raw.personas as any[]).length).toBe(2)
     expect((raw.personas as any[])[0].personaPrompt).toBe('persona text')
     expect(Array.isArray(raw.loreBook) && (raw.loreBook as any[]).length).toBe(1)
 
     // Inline (non-asset) preset icon rides along inside the DB blob.
     expect((raw.botPresets as any[])[0].image).toBe('data:image/jpeg;base64,AAAA')
+    expect((raw.botPresets as any[])[0].toolPolicy.tools['tool-1']).toBe(true)
   })
 
   test('keeps every settings-level asset and drops character art', async () => {
@@ -448,6 +486,10 @@ describe('settings-only round-trip', () => {
     expect(raw.openAIKey).toBe('sk-test-key-should-survive')
     expect((raw.modules as any[])[0].name).toBe('TestModule')
     expect((raw.personas as any[])[0].icon).toBe(`assets/${PERSONA_ICON}`)
+    expect((raw.tools as any[])[0].name).toBe('Stateful Tool')
+    expect((raw.toolStates as any)['tool-1'].global.variables.counter).toBe(3)
+    expect((raw.agentPresets as any[])[0].name).toBe('Review Pipeline')
+    expect(raw.defaultAgentPresetId).toBe('agent-preset-1')
 
     // Asset payloads have to land as real bytes, not just surviving references.
     const names = decodeBackup(await targetClient.exportBackup()).map(e => e.name)

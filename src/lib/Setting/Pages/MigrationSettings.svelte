@@ -8,6 +8,7 @@
     import { alertConfirm } from "src/ts/alert";
     import {
         LoadLocalBackup,
+        SaveLocalBackupForPocketRisu,
         SaveLocalBackupForUpstream,
         SavePartialLocalBackup,
         ImportFromSaveZip,
@@ -34,6 +35,31 @@
             </ShButton>
         {/snippet}
     </ShAlert>
+
+    <!-- Migration: PocketRisu ↔ Kei-Risu ────────────────────────────── -->
+    <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
+        <div class="font-medium text-textcolor mb-1">{language.migrationPocketRisu}</div>
+        <p class="text-textcolor2 text-sm leading-relaxed mb-3">{language.migrationPocketRisuDesc}</p>
+        <div class="flex flex-col gap-2">
+            <Button
+                onclick={async () => {
+                    if (await alertConfirm(language.saveBackupForPocketRisuConfirm)) {
+                        SaveLocalBackupForPocketRisu();
+                    }
+                }} className="w-full">
+                {language.saveBackupForPocketRisu}
+            </Button>
+
+            <Button
+                onclick={async () => {
+                    if ((await alertConfirm(language.backupLoadConfirm)) && (await alertConfirm(language.backupLoadConfirm2))) {
+                        LoadLocalBackup();
+                    }
+                }} className="w-full">
+                {language.migrationLoadPocketRisuBackup}
+            </Button>
+        </div>
+    </div>
 
     <!-- Migration: upstream RisuAI ↔ NodeOnly ─────────────────────────── -->
     <Button

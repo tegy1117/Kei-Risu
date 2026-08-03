@@ -2344,7 +2344,7 @@ export const languageKorean = {
   // 데이터 이전 (구 "계정 & 파일")
   migration: "데이터 이전",
   migrationDesc:
-    "원본 RisuAI(또는 호환 시스템)에서 데이터를 가져오거나 Kei-Risu 데이터를 원본 호환 형식으로 내보냅니다.",
+    "PocketRisu, 원본 RisuAI, Kei-Risu 사이에서 호환 백업 파일로 데이터를 옮깁니다.",
   migrationInfoBackupMoved:
     "서버 백업, 로컬 백업, 자동 스냅샷 관리는 [시스템 → 백업] 탭으로 이동했습니다.",
   migrationGotoBackupTab: "백업 탭 열기",
@@ -2355,6 +2355,13 @@ export const languageKorean = {
   migrationSaveFolderDesc:
     "이전에 사용하던 노드리스/RisuAI 인스턴스의 save 폴더를 Kei-Risu로 가져올 때 사용합니다.",
   migrationLoadUpstreamBackup: "원본 리스 로컬 백업 불러오기",
+  migrationPocketRisu: "PocketRisu 데이터 이전",
+  migrationPocketRisuDesc:
+    "PocketRisu와 Kei-Risu 사이에서 전체 백업을 양방향으로 옮깁니다. 가져오기는 현재 데이터를 교체합니다. PocketRisu에서 실행할 수 없는 Kei-Risu 전용 툴과 에이전트 프리셋도 백업 안에 보존됩니다.",
+  saveBackupForPocketRisu: "PocketRisu용 백업 내보내기",
+  saveBackupForPocketRisuConfirm:
+    "PocketRisu용 전체 백업을 만드시겠습니까? 캐릭터, 채팅, 자산, 인레이 이미지, 툴, 툴 상태, 에이전트 프리셋이 모두 포함됩니다. PocketRisu는 Kei-Risu 전용 기능을 실행하지 않지만, 나중에 Kei-Risu로 돌아올 수 있도록 데이터는 유지합니다.",
+  migrationLoadPocketRisuBackup: "PocketRisu 백업 불러오기",
 
   // 시스템 → 백업 탭
   systemBackups: "백업",
@@ -2440,10 +2447,10 @@ export const languageKorean = {
 
   backupSettingsOnly: "설정만 내보내기",
   backupSettingsOnlyDesc:
-    "캐릭터와 채팅 기록, 인레이 이미지를 빼고 설정만 내보냅니다. 모듈, 플러그인, 프리셋, 페르소나, 로어북, 테마, API 키는 그대로 담깁니다. 새 인스턴스를 세팅할 때 쓰세요.",
+    "캐릭터와 채팅 기록, 인레이 이미지를 빼고 설정만 내보냅니다. 모듈, 플러그인, 프롬프트 프리셋, 툴과 툴 상태, 에이전트 프리셋, 페르소나, 로어북, 테마, API 키는 그대로 담깁니다. 새 인스턴스를 세팅할 때 쓰세요.",
   backupSettingsOnlyEstimating: "용량 확인 중...",
   backupSettingsOnlyConfirm: (size: string) =>
-    `새 인스턴스에 옮길 설정 백업을 만듭니다. 약 ${size}입니다.\n\n• 담기는 것: 설정, API 키, 모듈, 플러그인, 프리셋, 페르소나, 로어북, 테마\n• 빠지는 것: 캐릭터, 채팅 기록, 인레이 이미지\n\n복원하면 그 기기의 기존 데이터를 덮어씁니다. 캐릭터가 있는 기기보다는 새 인스턴스에 쓰는 것을 권장합니다.`,
+    `새 인스턴스에 옮길 설정 백업을 만듭니다. 약 ${size}입니다.\n\n• 담기는 것: 설정, API 키, 모듈, 플러그인, 프롬프트 프리셋, 툴과 툴 상태, 에이전트 프리셋, 페르소나, 로어북, 테마\n• 빠지는 것: 캐릭터, 채팅 기록, 인레이 이미지\n\n복원하면 그 기기의 기존 데이터를 덮어씁니다. 캐릭터가 있는 기기보다는 새 인스턴스에 쓰는 것을 권장합니다.`,
   backupSettingsOnlyBreakdown: (
     baseSize: string,
     moduleCount: number,
