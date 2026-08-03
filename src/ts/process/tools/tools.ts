@@ -960,7 +960,9 @@ function toolRegexOrder(script: ToolFunctionRegexScript): number {
 
 function normalizeToolRegexFlags(script: Pick<ToolFunctionRegexScript, 'ableFlag' | 'flag'>): string {
     const raw = script.ableFlag ? (script.flag || 'g') : 'g'
-    const flags = raw.replace(/<[^>]+>/g, '').replace(/[^dgimsuvy]/g, '')
+    const metadataIndex = raw.indexOf('<')
+    const flagText = metadataIndex === -1 ? raw : raw.slice(0, metadataIndex)
+    const flags = flagText.replace(/[^dgimsuvy]/g, '')
     const unique = [...new Set(flags)].join('')
     return unique || 'u'
 }
