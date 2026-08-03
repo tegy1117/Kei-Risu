@@ -200,6 +200,27 @@ describe('tool package validation', () => {
         expect(errors).toContain('Output route modelTemplate is required')
     })
 
+    test('validates function visibility, presentation, and function regex settings without throwing', () => {
+        const tool = sampleTool()
+        tool.functions[0].enabled = 'yes' as never
+        tool.functions[0].presentation = {
+            showInChat: 'yes', pendingTemplate: 1, successTemplate: 'ok', errorTemplate: 'error',
+        } as never
+        tool.functionRegex = [{
+            id: 'regex-1', functionId: 'fn-a', comment: 'bad settings', in: 'x', out: 'y', type: 'arguments',
+            flag: 1, ableFlag: 'yes', enabled: 'yes',
+        } as never]
+
+        expect(() => validateToolPackage(tool)).not.toThrow()
+        const errors = validateToolPackage(tool).join('\n')
+        expect(errors).toContain('Function enabled must be a boolean')
+        expect(errors).toContain('presentation.showInChat must be a boolean')
+        expect(errors).toContain('presentation.pendingTemplate must be text')
+        expect(errors).toContain('Function regex flags must be text')
+        expect(errors).toContain('Function regex ableFlag must be a boolean')
+        expect(errors).toContain('Function regex enabled must be a boolean')
+    })
+
     test('passes approved low-level access to active tool triggers', () => {
         const tool = sampleTool()
         tool.lowLevelAccess = true

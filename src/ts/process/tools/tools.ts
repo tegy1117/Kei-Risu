@@ -111,6 +111,16 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
         if (!functionPattern.test(fn.name ?? '')) errors.push(`Invalid function name: ${fn.name || '(empty)'}`)
         if (names.has(fn.name)) errors.push(`Duplicate function name: ${fn.name}`)
         names.add(fn.name)
+        if (typeof fn.enabled !== 'boolean') errors.push(`Function enabled must be a boolean for ${fn.name}.`)
+        if (fn.presentation !== undefined) {
+            if (!isObject(fn.presentation)) errors.push(`Invalid presentation for ${fn.name}.`)
+            else {
+                if (fn.presentation.showInChat !== undefined && typeof fn.presentation.showInChat !== 'boolean') errors.push(`presentation.showInChat must be a boolean for ${fn.name}.`)
+                for (const key of ['pendingTemplate', 'successTemplate', 'errorTemplate'] as const) {
+                    if (fn.presentation[key] !== undefined && typeof fn.presentation[key] !== 'string') errors.push(`presentation.${key} must be text for ${fn.name}.`)
+                }
+            }
+        }
         const params = new Set<string>()
         const paramIds = new Set<string>()
         for (const param of fn.parameters ?? []) {
@@ -225,8 +235,23 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
             errors.push('Function regex scripts require comment, in, and out text fields.')
             continue
         }
-        try { new RegExp(script.in, normalizeToolRegexFlags(script)) }
-        catch { errors.push(`Invalid function regex: ${script.comment || script.in}`) }
+        let settingsValid = true
+        if (script.flag !== undefined && typeof script.flag !== 'string') {
+            errors.push(`Function regex flags must be text: ${script.comment || script.in}`)
+            settingsValid = false
+        }
+        if (script.ableFlag !== undefined && typeof script.ableFlag !== 'boolean') {
+            errors.push(`Function regex ableFlag must be a boolean: ${script.comment || script.in}`)
+            settingsValid = false
+        }
+        if (script.enabled !== undefined && typeof script.enabled !== 'boolean') {
+            errors.push(`Function regex enabled must be a boolean: ${script.comment || script.in}`)
+            settingsValid = false
+        }
+        if (settingsValid) {
+            try { new RegExp(script.in, normalizeToolRegexFlags(script)) }
+            catch { errors.push(`Invalid function regex: ${script.comment || script.in}`) }
+        }
     }
     for (const trigger of tool.trigger ?? []) {
         if (!trigger || typeof trigger.comment !== 'string' || !triggerTypes.has(trigger.type) || !Array.isArray(trigger.conditions) || !Array.isArray(trigger.effect)) {

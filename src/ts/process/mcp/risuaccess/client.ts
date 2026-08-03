@@ -68,7 +68,7 @@ Managed Tools are user-authored packages of callable functions, state definition
 `
     super('internal:risuai')
     this.serverInfo.serverInfo.name = 'Risuai Access MCP'
-    this.serverInfo.serverInfo.version = '1.0.0'
+    this.serverInfo.serverInfo.version = '1.1.0'
     this.serverInfo.instructions =
       "Risuai Access MCP provides access to Risuai's features and tools, which is the software currently running on. Use the available tools to interact with Risuai's functionalities." +
       additionalServerInfo

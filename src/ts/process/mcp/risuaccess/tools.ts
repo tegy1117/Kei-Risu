@@ -6,8 +6,10 @@ import {
   createManagedToolPackage,
   deleteManagedToolPackage,
   getToolActivation,
+  getToolPromptPolicy,
   replaceManagedToolPackage,
   setToolActivation,
+  setToolPromptPolicy,
   type ToolActivationScope,
 } from 'src/ts/process/tools/management'
 import { validateToolPackage, validateToolPluginSource } from 'src/ts/process/tools/tools'
@@ -21,6 +23,7 @@ import type {
   ToolFunctionRegexScript,
   ToolFunctionPresentation,
   ToolPermission,
+  ToolPolicyValue,
 } from 'src/ts/process/tools/types'
 import { v4 } from 'uuid'
 import { type MCPTool, MCPToolHandler, type RPCToolCallContent } from '../mcplib'
@@ -155,6 +158,168 @@ const agentExecutionSchema = {
   },
   required: ['kind', 'modelPresetId', 'systemPrompt', 'userPrompt', 'allowedTools', 'outputRoutes'],
 }
+
+const functionPresentationSchema = {
+  type: 'object',
+  properties: {
+    showInChat: { type: 'boolean', description: 'Whether pending and completed call cards are shown in chat.' },
+    pendingTemplate: { type: 'string' },
+    successTemplate: { type: 'string' },
+    errorTemplate: { type: 'string' },
+  },
+}
+
+const functionRegexSchema = {
+  type: 'object',
+  properties: {
+    comment: { type: 'string' },
+    in: { type: 'string' },
+    out: { type: 'string' },
+    type: { type: 'string', enum: ['arguments', 'agentOutput', 'modelResult', 'visibleCall', 'pendingCard', 'successCard', 'errorCard'] },
+    flag: { type: 'string', description: 'ECMAScript flags optionally followed by <order N>; higher order runs first.' },
+    ableFlag: { type: 'boolean' },
+    enabled: { type: 'boolean' },
+  },
+  required: ['comment', 'in', 'out', 'type'],
+}
+
+const regexSchema = {
+  type: 'object',
+  properties: {
+    comment: { type: 'string' },
+    in: { type: 'string' },
+    out: { type: 'string' },
+    type: { type: 'string', enum: ['editdisplay', 'editinput', 'editoutput', 'editprocess', 'edittrans'] },
+    flag: { type: 'string' },
+    ableFlag: { type: 'boolean' },
+  },
+  required: ['comment', 'in', 'out', 'type'],
+}
+
+const triggerSchema = {
+  type: 'object',
+  properties: {
+    comment: { type: 'string' },
+    type: { type: 'string', enum: ['start', 'manual', 'output', 'input', 'display', 'request'] },
+    conditions: { type: 'array', items: { type: 'object' } },
+    effect: { type: 'array', items: { type: 'object' } },
+  },
+  required: ['comment', 'type', 'conditions', 'effect'],
+}
+
+const operationValueSchemas = {
+  setMetadata: {
+    type: 'object', properties: {
+      name: { type: 'string' }, description: { type: 'string' }, namespace: { type: 'string' }, version: { type: 'string' },
+    },
+  },
+  upsertFunction: {
+    type: 'object', properties: {
+      id: { type: 'string', description: 'Compatibility input; prefer operation.targetId when updating.' },
+      name: { type: 'string' }, description: { type: 'string' }, enabled: { type: 'boolean' },
+    },
+  },
+  upsertParameter: {
+    type: 'object', properties: {
+      id: { type: 'string', description: 'Compatibility input; prefer operation.targetId when updating.' },
+      name: { type: 'string' }, description: { type: 'string' },
+      type: { type: 'string', enum: ['string', 'number', 'integer', 'boolean', 'json', 'string[]', 'number[]'] },
+      required: { type: 'boolean' }, enum: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  setFunctionExecution: {
+    anyOf: [
+      { type: 'object', properties: { kind: { type: 'string', enum: ['script'] } }, required: ['kind'] },
+      agentExecutionSchema,
+    ],
+  },
+  setFunctionPresentation: functionPresentationSchema,
+  upsertVariable: {
+    type: 'object', properties: {
+      id: { type: 'string', description: 'Compatibility input; prefer operation.targetId when updating.' },
+      name: { type: 'string' }, description: { type: 'string' }, type: { type: 'string', enum: ['string', 'number', 'boolean', 'json'] },
+      scope: { type: 'string', enum: ['global', 'character', 'chat'] }, defaultValue: {},
+    },
+  },
+  upsertList: {
+    type: 'object', properties: {
+      id: { type: 'string', description: 'Compatibility input; prefer operation.targetId when updating.' },
+      name: { type: 'string' }, description: { type: 'string' }, itemType: { type: 'string', enum: ['string', 'number', 'boolean', 'json'] },
+      scope: { type: 'string', enum: ['global', 'character', 'chat'] }, defaultItems: { type: 'array' },
+    },
+  },
+  setModuleFeatures: {
+    type: 'object', properties: {
+      customToggle: { type: 'string' }, backgroundEmbedding: { type: 'string' }, lowLevelAccess: { type: 'boolean' },
+    },
+  },
+  upsertRegex: regexSchema,
+  upsertFunctionRegex: functionRegexSchema,
+  upsertTrigger: triggerSchema,
+  setPlugin: {
+    type: 'object', properties: {
+      language: { type: 'string', enum: ['javascript', 'typescript'] }, source: { type: 'string' },
+      permissions: { type: 'array', items: { type: 'string', enum: ['askUser', 'network', 'database'] } },
+    },
+  },
+}
+
+function draftOperationSchema(kind: typeof operationKinds[number]) {
+  const properties: Record<string, unknown> = { kind: { type: 'string', enum: [kind] } }
+  const required = ['kind']
+  if (['deleteFunction', 'deleteFunctionRegex', 'deleteVariable', 'deleteList'].includes(kind)) {
+    properties.targetId = { type: 'string' }
+    required.push('targetId')
+  } else if (kind === 'deleteParameter') {
+    properties.functionId = { type: 'string' }
+    properties.targetId = { type: 'string' }
+    required.push('functionId', 'targetId')
+  } else if (kind === 'deleteRegex' || kind === 'deleteTrigger') {
+    properties.index = { type: 'integer', minimum: 0 }
+    required.push('index')
+  } else if (kind === 'setActivation') {
+    properties.scope = { type: 'string', enum: ['unchanged', 'disabled', 'global', 'character', 'chat'] }
+    required.push('scope')
+  } else {
+    const valueSchema = operationValueSchemas[kind as keyof typeof operationValueSchemas]
+    properties.value = valueSchema
+    required.push('value')
+    if (['upsertParameter', 'setFunctionExecution', 'setFunctionPresentation', 'upsertFunctionRegex'].includes(kind)) {
+      properties.functionId = { type: 'string' }
+      required.push('functionId')
+    }
+    if (['upsertFunction', 'upsertParameter', 'upsertVariable', 'upsertList', 'upsertFunctionRegex'].includes(kind)) {
+      properties.targetId = { type: 'string', description: 'Stable ID to update. Omit to append with an automatically generated ID.' }
+    }
+    if (kind === 'upsertRegex' || kind === 'upsertTrigger') {
+      properties.index = { type: 'integer', minimum: 0, description: 'Existing index to replace. Omit to append.' }
+    }
+  }
+  if (kind === 'upsertFunctionRegex') {
+    const legacyValueSchema = {
+      ...functionRegexSchema,
+      properties: {
+        ...functionRegexSchema.properties,
+        id: { type: 'string', description: 'Compatibility input for operation.targetId.' },
+        functionId: { type: 'string', description: 'Compatibility input for operation.functionId.' },
+      },
+      required: [...functionRegexSchema.required, 'functionId'],
+    }
+    return {
+      anyOf: [
+        { type: 'object', properties, required },
+        {
+          type: 'object',
+          properties: { ...properties, value: legacyValueSchema },
+          required: ['kind', 'value'],
+        },
+      ],
+    }
+  }
+  return { type: 'object', properties, required }
+}
+
+const draftOperationSchemas = Object.fromEntries(operationKinds.map((kind) => [kind, draftOperationSchema(kind)]))
 
 function sameValue(left: unknown, right: unknown) {
   return JSON.stringify(left) === JSON.stringify(right)
@@ -378,25 +543,14 @@ export class ToolPackageHandler extends MCPToolHandler {
       },
       {
         name: 'risu-edit-tool-draft',
-        description: `Apply a batch of in-memory draft operations. Kinds: ${operationKinds.join(', ')}. Before setFunctionExecution, call risu-get-tool-authoring-context. Canonical agent fields are kind, modelPresetId, systemPrompt, userPrompt, allowedTools, and outputRoutes; each route uses modelTemplate. New functions, parameters, variables, and lists receive IDs automatically.`,
+        description: `Apply a batch of in-memory draft operations. Kinds: ${operationKinds.join(', ')}. Before editing, call risu-get-tool-authoring-context. Canonical agent fields are kind, modelPresetId, systemPrompt, userPrompt, allowedTools, and outputRoutes; each route uses modelTemplate. New functions, parameters, variables, lists, and function regex scripts receive IDs automatically.`,
         inputSchema: {
           type: 'object',
           properties: {
             draftId: draftIdSchema.draftId,
             operations: {
               type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  kind: { type: 'string', enum: [...operationKinds] },
-                  targetId: { type: 'string', description: 'Stable function, parameter, variable, list, or function-regex ID.' },
-                  functionId: { type: 'string', description: 'Parent function ID for parameter/execution/presentation operations.' },
-                  index: { type: 'integer', description: 'Regex or trigger index. Omit on upsert to append.' },
-                  scope: { type: 'string', enum: ['unchanged', 'disabled', 'global', 'character', 'chat'] },
-                  value: { type: 'object', description: 'Operation-specific fields. For setFunctionExecution use the exact operationSchemas.setFunctionExecution schema returned by risu-get-tool-authoring-context.' },
-                },
-                required: ['kind'],
-              },
+              items: { anyOf: Object.values(draftOperationSchemas) },
             },
           },
           required: ['draftId', 'operations'],
@@ -431,6 +585,33 @@ export class ToolPackageHandler extends MCPToolHandler {
         },
       },
       {
+        name: 'risu-set-tool-policy',
+        description: 'Set whether a managed tool package or one of its functions is exposed to models after user confirmation. Inherit removes the stored override.',
+        inputSchema: {
+          anyOf: [
+            {
+              type: 'object',
+              properties: {
+                ...toolIdSchema,
+                level: { type: 'string', enum: ['tool'] },
+                policy: { type: 'string', enum: ['inherit', 'on', 'off'] },
+              },
+              required: ['id', 'level', 'policy'],
+            },
+            {
+              type: 'object',
+              properties: {
+                ...toolIdSchema,
+                level: { type: 'string', enum: ['function'] },
+                functionId: { type: 'string' },
+                policy: { type: 'string', enum: ['inherit', 'on', 'off'] },
+              },
+              required: ['id', 'level', 'functionId', 'policy'],
+            },
+          ],
+        },
+      },
+      {
         name: 'risu-delete-tool',
         description: 'Delete a user-created managed tool and its saved references after user confirmation. Built-in tools are protected.',
         inputSchema: { type: 'object', properties: toolIdSchema, required: ['id'] },
@@ -450,6 +631,7 @@ export class ToolPackageHandler extends MCPToolHandler {
       case 'risu-commit-tool-draft': return response(await this.commitDraft(args.draftId))
       case 'risu-discard-tool-draft': return response(this.discardDraft(args.draftId))
       case 'risu-set-tool-activation': return response(await this.changeActivation(args.id, args.scope, args.enabled))
+      case 'risu-set-tool-policy': return response(await this.changePolicy(args.id, args.level, args.policy, args.functionId))
       case 'risu-delete-tool': return response(await this.deleteTool(args.id))
     }
     return null
@@ -475,13 +657,14 @@ export class ToolPackageHandler extends MCPToolHandler {
       builtin: Boolean(tool.builtinId),
       readonly: tool.readonly === true,
       activation: getToolActivation(tool.id),
+      promptPolicy: getToolPromptPolicy(tool),
     }))
   }
 
   private getTool(id: string) {
     const tool = this.findTool(id)
     if (!tool) throw new Error(`Tool with ID ${id} not found.`)
-    return { tool: publicTool(tool), activation: getToolActivation(tool.id) }
+    return { tool: publicTool(tool), activation: getToolActivation(tool.id), promptPolicy: getToolPromptPolicy(tool) }
   }
 
   private async getAuthoringContext() {
@@ -491,7 +674,7 @@ export class ToolPackageHandler extends MCPToolHandler {
     const modelPresets = (db.modelPresets ?? []).map((preset) => ({ id: preset.id, name: preset.name, toolUse: preset.toolUse === true }))
     const examplePreset = modelPresets[0]
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       modelPresets,
       managedTools: db.tools.flatMap((tool) => tool.functions.map((fn) => ({ kind: 'managed', toolId: tool.id, functionId: fn.id, name: `${tool.namespace}__${fn.name}` }))),
       externalTools: external.map((tool) => ({ kind: 'external', name: tool.name, source: tool.mcpURL, description: tool.description })),
@@ -500,39 +683,12 @@ export class ToolPackageHandler extends MCPToolHandler {
       scopes: ['global', 'character', 'chat'],
       executionKinds: ['script', 'agent'],
       operationSchemas: {
-        setFunctionExecution: {
-          anyOf: [
-            { type: 'object', properties: { kind: { type: 'string', enum: ['script'] } }, required: ['kind'] },
-            agentExecutionSchema,
-          ],
-        },
-        setFunctionPresentation: {
-          type: 'object',
-          properties: {
-            showInChat: { type: 'boolean' },
-            pendingTemplate: { type: 'string' },
-            successTemplate: { type: 'string' },
-            errorTemplate: { type: 'string' },
-          },
-        },
+        ...operationValueSchemas,
         agentOutputRoute: agentOutputRouteSchema,
         agentStateAction: agentStateActionSchema,
-        functionRegex: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            functionId: { type: 'string' },
-            comment: { type: 'string' },
-            in: { type: 'string' },
-            out: { type: 'string' },
-            type: { type: 'string', enum: ['arguments', 'agentOutput', 'modelResult', 'visibleCall', 'pendingCard', 'successCard', 'errorCard'] },
-            flag: { type: 'string' },
-            ableFlag: { type: 'boolean' },
-            enabled: { type: 'boolean' },
-          },
-          required: ['functionId', 'comment', 'in', 'out', 'type'],
-        },
+        functionRegex: functionRegexSchema,
       },
+      draftOperationSchemas,
       authoringExamples: {
         setFunctionExecutionAgent: examplePreset ? {
           kind: 'agent',
@@ -563,6 +719,9 @@ export class ToolPackageHandler extends MCPToolHandler {
         'Use an exact modelPresets[].id as modelPresetId; there is no separate agent model registry.',
         'systemPrompt and userPrompt must both be strings, and at least one must contain text.',
         'Compatibility aliases are accepted on input but only canonical fields are stored.',
+        'Function regex uses operation.functionId and optional operation.targetId. Existing value.functionId and value.id inputs are normalized for compatibility.',
+        'Function regex flag may include <order N> after ECMAScript flags; higher order runs first.',
+        'agentOutput and visibleCall function regex stages require an agent function.',
       ],
       templateTokens: ['{{tool_args}}', '{{tool_arg::name}}', '{{tool_last_user}}', '{{tool_chat_history}}', '{{tool_character}}', '{{tool_state::chat}}', '{{tool_capture::name}}', '{{tool_result}}', '{{tool_updates}}', '{{tool_asset::filename}}'],
       pluginApi: ['registerFunction', 'askUser', 'requestDiceRoll', 'getVariable', 'setVariable', 'resetVariable', 'getList', 'setList', 'memoryList', 'memorySearch', 'memoryRead', 'memoryUpsert', 'memoryDelete', 'nativeFetch', 'databaseGet', 'databaseSet'],
@@ -712,9 +871,25 @@ export class ToolPackageHandler extends MCPToolHandler {
         tool.regex.splice(operation.index, 1); return
       case 'upsertFunctionRegex': {
         tool.functionRegex ??= []
-        const script = safeStructuredClone(value) as ToolFunctionRegexScript
-        script.id = operation.targetId ?? script.id ?? v4()
-        script.functionId = operation.functionId ?? script.functionId
+        const scriptInput = safeStructuredClone(value) as Record<string, any>
+        let targetId = operation.targetId
+        let functionId = operation.functionId
+        if (scriptInput.id !== undefined) {
+          if (typeof scriptInput.id !== 'string') throw new Error('Function regex value.id must be text.')
+          if (targetId !== undefined && targetId !== scriptInput.id) throw new Error('Function regex value.id conflicts with operation.targetId.')
+          targetId = scriptInput.id
+          delete scriptInput.id
+          warnings.push('Function regex value.id was normalized to operation.targetId.')
+        }
+        if (scriptInput.functionId !== undefined) {
+          if (typeof scriptInput.functionId !== 'string') throw new Error('Function regex value.functionId must be text.')
+          if (functionId !== undefined && functionId !== scriptInput.functionId) throw new Error('Function regex value.functionId conflicts with operation.functionId.')
+          functionId = scriptInput.functionId
+          delete scriptInput.functionId
+          warnings.push('Function regex value.functionId was normalized to operation.functionId.')
+        }
+        if (!functionId || !tool.functions.some((fn) => fn.id === functionId)) throw new Error(`Function ${functionId || '(empty)'} not found.`)
+        const script = { ...scriptInput, id: targetId ?? v4(), functionId } as ToolFunctionRegexScript
         upsertById(tool.functionRegex, script.id, () => script)
         return
       }
@@ -865,6 +1040,21 @@ export class ToolPackageHandler extends MCPToolHandler {
     if (!allowed) return { updated: false, error: 'Access denied by user.' }
     setToolActivation(id, scope, enabled)
     return { updated: true, activation: getToolActivation(id) }
+  }
+
+  private async changePolicy(id: string, level: 'tool' | 'function', policy: ToolPolicyValue, functionId?: string) {
+    const tool = this.findTool(id)
+    if (!tool) throw new Error(`Tool with ID ${id} not found.`)
+    if (level !== 'tool' && level !== 'function') throw new Error(`Invalid policy level: ${level}`)
+    if (!['inherit', 'on', 'off'].includes(policy)) throw new Error(`Invalid tool policy: ${policy}`)
+    const fn = level === 'function' ? tool.functions.find((item) => item.id === functionId) : undefined
+    if (level === 'function' && !fn) throw new Error(`Function ${functionId || '(empty)'} not found.`)
+    if (level === 'tool' && functionId !== undefined) throw new Error('functionId is only valid for function policy changes.')
+    const target = fn ? `function (${tool.namespace}__${fn.name})` : `tool (${tool.name})`
+    const allowed = await this.promptAccess('risu-set-tool-policy', `set ${target} prompt policy to ${policy}`)
+    if (!allowed) return { updated: false, error: 'Access denied by user.' }
+    setToolPromptPolicy(tool, level, policy, functionId)
+    return { updated: true, promptPolicy: getToolPromptPolicy(tool) }
   }
 
   private async deleteTool(id: string) {

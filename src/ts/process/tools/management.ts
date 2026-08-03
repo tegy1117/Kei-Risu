@@ -10,6 +10,16 @@ export interface ToolActivationState {
     chat: boolean
 }
 
+export interface ToolPromptPolicyState {
+    tool: ToolPolicyValue
+    functions: Array<{
+        id: string
+        name: string
+        wireName: string
+        policy: ToolPolicyValue
+    }>
+}
+
 export function getToolActivation(toolId: string): ToolActivationState {
     const db = getDatabase()
     return {
@@ -47,6 +57,39 @@ export function setToolActivation(toolId: string, scope: ToolActivationScope, en
     if (enabled) ids.add(toolId)
     else ids.delete(toolId)
     chat.tools = [...ids]
+}
+
+export function getToolPromptPolicy(tool: RisuToolPackage): ToolPromptPolicyState {
+    const policy = getDatabase().toolPolicy ?? { tools: {}, functions: {} }
+    return {
+        tool: policy.tools[tool.namespace] ?? 'inherit',
+        functions: tool.functions.map((fn) => {
+            const wireName = toolWireName(tool.namespace, fn.name)
+            return { id: fn.id, name: fn.name, wireName, policy: policy.functions[wireName] ?? 'inherit' }
+        }),
+    }
+}
+
+export function setToolPromptPolicy(
+    tool: RisuToolPackage,
+    level: 'tool' | 'function',
+    value: ToolPolicyValue,
+    functionId?: string,
+) {
+    const db = getDatabase()
+    if (!(db.tools ?? []).some((item) => item.id === tool.id)) throw new Error(`Tool with ID ${tool.id} not found.`)
+    db.toolPolicy ??= { tools: {}, functions: {} }
+    if (level === 'tool') {
+        if (value === 'inherit') delete db.toolPolicy.tools[tool.namespace]
+        else db.toolPolicy.tools[tool.namespace] = value
+    } else {
+        const fn = tool.functions.find((item) => item.id === functionId)
+        if (!fn) throw new Error(`Function ${functionId || '(empty)'} not found.`)
+        const wireName = toolWireName(tool.namespace, fn.name)
+        if (value === 'inherit') delete db.toolPolicy.functions[wireName]
+        else db.toolPolicy.functions[wireName] = value
+    }
+    db.toolPolicy = db.toolPolicy
 }
 
 function migratePolicy(previous: RisuToolPackage, next: RisuToolPackage) {
