@@ -18,6 +18,7 @@ import type {
   RisuToolParameter,
   RisuToolVariable,
   ToolFunctionExecution,
+  ToolFunctionRegexScript,
   ToolFunctionPresentation,
   ToolPermission,
 } from 'src/ts/process/tools/types'
@@ -60,6 +61,8 @@ const operationKinds = [
   'setModuleFeatures',
   'upsertRegex',
   'deleteRegex',
+  'upsertFunctionRegex',
+  'deleteFunctionRegex',
   'upsertTrigger',
   'deleteTrigger',
   'setPlugin',
@@ -256,6 +259,7 @@ function blankTool(): RisuToolPackage {
     backgroundEmbedding: '',
     lowLevelAccess: false,
     regex: [],
+    functionRegex: [],
     trigger: [],
     assets: [],
     plugin: { language: 'javascript', source: '', permissions: [] },
@@ -385,7 +389,7 @@ export class ToolPackageHandler extends MCPToolHandler {
                 type: 'object',
                 properties: {
                   kind: { type: 'string', enum: [...operationKinds] },
-                  targetId: { type: 'string', description: 'Stable function, parameter, variable, or list ID.' },
+                  targetId: { type: 'string', description: 'Stable function, parameter, variable, list, or function-regex ID.' },
                   functionId: { type: 'string', description: 'Parent function ID for parameter/execution/presentation operations.' },
                   index: { type: 'integer', description: 'Regex or trigger index. Omit on upsert to append.' },
                   scope: { type: 'string', enum: ['unchanged', 'disabled', 'global', 'character', 'chat'] },
@@ -502,8 +506,32 @@ export class ToolPackageHandler extends MCPToolHandler {
             agentExecutionSchema,
           ],
         },
+        setFunctionPresentation: {
+          type: 'object',
+          properties: {
+            showInChat: { type: 'boolean' },
+            pendingTemplate: { type: 'string' },
+            successTemplate: { type: 'string' },
+            errorTemplate: { type: 'string' },
+          },
+        },
         agentOutputRoute: agentOutputRouteSchema,
         agentStateAction: agentStateActionSchema,
+        functionRegex: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            functionId: { type: 'string' },
+            comment: { type: 'string' },
+            in: { type: 'string' },
+            out: { type: 'string' },
+            type: { type: 'string', enum: ['arguments', 'agentOutput', 'modelResult', 'visibleCall', 'pendingCard', 'successCard', 'errorCard'] },
+            flag: { type: 'string' },
+            ableFlag: { type: 'boolean' },
+            enabled: { type: 'boolean' },
+          },
+          required: ['functionId', 'comment', 'in', 'out', 'type'],
+        },
       },
       authoringExamples: {
         setFunctionExecutionAgent: examplePreset ? {
@@ -541,6 +569,7 @@ export class ToolPackageHandler extends MCPToolHandler {
       pluginExample: "await risuai.registerFunction('run', async (args) => ({ ok: true, value: args.value }))",
       customToggleFormat: 'key=label=type=options; type may be omitted, select, text, group, groupEnd, or divider.',
       regexTypes: ['editdisplay', 'editinput', 'editoutput', 'editprocess', 'edittrans'],
+      functionRegexTypes: ['arguments', 'agentOutput', 'modelResult', 'visibleCall', 'pendingCard', 'successCard', 'errorCard'],
       triggerExamples: {
         lua: [{ comment: '', type: 'start', conditions: [], effect: [{ type: 'triggerlua', code: '' }] }],
         v2: [{ comment: '', type: 'manual', conditions: [], effect: [{ type: 'v2Header', code: '', indent: 0 }] }, { comment: 'New Event', type: 'manual', conditions: [], effect: [] }],
@@ -616,7 +645,11 @@ export class ToolPackageHandler extends MCPToolHandler {
       case 'upsertFunction':
         upsertById(tool.functions, operation.targetId ?? value.id, (current) => normalizeFunction(value, current))
         return
-      case 'deleteFunction': removeById(tool.functions, operation.targetId, 'Function'); return
+      case 'deleteFunction': {
+        removeById(tool.functions, operation.targetId, 'Function')
+        tool.functionRegex = (tool.functionRegex ?? []).filter((script) => script.functionId !== operation.targetId)
+        return
+      }
       case 'upsertParameter': {
         const fn = requireFunction()
         upsertById(fn.parameters, operation.targetId ?? value.id, (current) => normalizeParameter(value, current))
@@ -625,7 +658,11 @@ export class ToolPackageHandler extends MCPToolHandler {
       case 'deleteParameter': removeById(requireFunction().parameters, operation.targetId, 'Parameter'); return
       case 'setFunctionExecution': {
         const fn = requireFunction()
-        if (value.kind === 'script') fn.execution = { kind: 'script' }
+        if (value.kind === 'script') {
+          fn.execution = { kind: 'script' }
+          tool.functionRegex = (tool.functionRegex ?? []).filter((script) =>
+            script.functionId !== fn.id || (script.type !== 'agentOutput' && script.type !== 'visibleCall'))
+        }
         else if (value.kind === 'agent') {
           const normalized = normalizeAgentExecutionInput(value)
           warnings.push(...normalized.warnings)
@@ -673,6 +710,16 @@ export class ToolPackageHandler extends MCPToolHandler {
       case 'deleteRegex':
         if (operation.index === undefined || !tool.regex?.[operation.index]) throw new Error(`Regex index ${operation.index} not found.`)
         tool.regex.splice(operation.index, 1); return
+      case 'upsertFunctionRegex': {
+        tool.functionRegex ??= []
+        const script = safeStructuredClone(value) as ToolFunctionRegexScript
+        script.id = operation.targetId ?? script.id ?? v4()
+        script.functionId = operation.functionId ?? script.functionId
+        upsertById(tool.functionRegex, script.id, () => script)
+        return
+      }
+      case 'deleteFunctionRegex':
+        removeById(tool.functionRegex ??= [], operation.targetId, 'Function regex'); return
       case 'upsertTrigger': {
         tool.trigger ??= []
         const trigger = safeStructuredClone(value) as RisuToolPackage['trigger'][number]
@@ -764,7 +811,7 @@ export class ToolPackageHandler extends MCPToolHandler {
     return [
       `${draft.mode === 'edit' ? 'update' : 'create'} tool ${draft.tool.name} (${draft.tool.namespace})`,
       `functions +${functions.added}/-${functions.deleted}, variables +${variables.added}/-${variables.deleted}, lists +${lists.added}/-${lists.deleted}`,
-      `regex ${draft.tool.regex?.length ?? 0}, triggers ${draft.tool.trigger?.length ?? 0}, activation ${draft.activation}`,
+      `regex ${draft.tool.regex?.length ?? 0}, function regex ${draft.tool.functionRegex?.length ?? 0}, triggers ${draft.tool.trigger?.length ?? 0}, activation ${draft.activation}`,
       `plugin ${draft.tool.plugin.language}, permissions ${Array.isArray(draft.tool.plugin.permissions) ? draft.tool.plugin.permissions.join(', ') || 'none' : 'invalid'}, source changed ${sourceChanged ? 'yes' : 'no'}`,
       `low-level trigger access ${draft.tool.lowLevelAccess ? 'ENABLED' : 'disabled'}`,
     ].join('\n')

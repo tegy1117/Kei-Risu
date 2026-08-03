@@ -17,6 +17,7 @@ import type {
     ToolAgentOutputRoute,
     ToolAgentStateAction,
     ToolCallableRef,
+    ToolFunctionRegexScript,
     ToolMemoryEntry,
     ToolPackageState,
     ToolPermission,
@@ -33,6 +34,8 @@ const parameterTypes = new Set(['string', 'number', 'integer', 'boolean', 'json'
 const valueTypes = new Set(['string', 'number', 'boolean', 'json'])
 const toolScopes = new Set(['global', 'character', 'chat'])
 const regexTypes = new Set(['editdisplay', 'editinput', 'editoutput', 'editprocess', 'edittrans'])
+const toolRegexTypes = new Set(['arguments', 'agentOutput', 'modelResult', 'visibleCall', 'pendingCard', 'successCard', 'errorCard'])
+const agentOnlyToolRegexTypes = new Set(['agentOutput', 'visibleCall'])
 const triggerTypes = new Set(['start', 'manual', 'output', 'input', 'display', 'request'])
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
@@ -40,6 +43,17 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
 export interface ToolExecutionContext {
     stack: string[]
     requestStatusId?: string
+    onPendingPresentation?: (presentation: ManagedToolPendingPresentation) => void | Promise<void>
+}
+
+export interface ManagedToolPendingPresentation {
+    toolId: string
+    namespace: string
+    functionId: string
+    functionName: string
+    renderedTemplate?: string
+    args: Record<string, unknown>
+    showInChat: boolean
 }
 
 export interface ManagedToolExecutionResult {
@@ -55,6 +69,8 @@ export interface ManagedToolExecutionResult {
         rawResult?: unknown
         captures?: Record<string, string>
         stateUpdates?: unknown[]
+        renderedTemplate?: string
+        showInChat?: boolean
     }
 }
 type ToolRuntime = {
@@ -191,6 +207,27 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
         try { new RegExp(script.in, script.ableFlag ? script.flag : 'g') }
         catch { errors.push(`Invalid regex script: ${script.comment || script.in}`) }
     }
+    const functionById = new Map((tool.functions ?? []).map((fn) => [fn.id, fn]))
+    const functionRegexIds = new Set<string>()
+    for (const script of tool.functionRegex ?? []) {
+        if (!script || typeof script.id !== 'string' || !script.id.trim() || functionRegexIds.has(script.id)) {
+            errors.push(`Invalid or duplicate function regex ID: ${script?.id || '(empty)'}`)
+            continue
+        }
+        functionRegexIds.add(script.id)
+        const fn = functionById.get(script.functionId)
+        if (!fn) errors.push(`Function regex references an unknown function: ${script.functionId || '(empty)'}`)
+        if (!toolRegexTypes.has(script.type)) errors.push(`Invalid function regex type: ${script.type}`)
+        if (fn?.execution?.kind !== 'agent' && agentOnlyToolRegexTypes.has(script.type)) {
+            errors.push(`Function regex type ${script.type} requires an agent function: ${fn?.name ?? script.functionId}`)
+        }
+        if (typeof script.comment !== 'string' || typeof script.in !== 'string' || typeof script.out !== 'string') {
+            errors.push('Function regex scripts require comment, in, and out text fields.')
+            continue
+        }
+        try { new RegExp(script.in, normalizeToolRegexFlags(script)) }
+        catch { errors.push(`Invalid function regex: ${script.comment || script.in}`) }
+    }
     for (const trigger of tool.trigger ?? []) {
         if (!trigger || typeof trigger.comment !== 'string' || !triggerTypes.has(trigger.type) || !Array.isArray(trigger.conditions) || !Array.isArray(trigger.effect)) {
             errors.push(`Invalid trigger structure: ${trigger?.comment || '(unnamed)'}`)
@@ -304,11 +341,22 @@ export async function callManagedToolDetailed(
     for (const { tool, functions } of active) {
         const fn = functions.find((candidate) => toolWireName(tool.namespace, candidate.name) === wireName)
         if (!fn) continue
-        const input = isObject(args) ? args : {}
+        const input = applyToolArgumentRegex(tool, fn, isObject(args) ? args : {}) as Record<string, unknown>
         const validationError = validateArguments(fn, input)
-        if (validationError) return managedError(tool, fn, validationError)
-        if (context.stack.includes(wireName)) return managedError(tool, fn, `Recursive tool call blocked: ${[...context.stack, wireName].join(' -> ')}`)
+        if (validationError) return managedError(tool, fn, validationError, input)
+        if (context.stack.includes(wireName)) return managedError(tool, fn, `Recursive tool call blocked: ${[...context.stack, wireName].join(' -> ')}`, input)
         try {
+            if (fn.presentation?.showInChat !== false && context.onPendingPresentation) {
+                await context.onPendingPresentation({
+                    toolId: tool.id,
+                    namespace: tool.namespace,
+                    functionId: fn.id,
+                    functionName: fn.name,
+                    renderedTemplate: renderToolCard(tool, fn, 'pending', fn.presentation?.pendingTemplate, input),
+                    args: input,
+                    showInChat: true,
+                })
+            }
             if (fn.execution?.kind === 'agent') {
                 return await executeAgentFunction(tool, fn, fn.execution, input, {
                     stack: [...context.stack, wireName],
@@ -319,8 +367,11 @@ export async function callManagedToolDetailed(
             const handler = runtime.handlers.get(fn.name)
             if (!handler) throw new Error(`Handler ${fn.name} is not registered.`)
             const rawResult = await handler(input)
+            const response = normalizeToolResult(rawResult).map((part) => part.type === 'text'
+                ? { ...part, text: applyToolFunctionRegexText(tool, fn.id, 'modelResult', part.text) }
+                : part)
             return {
-                response: normalizeToolResult(rawResult),
+                response,
                 success: true,
                 presentation: {
                     toolId: tool.id,
@@ -329,10 +380,12 @@ export async function callManagedToolDetailed(
                     functionName: fn.name,
                     template: fn.presentation?.successTemplate,
                     rawResult,
+                    renderedTemplate: renderToolCard(tool, fn, 'success', fn.presentation?.successTemplate, input, {}, rawResult),
+                    showInChat: fn.presentation?.showInChat !== false,
                 },
             }
         } catch (error) {
-            return managedError(tool, fn, error instanceof Error ? error.message : String(error))
+            return managedError(tool, fn, error instanceof Error ? error.message : String(error), input)
         }
     }
     return null
@@ -346,9 +399,11 @@ export async function callManagedTool(
     return (await callManagedToolDetailed(wireName, args, context))?.response ?? null
 }
 
-function managedError(tool: RisuToolPackage, fn: RisuToolFunction, error: string): ManagedToolExecutionResult {
+function managedError(tool: RisuToolPackage, fn: RisuToolFunction, error: string, args: Record<string, unknown> = {}): ManagedToolExecutionResult {
+    const rawResult = { ok: false, error }
+    const modelError = applyToolFunctionRegexText(tool, fn.id, 'modelResult', JSON.stringify(rawResult))
     return {
-        response: [{ type: 'text', text: JSON.stringify({ ok: false, error }) }],
+        response: [{ type: 'text', text: modelError }],
         success: false,
         error,
         presentation: {
@@ -357,7 +412,9 @@ function managedError(tool: RisuToolPackage, fn: RisuToolFunction, error: string
             functionId: fn.id,
             functionName: fn.name,
             template: fn.presentation?.errorTemplate,
-            rawResult: { ok: false, error },
+            rawResult,
+            renderedTemplate: renderToolCard(tool, fn, 'error', fn.presentation?.errorTemplate, args, {}, rawResult),
+            showInChat: fn.presentation?.showInChat !== false,
         },
     }
 }
@@ -506,6 +563,43 @@ function replaceToolTokens(
         .replace(/\{\{tool_result(?:::(.*?))?\}\}/g, (_match, path: string | undefined) => stringifyTemplateValue(readPath(result, path)))
 }
 
+function renderToolCard(
+    tool: RisuToolPackage,
+    fn: RisuToolFunction,
+    status: 'pending' | 'success' | 'error',
+    template: string | undefined,
+    args: Record<string, unknown>,
+    captures: Record<string, string> = {},
+    result: unknown = '',
+    stateUpdates: unknown[] = [],
+    routeCard = false,
+): string | undefined {
+    const stateType = status === 'pending' ? 'pendingCard' : status === 'success' ? 'successCard' : 'errorCard'
+    const hasStageRegex = (tool.functionRegex ?? []).some((script) =>
+        script.enabled !== false && script.functionId === fn.id && (script.type === stateType || (routeCard && script.type === 'visibleCall')))
+    if (!template?.trim() && status !== 'pending' && !hasStageRegex) return undefined
+    const fallback = status === 'pending'
+        ? `<div class="x-risu-tool-call-title"><strong>${escapeToolCardHtml(fn.name)}</strong><span>pending</span></div>`
+        : `<div class="x-risu-tool-call-title"><strong>${escapeToolCardHtml(fn.name)}</strong><span>${status}</span></div>`
+            + `<details><summary>Details</summary><div><strong>Arguments</strong><pre>${escapeToolCardHtml(JSON.stringify(args, null, 2))}</pre>`
+            + `<strong>Result</strong><pre>${escapeToolCardHtml(stringifyTemplateValue(result))}</pre>`
+            + (Object.keys(captures).length ? `<strong>Decisions</strong><pre>${escapeToolCardHtml(JSON.stringify(captures, null, 2))}</pre>` : '')
+            + (stateUpdates.length ? `<strong>Updates</strong><pre>${escapeToolCardHtml(JSON.stringify(stateUpdates, null, 2))}</pre>` : '')
+            + `</div></details>`
+    let rendered = replaceToolTokens(template?.trim() ? template : fallback, args, captures, result)
+        .replaceAll('{{tool_status}}', status)
+        .replaceAll('{{tool_name}}', fn.name)
+        .replaceAll('{{tool_updates}}', stringifyTemplateValue(stateUpdates))
+    if (routeCard) rendered = applyToolFunctionRegexText(tool, fn.id, 'visibleCall', rendered)
+    return applyToolFunctionRegexText(tool, fn.id, stateType, rendered)
+}
+
+function escapeToolCardHtml(value: unknown) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[char] ?? char))
+}
+
 function stringifyTemplateValue(value: unknown) {
     if (value === undefined || value === null) return ''
     return typeof value === 'string' ? value : JSON.stringify(value)
@@ -572,11 +666,11 @@ async function executeAgentFunction(
 ): Promise<ManagedToolExecutionResult> {
     const db = getDatabase()
     const preset = db.modelPresets.find((item) => item.id === execution.modelPresetId)
-    if (!preset) return managedError(tool, fn, 'The configured model preset was not found.')
+    if (!preset) return managedError(tool, fn, 'The configured model preset was not found.', args)
     const allowedTools = await resolveAllowedTools(execution.allowedTools)
     const requestedCount = execution.allowedTools?.length ?? 0
-    if (allowedTools.length !== requestedCount) return managedError(tool, fn, 'One or more allowed tools are unavailable.')
-    if (allowedTools.length > 0 && preset.toolUse !== true) return managedError(tool, fn, 'The selected model preset has tool use disabled.')
+    if (allowedTools.length !== requestedCount) return managedError(tool, fn, 'One or more allowed tools are unavailable.', args)
+    if (allowedTools.length > 0 && preset.toolUse !== true) return managedError(tool, fn, 'The selected model preset has tool use disabled.', args)
     const formated = [
         ...(execution.systemPrompt.trim() ? [{ role: 'system' as const, content: renderAgentPrompt(execution.systemPrompt, tool, args) }] : []),
         ...(execution.userPrompt.trim() ? [{ role: 'user' as const, content: renderAgentPrompt(execution.userPrompt, tool, args) }] : []),
@@ -591,7 +685,7 @@ async function executeAgentFunction(
         chatId: `tool-agent:${v4()}`,
         rememberToolUsage: false,
         tools: allowedTools,
-        toolExecutionContext: context,
+        toolExecutionContext: { stack: context.stack, requestStatusId: context.requestStatusId },
         requestStatus: {
             kind: 'tool-agent',
             label: `${tool.name} · ${fn.name}`,
@@ -599,9 +693,10 @@ async function executeAgentFunction(
         },
         persistToolDisplay: false,
     }, preset)
-    if (!response.ok) return managedError(tool, fn, 'error' in response ? response.error : 'Agent request failed.')
-    const routed = await routeAgentOutput(tool, fn, execution.outputRoutes, args, response.text)
-    if (!routed) return managedError(tool, fn, 'Agent output did not match any configured route.')
+    if (!response.ok) return managedError(tool, fn, 'error' in response ? response.error : 'Agent request failed.', args)
+    const agentOutput = applyToolFunctionRegexText(tool, fn.id, 'agentOutput', response.text)
+    const routed = await routeAgentOutput(tool, fn, execution.outputRoutes, args, agentOutput)
+    if (!routed) return managedError(tool, fn, 'Agent output did not match any configured route.', args)
     return routed
 }
 
@@ -616,13 +711,25 @@ export async function routeAgentOutput(
         const match = new RegExp(route.pattern, normalizeRegexFlags(route.flags)).exec(raw)
         if (!match) continue
         const captures = Object.fromEntries(Object.entries(match.groups ?? {}).map(([key, value]) => [key, value ?? '']))
-        const modelText = replaceToolTokens(route.modelTemplate, args, captures, raw)
+        const modelText = applyToolFunctionRegexText(tool, fn.id, 'modelResult', replaceToolTokens(route.modelTemplate, args, captures, raw))
         try {
             const stateUpdates = await applyAgentStateActions(tool, route.actions ?? [], args, captures, raw)
             const success = route.outcome === 'success'
             const response = success
                 ? [{ type: 'text' as const, text: modelText }]
                 : [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: modelText }) }]
+            const template = route.cardTemplate || (success ? fn.presentation?.successTemplate : fn.presentation?.errorTemplate)
+            const renderedTemplate = renderToolCard(
+                tool,
+                fn,
+                success ? 'success' : 'error',
+                template,
+                args,
+                captures,
+                raw,
+                stateUpdates,
+                true,
+            )
             return {
                 response,
                 success,
@@ -632,14 +739,16 @@ export async function routeAgentOutput(
                     namespace: tool.namespace,
                     functionId: fn.id,
                     functionName: fn.name,
-                    template: route.cardTemplate || (success ? fn.presentation?.successTemplate : fn.presentation?.errorTemplate),
+                    template,
                     rawResult: raw,
                     captures,
                     stateUpdates,
+                    renderedTemplate,
+                    showInChat: fn.presentation?.showInChat !== false,
                 },
             }
         } catch (error) {
-            return managedError(tool, fn, `Agent output state update failed: ${error instanceof Error ? error.message : String(error)}`)
+            return managedError(tool, fn, `Agent output state update failed: ${error instanceof Error ? error.message : String(error)}`, args)
         }
     }
     return null
@@ -842,6 +951,49 @@ export function validateToolScopeState(tool: RisuToolPackage, scope: ToolScope, 
         if (!Number.isFinite(entry.createdAt) || !Number.isFinite(entry.updatedAt)) errors.push(`Invalid timestamps for memory ${entry.id || '(new)'}.`)
     }
     return errors
+}
+
+function toolRegexOrder(script: ToolFunctionRegexScript): number {
+    const parsed = script.flag?.match(/<order (-?\d+)>/)?.[1]
+    return parsed === undefined ? 0 : Number.parseInt(parsed, 10)
+}
+
+function normalizeToolRegexFlags(script: Pick<ToolFunctionRegexScript, 'ableFlag' | 'flag'>): string {
+    const raw = script.ableFlag ? (script.flag || 'g') : 'g'
+    const flags = raw.replace(/<[^>]+>/g, '').replace(/[^dgimsuvy]/g, '')
+    const unique = [...new Set(flags)].join('')
+    return unique || 'u'
+}
+
+export function applyToolFunctionRegexText(
+    tool: RisuToolPackage,
+    functionId: string,
+    type: ToolFunctionRegexScript['type'],
+    input: string,
+): string {
+    const scripts = (tool.functionRegex ?? [])
+        .filter((script) => script.enabled !== false && script.functionId === functionId && script.type === type && script.in !== '')
+        .map((script, index) => ({ script, index, order: toolRegexOrder(script) }))
+        .sort((a, b) => b.order - a.order || a.index - b.index)
+    let output = input
+    for (const { script } of scripts) {
+        const replacement = script.out.replaceAll('$n', '\n').replace(/\{\{data\}\}/g, () => '$&')
+        output = output.replace(new RegExp(script.in, normalizeToolRegexFlags(script)), replacement)
+    }
+    return output
+}
+
+export function applyToolArgumentRegex(
+    tool: RisuToolPackage,
+    fn: RisuToolFunction,
+    value: unknown,
+): unknown {
+    if (typeof value === 'string') return applyToolFunctionRegexText(tool, fn.id, 'arguments', value)
+    if (Array.isArray(value)) return value.map((item) => applyToolArgumentRegex(tool, fn, item))
+    if (isObject(value)) {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, applyToolArgumentRegex(tool, fn, item)]))
+    }
+    return value
 }
 
 export async function validateToolPluginSource(tool: RisuToolPackage): Promise<string[]> {
@@ -1055,6 +1207,7 @@ export function parseToolExport(text: string): RisuToolExportV1 | RisuToolExport
     payload.tool.variables ??= []
     payload.tool.lists ??= []
     payload.tool.regex ??= []
+    payload.tool.functionRegex ??= []
     payload.tool.trigger ??= []
     payload.tool.assets ??= []
     payload.tool.lowLevelAccess ??= false
@@ -1076,6 +1229,7 @@ export function parseToolExport(text: string): RisuToolExportV1 | RisuToolExport
         }
         fn.presentation ??= {}
     }
+    for (const script of payload.tool.functionRegex) script.id ||= v4()
     for (const variable of payload.tool.variables) variable.id ||= v4()
     for (const list of payload.tool.lists) list.id ||= v4()
     if (payload.version === 2) payload.assets ??= []

@@ -281,12 +281,14 @@ export type toolCallData = {
     response: RPCToolCallContent[],
     includeInModelHistory?: boolean
     presentation?: {
-        status: 'success' | 'error' | 'cancelled'
+        status: 'pending' | 'success' | 'error' | 'cancelled'
         toolId?: string
         namespace?: string
         functionId?: string
         functionName?: string
         template?: string
+        renderedTemplate?: string
+        showInChat?: boolean
         args?: unknown
         result?: unknown
         captures?: Record<string, string>
@@ -303,7 +305,8 @@ export async function encodeToolCall(call:toolCallData){
     toolCallCache.set(call.call.id, call)
     await writePersistentJson(makeEncodedStorageKey(toolCallCachePrefix, call.call.id), call)
     const tag = call.includeInModelHistory === false ? 'tool_display' : 'tool_call'
-    return `<${tag}>${call.call.id}\uf100${call.call.name}</${tag}>\n\n`;
+    const status = call.presentation?.status ? `\uf100${call.presentation.status}` : ''
+    return `<${tag}>${call.call.id}\uf100${call.call.name}${status}</${tag}>\n\n`;
 }
 
 export async function encodeToolExecution(
@@ -312,6 +315,7 @@ export async function encodeToolExecution(
     includeInModelHistory: boolean,
 ) {
     const presentation = executed.presentation
+    if (presentation?.showInChat === false && !includeInModelHistory) return ''
     return encodeToolCall({
         call,
         response: executed.response,
@@ -323,6 +327,8 @@ export async function encodeToolExecution(
             functionId: presentation?.functionId,
             functionName: presentation?.functionName,
             template: presentation?.template,
+            renderedTemplate: presentation?.renderedTemplate,
+            showInChat: presentation?.showInChat,
             args: call.arg,
             result: presentation?.rawResult ?? executed.response,
             captures: presentation?.captures,

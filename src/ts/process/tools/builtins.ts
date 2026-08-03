@@ -202,6 +202,7 @@ function normalizeUserTool(tool: RisuToolPackage): RisuToolPackage {
         lists: (tool.lists ?? []).map((list) => ({ ...list, id: list.id || v4() })),
         lowLevelAccess: tool.lowLevelAccess === true,
         regex: tool.regex ?? [],
+        functionRegex: tool.functionRegex ?? [],
         trigger: tool.trigger ?? [],
         assets: tool.assets ?? [],
     }

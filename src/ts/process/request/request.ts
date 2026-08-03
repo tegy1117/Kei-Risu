@@ -1132,7 +1132,8 @@ interface ModelPresetToolLoopRuntime {
     streaming?: boolean
     onDelta?: (delta: AdapterChatStreamDelta) => void
     onModelTurn?: (response: AdapterChatResponse) => void
-    onToolFinish?: (result: { encoded?: string }) => void
+    onToolPending?: (call: AdapterToolCall, encoded: string) => void
+    onToolFinish?: (call: AdapterToolCall, result: { encoded?: string }) => void
 }
 
 async function runModelPresetToolLoop(
@@ -1234,15 +1235,35 @@ async function runModelPresetToolLoop(
                 text: `${success ? '✓' : '⚠'} ${call.name} · ${formatToolDuration(now - started)} · ${toolTracePreview(toolResult.response ?? toolResult.text)}`,
                 tone: success ? 'success' : 'warn',
             }))
-            runtime.onToolFinish?.(toolResult)
+            runtime.onToolFinish?.(call, toolResult)
         },
         executeTool: async (call) => {
             toolsExecuted = true
+            const toolArgs = toolArgumentsForTrace(call)
             const executed = await executeModelPresetTool({
                 ...arg,
                 toolExecutionContext: {
                     ...(arg.toolExecutionContext ?? { stack: [] }),
                     requestStatusId: runtime.genId,
+                    onPendingPresentation: runtime.onToolPending ? async (pending) => {
+                        if (arg.persistToolDisplay === false || pending.showInChat === false) return
+                        const encoded = await encodeToolCall({
+                            call: { id: call.id, name: call.name, arg: toolArgs },
+                            response: [],
+                            includeInModelHistory: arg.rememberToolUsage === true,
+                            presentation: {
+                                status: 'pending',
+                                toolId: pending.toolId,
+                                namespace: pending.namespace,
+                                functionId: pending.functionId,
+                                functionName: pending.functionName,
+                                renderedTemplate: pending.renderedTemplate,
+                                showInChat: true,
+                                args: pending.args,
+                            },
+                        })
+                        runtime.onToolPending?.(call, encoded)
+                    } : undefined,
                 },
             }, call)
             // Persistence is best-effort: the tool already ran, so a failed
@@ -1250,7 +1271,8 @@ async function runModelPresetToolLoop(
             // and a propagated error could trigger an outer re-run). Skip the
             // round-trip marker on failure instead.
             let encoded: string | undefined
-            if (arg.persistToolDisplay !== false && (executed.response.length > 0 || executed.error)) {
+            const shouldPersistMarker = executed.presentation?.showInChat !== false || arg.rememberToolUsage === true
+            if (arg.persistToolDisplay !== false && shouldPersistMarker && (executed.response.length > 0 || executed.error)) {
                 try {
                     encoded = await encodeToolCall({
                         call: { id: call.id, name: call.name, arg: call.arguments },
@@ -1263,7 +1285,9 @@ async function runModelPresetToolLoop(
                             functionId: executed.presentation?.functionId,
                             functionName: executed.presentation?.functionName,
                             template: executed.presentation?.template,
-                            args: toolArgumentsForTrace(call),
+                            renderedTemplate: executed.presentation?.renderedTemplate,
+                            showInChat: executed.presentation?.showInChat,
+                            args: toolArgs,
                             result: executed.presentation?.rawResult ?? executed.response,
                             captures: executed.presentation?.captures,
                             stateUpdates: executed.presentation?.stateUpdates,
@@ -1305,6 +1329,7 @@ function createModelPresetToolStream(input: {
     return new ReadableStream<StreamResponseChunk>({
         start(controller) {
             const completed: string[] = []
+            const pendingIndexes = new Map<string, number>()
             let turnText = ''
             let turnReasoning = ''
             let lastSnapshot = ''
@@ -1347,8 +1372,17 @@ function createModelPresetToolStream(input: {
                                 // in live mode it guarantees the unthrottled turn tail.
                                 emit(true)
                             },
-                            onToolFinish: (toolResult) => {
-                                if (toolResult.encoded) completed.push(toolResult.encoded.trim())
+                            onToolPending: (call, encoded) => {
+                                pendingIndexes.set(call.id, completed.length)
+                                completed.push(encoded.trim())
+                                emit(true)
+                            },
+                            onToolFinish: (call, toolResult) => {
+                                const pendingIndex = pendingIndexes.get(call.id)
+                                if (pendingIndex !== undefined) {
+                                    completed[pendingIndex] = toolResult.encoded?.trim() ?? ''
+                                    pendingIndexes.delete(call.id)
+                                } else if (toolResult.encoded) completed.push(toolResult.encoded.trim())
                                 emit(true)
                             },
                         },

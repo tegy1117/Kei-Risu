@@ -33,7 +33,14 @@
     }
 
     function addFunction() {
-        currentTool.functions.push({ id: v4(), name: 'function_name', description: '', enabled: true, parameters: [], execution: { kind: 'script' }, presentation: {} })
+        currentTool.functions.push({ id: v4(), name: 'function_name', description: '', enabled: true, parameters: [], execution: { kind: 'script' }, presentation: { showInChat: true } })
+        currentTool.functions = currentTool.functions
+    }
+
+    function removeFunction(functionIndex: number) {
+        const functionId = currentTool.functions[functionIndex]?.id
+        currentTool.functions.splice(functionIndex, 1)
+        if (functionId) currentTool.functionRegex = (currentTool.functionRegex ?? []).filter((script) => script.functionId !== functionId)
         currentTool.functions = currentTool.functions
     }
 
@@ -84,7 +91,7 @@
                 <div class="flex items-center gap-2">
                     <CheckInput bind:check={fn.enabled} name={language.toolEnabled} margin={false} />
                     {#if !readonly}
-                        <button class="ml-auto text-textcolor2 hover:text-red-400" onclick={() => { currentTool.functions.splice(functionIndex, 1); currentTool.functions = currentTool.functions }}><TrashIcon size={18}/></button>
+                        <button class="ml-auto text-textcolor2 hover:text-red-400" onclick={() => removeFunction(functionIndex)}><TrashIcon size={18}/></button>
                     {/if}
                 </div>
                 {#if readonly}

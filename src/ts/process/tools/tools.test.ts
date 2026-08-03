@@ -34,6 +34,8 @@ import {
     createToolExportPayload,
     createToolExportPayloadV2,
     createMemoryToolResult,
+    applyToolArgumentRegex,
+    applyToolFunctionRegexText,
     callManagedToolDetailed,
     deleteToolScopeState,
     parseToolExport,
@@ -279,9 +281,106 @@ describe('sub-agent output routing', () => {
         expect(readToolScopeState(tool.id, 'global').variables.decision).toBe('door-a')
     })
 
+    test('applies the sub-agent output stage before route matching', async () => {
+        const tool = sampleTool()
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: 'system', userPrompt: 'prompt', allowedTools: [],
+            outputRoutes: [{ id: 'ok', name: 'ok', pattern: '^OK:(?<choice>.+)$', outcome: 'success', modelTemplate: '{{tool_capture::choice}}', actions: [] }],
+        }
+        tool.functionRegex = [{ id: 'agent-output', functionId: 'fn-a', comment: '', in: '^RAW:', out: 'OK:', type: 'agentOutput' }]
+        mockDb = { ...mockDb, tools: [tool], enabledTools: [tool.id], modelPresets: [{ id: 'model-1', name: 'Model', toolUse: false }] }
+        requestMocks.requestAgentModelPreset.mockResolvedValue({ ok: true, text: 'RAW:door-a', model: 'model' })
+
+        const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(result?.response).toEqual([{ type: 'text', text: 'door-a' }])
+    })
+
+    test('emits a transformed pending presentation unless the function is hidden from chat', async () => {
+        const tool = sampleTool()
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: 'system', userPrompt: 'prompt', allowedTools: [],
+            outputRoutes: [{ id: 'ok', name: 'ok', pattern: '^OK:(?<choice>.+)$', outcome: 'success', modelTemplate: '{{tool_capture::choice}}', actions: [] }],
+        }
+        tool.functions[0].presentation = { showInChat: true, pendingTemplate: 'Waiting for {{tool_arg::name}}' }
+        tool.functions[0].parameters = [{ id: 'p1', name: 'name', description: '', type: 'string', required: true }]
+        tool.functionRegex = [
+            { id: 'arg', functionId: 'fn-a', comment: '', in: 'Alice', out: 'Alicia', type: 'arguments' },
+            { id: 'pending', functionId: 'fn-a', comment: '', in: 'Waiting', out: 'Calling', type: 'pendingCard' },
+        ]
+        mockDb = { ...mockDb, tools: [tool], enabledTools: [tool.id], modelPresets: [{ id: 'model-1', name: 'Model', toolUse: false }] }
+        const onPendingPresentation = vi.fn()
+
+        const visible = await callManagedToolDetailed('sample__alpha', { name: 'Alice' }, { stack: [], onPendingPresentation })
+        expect(onPendingPresentation).toHaveBeenCalledWith(expect.objectContaining({ renderedTemplate: 'Calling for Alicia', args: { name: 'Alicia' } }))
+        expect(visible?.presentation?.showInChat).toBe(true)
+
+        tool.functions[0].presentation.showInChat = false
+        onPendingPresentation.mockClear()
+        const hidden = await callManagedToolDetailed('sample__alpha', { name: 'Alice' }, { stack: [], onPendingPresentation })
+        expect(onPendingPresentation).not.toHaveBeenCalled()
+        expect(hidden?.presentation?.showInChat).toBe(false)
+    })
+
     test('returns no result when raw output matches no configured route', async () => {
         const tool = sampleTool()
         expect(await routeAgentOutput(tool, tool.functions[0], [{ id: 'only', name: 'only', pattern: '^OK$', outcome: 'success', modelTemplate: 'ok', actions: [] }], {}, 'unexpected')).toBeNull()
+    })
+})
+
+describe('function-specific tool regex', () => {
+    test('applies argument regex recursively to string values without changing keys or scalar types', () => {
+        const tool = sampleTool()
+        tool.functionRegex = [{
+            id: 'r1', functionId: 'fn-a', comment: 'names', in: 'Alice', out: 'Alicia', type: 'arguments', flag: 'g', ableFlag: true,
+        }]
+        const input = { name: 'Alice', nested: { label: 'Alice', count: 2 }, values: ['Alice', false] }
+        expect(applyToolArgumentRegex(tool, tool.functions[0], input)).toEqual({
+            name: 'Alicia', nested: { label: 'Alicia', count: 2 }, values: ['Alicia', false],
+        })
+        expect(input.nested.label).toBe('Alice')
+    })
+
+    test('uses order before list position and leaves disabled rules inactive', () => {
+        const tool = sampleTool()
+        tool.functionRegex = [
+            { id: 'late', functionId: 'fn-a', comment: '', in: 'A', out: 'B', type: 'modelResult', flag: 'g', ableFlag: true },
+            { id: 'early', functionId: 'fn-a', comment: '', in: 'x', out: 'A', type: 'modelResult', flag: 'g<order 2>', ableFlag: true },
+            { id: 'off', functionId: 'fn-a', comment: '', in: 'B', out: 'C', type: 'modelResult', enabled: false },
+        ]
+        expect(applyToolFunctionRegexText(tool, 'fn-a', 'modelResult', 'x')).toBe('B')
+    })
+
+    test('transforms model and visible card output before the success-card stage', async () => {
+        const tool = sampleTool()
+        tool.functions[0].execution = {
+            kind: 'agent', modelPresetId: 'model-1', systemPrompt: 'system', userPrompt: 'prompt', allowedTools: [], outputRoutes: [],
+        }
+        tool.functions[0].presentation = { successTemplate: 'Decision: {{tool_capture::choice}}' }
+        tool.functionRegex = [
+            { id: 'model', functionId: 'fn-a', comment: '', in: 'door-a', out: 'door-b', type: 'modelResult' },
+            { id: 'visible', functionId: 'fn-a', comment: '', in: 'Decision', out: 'Choice', type: 'visibleCall' },
+            { id: 'success', functionId: 'fn-a', comment: '', in: 'door-a', out: 'door-c', type: 'successCard' },
+        ]
+        const routed = await routeAgentOutput(tool, tool.functions[0], [{
+            id: 'ok', name: 'ok', pattern: '^OK:(?<choice>.+)$', outcome: 'success',
+            modelTemplate: 'Selected {{tool_capture::choice}}', actions: [],
+        }], {}, 'OK:door-a')
+        expect(routed?.response).toEqual([{ type: 'text', text: 'Selected door-b' }])
+        expect(routed?.presentation?.renderedTemplate).toBe('Choice: door-c')
+    })
+
+    test('validates function references, agent-only stages, and regex syntax', () => {
+        const tool = sampleTool()
+        tool.functionRegex = [
+            { id: 'missing', functionId: 'none', comment: '', in: 'x', out: '', type: 'arguments' },
+            { id: 'agent-only', functionId: 'fn-a', comment: '', in: 'x', out: '', type: 'agentOutput' },
+            { id: 'invalid', functionId: 'fn-a', comment: '', in: '[', out: '', type: 'modelResult' },
+        ]
+        const errors = validateToolPackage(tool)
+        expect(errors.some((error) => error.includes('unknown function'))).toBe(true)
+        expect(errors.some((error) => error.includes('requires an agent function'))).toBe(true)
+        expect(errors.some((error) => error.includes('Invalid function regex'))).toBe(true)
     })
 })
 
@@ -309,6 +408,7 @@ describe('.risutool definition format', () => {
         expect(parsed.tool.plugin.permissions).toEqual([])
         expect(parsed.tool.functions[0].execution).toEqual({ kind: 'script' })
         expect(parsed.tool.regex).toEqual([])
+        expect(parsed.tool.functionRegex).toEqual([])
         expect(parsed.tool.trigger).toEqual([])
         expect(parsed.tool.assets).toEqual([])
     })

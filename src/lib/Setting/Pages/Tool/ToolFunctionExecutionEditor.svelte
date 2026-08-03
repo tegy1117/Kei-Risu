@@ -14,10 +14,15 @@
     $effect.pre(() => {
         fn.execution ??= { kind: 'script' }
         fn.presentation ??= {}
+        fn.presentation.showInChat ??= true
     })
 
     function refresh() { currentTool.functions = currentTool.functions }
     function setKind(kind: 'script' | 'agent') {
+        if (kind === 'script') {
+            currentTool.functionRegex = (currentTool.functionRegex ?? []).filter((script) =>
+                script.functionId !== fn.id || (script.type !== 'agentOutput' && script.type !== 'visibleCall'))
+        }
         fn.execution = kind === 'script' ? { kind: 'script' } : {
             kind: 'agent', modelPresetId: '', systemPrompt: '', userPrompt: '{{tool_args}}', allowedTools: [], outputRoutes: [],
         }
@@ -112,6 +117,8 @@
     {/if}
 
     <strong class="mt-2">{language.toolPresentation}</strong>
+    <CheckInput bind:check={fn.presentation.showInChat} name={language.toolShowInChat} margin={false} />
+    <p class="text-xs text-textcolor2">{language.toolShowInChatHint}</p>
     <TextAreaInput bind:value={fn.presentation.pendingTemplate} placeholder={language.toolPendingTemplate} />
     <TextAreaInput bind:value={fn.presentation.successTemplate} placeholder={language.toolSuccessTemplate} />
     <TextAreaInput bind:value={fn.presentation.errorTemplate} placeholder={language.toolErrorTemplate} />

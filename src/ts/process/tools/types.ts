@@ -27,9 +27,31 @@ export type ToolCallableRef =
     | { kind: 'external', name: string }
 
 export interface ToolFunctionPresentation {
+    showInChat?: boolean
     pendingTemplate?: string
     successTemplate?: string
     errorTemplate?: string
+}
+
+export type ToolRegexStage =
+    | 'arguments'
+    | 'agentOutput'
+    | 'modelResult'
+    | 'visibleCall'
+    | 'pendingCard'
+    | 'successCard'
+    | 'errorCard'
+
+export interface ToolFunctionRegexScript {
+    id: string
+    functionId: string
+    comment: string
+    in: string
+    out: string
+    type: ToolRegexStage
+    flag?: string
+    ableFlag?: boolean
+    enabled?: boolean
 }
 
 export type ToolAgentRouteOutcome = 'success' | 'error'
@@ -106,6 +128,7 @@ export interface RisuToolPackage {
     backgroundEmbedding?: string
     lowLevelAccess?: boolean
     regex?: import('src/ts/storage/database.svelte').customscript[]
+    functionRegex?: ToolFunctionRegexScript[]
     trigger?: import('src/ts/storage/database.svelte').triggerscript[]
     assets?: [string, string, string][]
     plugin: {

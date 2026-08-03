@@ -906,6 +906,7 @@ async function renderToolCallMarker(marker: string, wireName: string) {
     if (!decoded || !presentation) {
         return `<div class="x-risu-tool-call">🛠️ ${htmlEscape(language.toolCalled.replace('{{tool}}', wireName || 'unknown'))}</div>\n\n`
     }
+    if (presentation.showInChat === false) return ''
     let args: Record<string, unknown> = {}
     try {
         const rawArgs = decoded.call.arg
@@ -913,19 +914,21 @@ async function renderToolCallMarker(marker: string, wireName: string) {
     } catch { args = { raw: decoded.call.arg } }
     const captures = presentation.captures ?? {}
     const result = presentation.result ?? decoded.response
-    let body = presentation.template ?? ''
-    body = body
-        .replace(/\{\{tool_arg::([^}]+)\}\}/g, (_match, name: string) => toolDisplayValue(args[name]))
-        .replace(/\{\{tool_capture::([^}]+)\}\}/g, (_match, name: string) => captures[name] ?? '')
-        .replace(/\{\{tool_result(?:::(.*?))?\}\}/g, (_match, path: string | undefined) => toolDisplayValue(toolDisplayPath(result, path)))
-        .replaceAll('{{tool_status}}', presentation.status)
-        .replaceAll('{{tool_name}}', presentation.functionName || decoded.call.name)
-        .replaceAll('{{tool_updates}}', toolDisplayValue(presentation.stateUpdates ?? []))
+    let body = presentation.renderedTemplate ?? presentation.template ?? ''
+    if (presentation.renderedTemplate === undefined) {
+        body = body
+            .replace(/\{\{tool_arg::([^}]+)\}\}/g, (_match, name: string) => toolDisplayValue(args[name]))
+            .replace(/\{\{tool_capture::([^}]+)\}\}/g, (_match, name: string) => captures[name] ?? '')
+            .replace(/\{\{tool_result(?:::(.*?))?\}\}/g, (_match, path: string | undefined) => toolDisplayValue(toolDisplayPath(result, path)))
+            .replaceAll('{{tool_status}}', presentation.status)
+            .replaceAll('{{tool_name}}', presentation.functionName || decoded.call.name)
+            .replaceAll('{{tool_updates}}', toolDisplayValue(presentation.stateUpdates ?? []))
+    }
     body = await replaceAsync(body, /\{\{tool_asset::([^}]+)\}\}/g, async (_match, name: string) => {
         const path = presentation.assets?.[name]
         return path ? await getFileSrc(path) : ''
     })
-    if (!body.trim()) {
+    if (!body.trim() && presentation.renderedTemplate === undefined) {
         const responseText = decoded.response.filter((part) => part.type === 'text').map((part) => part.text).join('\n')
         body = `<div class="x-risu-tool-call-title"><strong>${htmlEscape(decoded.call.name)}</strong><span>${htmlEscape(presentation.status)}</span></div>`
             + `<details><summary>Details</summary><div><strong>Arguments</strong><pre>${htmlEscape(JSON.stringify(args, null, 2))}</pre>`

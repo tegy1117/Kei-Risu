@@ -8,12 +8,14 @@
     import type { RisuToolPackage } from 'src/ts/process/tools/types'
     import { saveAsset } from 'src/ts/globalApi.svelte'
     import { selectMultipleFile } from 'src/ts/util'
+    import ToolFunctionRegexList from './ToolFunctionRegexList.svelte'
 
     interface Props { currentTool: RisuToolPackage }
     let { currentTool = $bindable() }: Props = $props()
 
     $effect.pre(() => {
         currentTool.regex ??= []
+        currentTool.functionRegex ??= []
         currentTool.trigger ??= []
         currentTool.assets ??= []
         currentTool.customToggle ??= ''
@@ -51,7 +53,13 @@
     </div>
 
     <strong>{language.toolRegex}</strong>
-    <RegexList bind:value={currentTool.regex} buttons={true} />
+    <p class="text-xs text-textcolor2">{language.toolFunctionRegexHint}</p>
+    <ToolFunctionRegexList bind:currentTool />
+    {#if (currentTool.regex ?? []).length > 0}
+        <strong>{language.toolLegacyRegex}</strong>
+        <p class="text-xs text-textcolor2">{language.toolLegacyRegexHint}</p>
+        <RegexList bind:value={currentTool.regex} buttons={false} />
+    {/if}
 
     <strong>{language.toolTriggers}</strong>
     <div class="flex items-center gap-2">
