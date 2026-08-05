@@ -1515,6 +1515,15 @@ const loginRouteLimiter = rateLimit({
     validate: { xForwardedForHeader: false }
 });
 
+const publicNetworkRouteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many public network requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
 function isHex(str) {
     return hexRegex.test(str.toUpperCase().trim()) || str === '__password';
 }
@@ -2976,21 +2985,21 @@ async function hubProxyFunc(req, res) {
 
 app.get('/proxy', reverseProxyFunc_get);
 app.get('/proxy2', reverseProxyFunc_get);
-app.get('/public-proxy', publicNetworkProxyFunc);
+app.get('/public-proxy', publicNetworkRouteLimiter, publicNetworkProxyFunc);
 app.get('/hub-proxy/*', hubProxyFunc);
 
 app.post('/proxy', reverseProxyFunc);
 app.post('/proxy2', reverseProxyFunc);
-app.post('/public-proxy', publicNetworkProxyFunc);
+app.post('/public-proxy', publicNetworkRouteLimiter, publicNetworkProxyFunc);
 app.put('/proxy', reverseProxyFunc);
 app.put('/proxy2', reverseProxyFunc);
-app.put('/public-proxy', publicNetworkProxyFunc);
+app.put('/public-proxy', publicNetworkRouteLimiter, publicNetworkProxyFunc);
 app.patch('/proxy', reverseProxyFunc);
 app.patch('/proxy2', reverseProxyFunc);
-app.patch('/public-proxy', publicNetworkProxyFunc);
+app.patch('/public-proxy', publicNetworkRouteLimiter, publicNetworkProxyFunc);
 app.delete('/proxy', reverseProxyFunc);
 app.delete('/proxy2', reverseProxyFunc);
-app.delete('/public-proxy', publicNetworkProxyFunc);
+app.delete('/public-proxy', publicNetworkRouteLimiter, publicNetworkProxyFunc);
 app.post('/hub-proxy/*', hubProxyFunc);
 
 // --- Proxy Stream Job endpoints ---
