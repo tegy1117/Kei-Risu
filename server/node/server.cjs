@@ -4,10 +4,10 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const net = require('net');
-const dns = require('dns').promises;
 const compression = require('compression');
 const htmlparser = require('node-html-parser');
 const { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } = require('fs');
+const { fetchPublicNetworkUrl } = require('./public-network.cjs');
 const fs = require('fs/promises')
 const nodeCrypto = require('crypto')
 const zlib = require('zlib')
@@ -2556,59 +2556,6 @@ async function checkAuth(req, res, returnOnlyStatus = false, {allowExpired = fal
     }
 }
 
-function isPrivateOrReservedIPv4(address) {
-    const parts = address.split('.').map(Number);
-    if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-    const [a, b] = parts;
-    return a === 0 || a === 10 || a === 127 ||
-        (a === 100 && b >= 64 && b <= 127) ||
-        (a === 169 && b === 254) ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 0) || (a === 192 && b === 168) ||
-        (a === 198 && (b === 18 || b === 19)) || a >= 224;
-}
-
-function isPrivateOrReservedAddress(address) {
-    if (net.isIPv4(address)) return isPrivateOrReservedIPv4(address);
-    if (!net.isIPv6(address)) return true;
-    const normalized = address.toLowerCase().split('%')[0];
-    return normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') ||
-        /^fe[89ab]/.test(normalized) || normalized.startsWith('ff') || normalized.startsWith('2001:db8:') ||
-        normalized.startsWith('::ffff:127.') || normalized.startsWith('::ffff:10.') || normalized.startsWith('::ffff:192.168.');
-}
-
-async function assertPublicNetworkUrl(value) {
-    const url = new URL(value);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Only HTTP(S) public network URLs are allowed');
-    if (url.username || url.password) throw new Error('Credentials in public network URLs are not allowed');
-    const records = await dns.lookup(url.hostname, { all: true, verbatim: true });
-    if (!records.length || records.some(record => isPrivateOrReservedAddress(record.address))) {
-        throw new Error(`Public network policy blocked host ${url.hostname}`);
-    }
-    return url;
-}
-
-async function fetchPublicNetworkUrl(value, init) {
-    let current = await assertPublicNetworkUrl(value);
-    const origin = current.origin;
-    let nextInit = { ...init, redirect: 'manual' };
-    for (let redirects = 0; redirects <= 5; redirects++) {
-        // lgtm[js/request-forgery] assertPublicNetworkUrl restricts protocol and credentials, resolves every hop, and rejects private/reserved addresses.
-        const response = await fetch(current, nextInit);
-        if (response.status < 300 || response.status >= 400) return response;
-        const location = response.headers.get('location');
-        if (!location) return response;
-        if (redirects === 5) throw new Error('Public network redirect limit exceeded');
-        const next = await assertPublicNetworkUrl(new URL(location, current).toString());
-        if (next.origin !== origin) throw new Error(`Cross-origin redirect to ${next.origin} was blocked`);
-        if ([301, 302, 303].includes(response.status) && nextInit.method !== 'GET' && nextInit.method !== 'HEAD') {
-            nextInit = { ...nextInit, method: 'GET', body: undefined };
-        }
-        current = next;
-    }
-    throw new Error('Public network redirect limit exceeded');
-}
-
 const reverseProxyFunc = async (req, res, next) => {
     if(!await checkAuth(req, res)){
         return;
@@ -2659,13 +2606,21 @@ const reverseProxyFunc = async (req, res, next) => {
         }
         // make request to original server
         const publicNetworkPolicy = req.headers['risu-public-network'] === '1';
-        // lgtm[js/request-forgery] Public-tool requests are validated by fetchPublicNetworkUrl; the fallback is the authenticated user-configured proxy path.
-        originalResponse = await (publicNetworkPolicy ? fetchPublicNetworkUrl : fetch)(urlParam, {
+        const requestInit = {
             method: req.method,
             headers: header,
             body: requestBody,
             signal: timeout.signal
-        });
+        };
+        if (publicNetworkPolicy) {
+            originalResponse = await fetchPublicNetworkUrl(urlParam, requestInit);
+        }
+        else {
+            // Legacy authenticated proxy behavior. The destination is intentionally
+            // user-configurable and is not used by public-network tools.
+            // codeql[js/request-forgery]
+            originalResponse = await fetch(urlParam, requestInit);
+        }
         // get response body as stream
         const originalBody = originalResponse.body;
         // get response headers
@@ -2745,12 +2700,20 @@ const reverseProxyFunc_get = async (req, res, next) => {
     }
         // make request to original server
         const publicNetworkPolicy = req.headers['risu-public-network'] === '1';
-        // lgtm[js/request-forgery] Public-tool requests are validated by fetchPublicNetworkUrl; the fallback is the authenticated user-configured proxy path.
-        originalResponse = await (publicNetworkPolicy ? fetchPublicNetworkUrl : fetch)(urlParam, {
+        const requestInit = {
             method: 'GET',
             headers: header,
             signal: timeout.signal
-        });
+        };
+        if (publicNetworkPolicy) {
+            originalResponse = await fetchPublicNetworkUrl(urlParam, requestInit);
+        }
+        else {
+            // Legacy authenticated proxy behavior. The destination is intentionally
+            // user-configurable and is not used by public-network tools.
+            // codeql[js/request-forgery]
+            originalResponse = await fetch(urlParam, requestInit);
+        }
         // get response body as stream
         const originalBody = originalResponse.body;
         // get response headers

@@ -116,6 +116,9 @@ importers:
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
+      ipaddr.js:
+        specifier: 2.3.0
+        version: 2.3.0
       katex:
         specifier: ^0.16.27
         version: 0.16.27
