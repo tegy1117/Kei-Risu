@@ -1116,7 +1116,7 @@ export const languageEnglish = {
     toolNamespaceConflict: "Namespace {namespace} is already in use. Enter a unique namespace:",
     toolImported: "Tool imported successfully.",
     toolExported: "Tool exported successfully.",
-    toolPluginApi: "API v2 handlers receive (args, invocation). Invocation provides openView, setViewMode, closeView, requestChoice, requestDiceRoll, callTool, current context reads, lorebooks, and confirmed shared-data changes.",
+    toolPluginApi: "API v2 handlers receive (args, invocation). Invocation provides openView, setViewMode, closeView, disposeView, requestChoice, requestDiceRoll, callTool, current context reads, lorebooks, and confirmed shared-data changes.",
     toolAppAllowedToolsHint: "Only declared tools can be called through the API v2 invocation context.",
     toolManualLaunch: "Allow manual launch from chat",
     toolManualLaunchLabel: "Manual launch label",

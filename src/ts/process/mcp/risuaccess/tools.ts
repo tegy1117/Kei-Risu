@@ -691,7 +691,7 @@ export class ToolPackageHandler extends MCPToolHandler {
     const modelPresets = (db.modelPresets ?? []).map((preset) => ({ id: preset.id, name: preset.name, toolUse: preset.toolUse === true }))
     const examplePreset = modelPresets[0]
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       modelPresets,
       managedTools: db.tools.flatMap((tool) => tool.functions.map((fn) => ({ kind: 'managed', toolId: tool.id, functionId: fn.id, name: `${tool.namespace}__${fn.name}` }))),
       externalTools: external.map((tool) => ({ kind: 'external', name: tool.name, source: tool.mcpURL, description: tool.description })),
@@ -712,13 +712,13 @@ export class ToolPackageHandler extends MCPToolHandler {
           execution: { kind: 'script', allowedTools: [] },
           presentation: { showInChat: true, manualLaunch: { enabled: true, label: 'Attack', includeInModelHistory: true } },
           permissions: ['interactiveUi', 'character.read', 'chat.read', 'lorebook.read'],
-          source: "await risuai.registerFunction('attack', async (_args, invocation) => { const view = await invocation.openView({ title: 'Attack', mode: 'inline', allowExpand: true }); const root = RisuToolUI.stack(); RisuToolUI.numberStepper(root, { value: 50, min: 0, max: 100, step: 1 }); await new Promise((resolve) => RisuToolUI.button(root, 'Attack', resolve)); await invocation.closeView(); return { ok: true, view }; })",
+          source: "await risuai.registerFunction('attack', async (_args, invocation) => { const view = await invocation.openView({ title: 'Attack', mode: 'inline', allowExpand: true }); const root = RisuToolUI.stack(); RisuToolUI.numberStepper(root, { value: 50, min: 0, max: 100, step: 1 }); await new Promise((resolve) => RisuToolUI.button(root, 'Attack', resolve)); await invocation.disposeView(); return { ok: true, view }; })",
         },
         attackToolAppTemplate: {
           purpose: 'Acceptance template: inspect character/chat/lorebooks, select an item, ask a declared agent helper to decide success and attack attributes, let the user adjust a number stepper, then confirm a shared lorebook result.',
           requiredPermissions: ['interactiveUi', 'invokeTools', 'character.read', 'chat.read', 'lorebook.read', 'lorebook.write'],
           requiredFunctions: ['A no-argument script function with manualLaunch enabled.', 'A managed agent helper listed in the script function allowedTools.'],
-          source: "await risuai.registerFunction('attack', async (_args, invocation) => { const HELPER_REF = { kind: 'managed', toolId: 'REPLACE_WITH_HELPER_TOOL_ID', functionId: 'REPLACE_WITH_HELPER_FUNCTION_ID' }; const [character, chat, lorebooks] = await Promise.all([invocation.getCurrentCharacter(), invocation.getCurrentChat(), invocation.listLorebooks()]); await invocation.openView({ title: 'Attack', mode: 'inline', allowExpand: true, minHeight: 360 }); const root = RisuToolUI.stack(); const itemSelect = RisuToolUI.select(root, lorebooks.map(({ source, entry }) => ({ label: source + ': ' + (entry.comment || entry.id), value: entry.id || entry.comment }))); const success = RisuToolUI.numberStepper(root, { value: 50, min: 0, max: 100, step: 1 }); const decision = await invocation.callTool(HELPER_REF, { character, chat, item: itemSelect.value }); success.value = String(JSON.parse(decision.response[0].text).success); await new Promise((resolve) => RisuToolUI.button(root, 'Attack', resolve)); await invocation.commitChanges([{ kind: 'upsertLorebook', scope: 'chat', entry: { comment: 'Last attack', content: JSON.stringify({ item: itemSelect.value, success: Number(success.value) }), alwaysActive: true } }]); await invocation.closeView(); return { ok: true, item: itemSelect.value, success: Number(success.value) }; })",
+          source: "await risuai.registerFunction('attack', async (_args, invocation) => { const HELPER_REF = { kind: 'managed', toolId: 'REPLACE_WITH_HELPER_TOOL_ID', functionId: 'REPLACE_WITH_HELPER_FUNCTION_ID' }; const [character, chat, lorebooks] = await Promise.all([invocation.getCurrentCharacter(), invocation.getCurrentChat(), invocation.listLorebooks()]); await invocation.openView({ title: 'Attack', mode: 'inline', allowExpand: true, minHeight: 360 }); const root = RisuToolUI.stack(); const itemSelect = RisuToolUI.select(root, lorebooks.map(({ source, entry }) => ({ label: source + ': ' + (entry.comment || entry.id), value: entry.id || entry.comment }))); const success = RisuToolUI.numberStepper(root, { value: 50, min: 0, max: 100, step: 1 }); const decision = await invocation.callTool(HELPER_REF, { character, chat, item: itemSelect.value }); success.value = String(JSON.parse(decision.response[0].text).success); await new Promise((resolve) => RisuToolUI.button(root, 'Attack', resolve)); await invocation.commitChanges([{ kind: 'upsertLorebook', scope: 'chat', entry: { comment: 'Last attack', content: JSON.stringify({ item: itemSelect.value, success: Number(success.value) }), alwaysActive: true } }]); await invocation.disposeView(); return { ok: true, item: itemSelect.value, success: Number(success.value) }; })",
         },
         setFunctionExecutionAgent: examplePreset ? {
           kind: 'agent',
@@ -754,6 +754,7 @@ export class ToolPackageHandler extends MCPToolHandler {
         'agentOutput and visibleCall function regex stages require an agent function.',
         'Use requestChoice for a non-blocking inline option card. askUser remains a modal for compatibility.',
         'Tool App handlers use plugin.apiVersion 2 and receive an invocation object as their second argument.',
+        'closeView hides a Tool App for reuse within the current invocation; disposeView permanently removes its UI. Completed invocations are disposed automatically.',
         'Manual-launch functions cannot have required parameters; collect manual input inside the Tool App UI.',
         'Script functions may call only execution.allowedTools through invocation.callTool.',
         'Shared character, chat, lorebook, and raw database writes must use invocation.commitChanges and receive native confirmation.',
@@ -761,7 +762,7 @@ export class ToolPackageHandler extends MCPToolHandler {
       ],
       templateTokens: ['{{tool_args}}', '{{tool_arg::name}}', '{{tool_last_user}}', '{{tool_chat_history}}', '{{tool_character}}', '{{tool_state::chat}}', '{{tool_capture::name}}', '{{tool_result}}', '{{tool_updates}}', '{{tool_asset::filename}}'],
       pluginApi: ['registerFunction', 'askUser', 'requestChoice', 'requestDiceRoll', 'getVariable', 'setVariable', 'resetVariable', 'getList', 'setList', 'memoryList', 'memorySearch', 'memoryRead', 'memoryUpsert', 'memoryDelete', 'nativeFetch', 'databaseGet', 'databaseSet'],
-      invocationApiV2: ['openView', 'setViewMode', 'closeView', 'requestChoice', 'requestDiceRoll', 'callTool', 'getCurrentCharacter', 'getCurrentChat', 'listLorebooks', 'commitChanges'],
+      invocationApiV2: ['openView', 'setViewMode', 'closeView', 'disposeView', 'requestChoice', 'requestDiceRoll', 'callTool', 'getCurrentCharacter', 'getCurrentChat', 'listLorebooks', 'commitChanges'],
       toolUiSdk: ['make', 'stack', 'row', 'card', 'button', 'textInput', 'textarea', 'select', 'numberStepper'],
       pluginExample: "await risuai.registerFunction('run', async (args) => ({ ok: true, value: args.value }))",
       customToggleFormat: 'key=label=type=options; type may be omitted, select, text, textarea, caption, group, groupEnd, or divider.',

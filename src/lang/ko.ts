@@ -2572,7 +2572,7 @@ export const languageKorean = {
   toolNamespaceConflict: "네임스페이스 {namespace}은(는) 이미 사용 중입니다. 고유한 네임스페이스를 입력하세요:",
   toolImported: "툴을 가져왔습니다.",
   toolExported: "툴을 내보냈습니다.",
-  toolPluginApi: "API v2 핸들러는 (args, invocation)을 받습니다. invocation은 openView, setViewMode, closeView, requestChoice, requestDiceRoll, callTool, 현재 컨텍스트 읽기, 로어북, 확인 기반 공유 데이터 변경을 제공합니다.",
+  toolPluginApi: "API v2 핸들러는 (args, invocation)을 받습니다. invocation은 openView, setViewMode, closeView, disposeView, requestChoice, requestDiceRoll, callTool, 현재 컨텍스트 읽기, 로어북, 확인 기반 공유 데이터 변경을 제공합니다.",
   toolAppAllowedToolsHint: "API v2 invocation 컨텍스트에서는 미리 선언한 툴만 호출할 수 있습니다.",
   toolManualLaunch: "채팅에서 수동 실행 허용",
   toolManualLaunchLabel: "수동 실행 이름",

@@ -7,6 +7,11 @@ let mockChat: any
 const requestMocks = vi.hoisted(() => ({
     requestAgentModelPreset: vi.fn(),
 }))
+const sandboxMocks = vi.hoisted(() => ({
+    handler: vi.fn(),
+    executeInIframe: vi.fn(),
+    terminate: vi.fn(),
+}))
 
 vi.mock('src/ts/alert', () => ({
     alertConfirm: vi.fn(), alertInput: vi.fn(), alertSelect: vi.fn(),
@@ -17,7 +22,26 @@ vi.mock('src/ts/globalApi.svelte', () => ({
     readImage: vi.fn(async () => Uint8Array.from([60, 115, 118, 103, 47, 62])),
 }))
 vi.mock('src/ts/plugins/apiV3/transpiler', () => ({ pluginCodeTranspiler: vi.fn((source) => source) }))
-vi.mock('src/ts/plugins/apiV3/factory', () => ({ SandboxHost: class {} }))
+vi.mock('src/ts/plugins/apiV3/factory', () => ({
+    SandboxHost: class {
+        private iframe!: HTMLIFrameElement
+        constructor(private readonly apiFactory: Record<string, Function>) {}
+        run(iframe: HTMLIFrameElement) {
+            this.iframe = iframe
+            this.apiFactory.registerFunction('alpha', () => 'stale handler')
+            this.apiFactory.registerFunction('alpha', (...args: unknown[]) => sandboxMocks.handler(this.iframe, ...args))
+            this.apiFactory.__ready()
+        }
+        executeInIframe(code: string) {
+            return sandboxMocks.executeInIframe(this.iframe, code)
+        }
+        releaseRemoteInstance() {}
+        terminate() {
+            sandboxMocks.terminate(this.iframe)
+            this.iframe?.remove()
+        }
+    },
+}))
 vi.mock('src/ts/storage/database.svelte', () => ({
     getDatabase: () => mockDb,
     setDatabase: vi.fn(),
@@ -47,11 +71,15 @@ import {
     routeAgentOutput,
     toolWireName,
     ToolInvocationApi,
+    unloadToolRuntime,
     validateToolScopeState,
     validateToolPackage,
     validateToolPluginSource,
     writeToolScopeState,
 } from './tools'
+import { resetToolAppSessionForTests, toolAppSessionStore } from './toolApp'
+import { resetToolInteractionForTests } from './interaction'
+import { get } from 'svelte/store'
 
 function sampleTool(): RisuToolPackage {
     return {
@@ -66,7 +94,16 @@ function sampleTool(): RisuToolPackage {
 }
 
 beforeEach(() => {
+    unloadToolRuntime()
+    resetToolAppSessionForTests()
+    resetToolInteractionForTests()
+    document.body.replaceChildren()
     vi.clearAllMocks()
+    sandboxMocks.handler.mockResolvedValue('latest handler')
+    sandboxMocks.executeInIframe.mockImplementation(async (iframe: HTMLIFrameElement, code: string) => {
+        if (code === 'document.body.replaceChildren()') iframe.contentDocument?.body.replaceChildren()
+        return true
+    })
     requestMocks.requestAgentModelPreset.mockResolvedValue({ ok: true, text: 'OK:door-a', model: 'model' })
     mockDb = { tools: [], enabledTools: [], toolStates: {}, toolPermissions: {}, toolPolicy: { tools: {}, functions: {} } }
     mockCharacter = undefined
@@ -110,6 +147,109 @@ describe('built-in tool packages', () => {
             await new AsyncFunction('risuai', tool.plugin.source)(risuai)
             expect([...handlers.keys()]).toEqual(tool.functions.map((fn) => fn.name))
         }
+    })
+})
+
+describe('Tool App invocation lifecycle', () => {
+    function activateTool() {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'registered plugin'
+        tool.plugin.permissions = ['interactiveUi']
+        mockDb.tools = [tool]
+        mockDb.enabledTools = [tool.id]
+        return tool
+    }
+
+    test('replaces registrations by namespace and function wire name across reloads', async () => {
+        const tool = activateTool()
+
+        const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(result?.response).toEqual([{ type: 'text', text: 'latest handler' }])
+        expect(sandboxMocks.handler).toHaveBeenCalledOnce()
+
+        tool.plugin.source = 'reloaded plugin'
+        sandboxMocks.handler.mockResolvedValue('reloaded handler')
+        const reloaded = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(reloaded?.response).toEqual([{ type: 'text', text: 'reloaded handler' }])
+        expect(sandboxMocks.terminate).toHaveBeenCalledOnce()
+    })
+
+    test('preserves a closed view for the invocation and disposes it explicitly', async () => {
+        activateTool()
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        sandboxMocks.handler.mockImplementation(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            const opened = await invocation.openView({ title: 'Attack' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            expect(invocation.closeView()).toBe(true)
+            expect(await invocation.openView({ title: 'Attack again' })).toEqual(opened)
+            expect(iframe.contentDocument?.body.childElementCount).toBe(1)
+            expect(await invocation.disposeView()).toBe(true)
+            expect(await invocation.disposeView()).toBe(false)
+            return 'disposed'
+        })
+
+        const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(result?.response).toEqual([{ type: 'text', text: 'disposed' }])
+        expect(sandboxMocks.executeInIframe).toHaveBeenCalledOnce()
+        expect(get(toolAppSessionStore)).toBeNull()
+    })
+
+    test('automatically clears the reused iframe after every completed invocation', async () => {
+        const tool = activateTool()
+        tool.functions[0].presentation = { showInChat: false }
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const visibleChildCounts: number[] = []
+        sandboxMocks.handler.mockImplementation(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            await invocation.openView({ title: 'Repeated view' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            visibleChildCounts.push(iframe.contentDocument?.body.childElementCount ?? -1)
+            await invocation.closeView()
+            return 'done'
+        })
+
+        for (let index = 0; index < 3; index++) {
+            const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+            expect(result?.presentation?.showInChat).toBe(false)
+        }
+
+        expect(visibleChildCounts).toEqual([1, 1, 1])
+        expect(sandboxMocks.executeInIframe).toHaveBeenCalledTimes(3)
+        expect(get(toolAppSessionStore)).toBeNull()
+    })
+
+    test('cleans an open view after handler failure and request cancellation', async () => {
+        activateTool()
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        sandboxMocks.handler.mockImplementationOnce(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            await invocation.openView({ title: 'Failing view' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            throw new Error('handler failed')
+        })
+
+        const failed = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(failed).toMatchObject({ success: false, error: 'handler failed' })
+        expect(sandboxMocks.executeInIframe).toHaveBeenCalledOnce()
+        expect(get(toolAppSessionStore)).toBeNull()
+
+        const controller = new AbortController()
+        sandboxMocks.handler.mockImplementationOnce(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            await invocation.openView({ title: 'Cancelled view' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            controller.abort()
+            await new Promise(() => {})
+        })
+
+        const cancelled = await callManagedToolDetailed('sample__alpha', {}, { stack: [], abortSignal: controller.signal })
+
+        expect(cancelled).toMatchObject({ success: false, error: 'Tool call cancelled by the request.' })
+        expect(sandboxMocks.terminate).toHaveBeenCalledOnce()
+        expect(get(toolAppSessionStore)).toBeNull()
+        expect(document.querySelectorAll('iframe')).toHaveLength(0)
     })
 })
 

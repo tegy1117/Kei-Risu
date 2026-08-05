@@ -93,6 +93,7 @@ type ToolRuntime = {
     host: SandboxHost
     handlers: Map<string, ToolHandler>
     iframe: HTMLIFrameElement
+    viewOwnerId?: string
 }
 
 const runtimes = new Map<string, ToolRuntime>()
@@ -111,6 +112,7 @@ interface ToolInvocation {
     chatFingerprint: string
     databaseFingerprint: string
     viewId?: string
+    viewOpen?: boolean
 }
 
 export function toolWireName(namespace: string, functionName: string) {
@@ -406,7 +408,7 @@ export async function getManagedTools(): Promise<Array<MCPTool & { managedToolId
             const scriptFunctions = functions.filter((fn) => fn.execution?.kind !== 'agent')
             const runtime = scriptFunctions.length > 0 ? await ensureRuntime(tool) : null
             for (const fn of functions) {
-                if (fn.execution?.kind !== 'agent' && !runtime?.handlers.has(fn.name)) continue
+                if (fn.execution?.kind !== 'agent' && !runtime?.handlers.has(toolWireName(tool.namespace, fn.name))) continue
                 output.push({
                     name: toolWireName(tool.namespace, fn.name),
                     description: fn.description,
@@ -475,7 +477,7 @@ export async function callManagedToolDetailed(
                 })
             }
             const runtime = await ensureRuntime(tool)
-            const handler = runtime.handlers.get(fn.name)
+            const handler = runtime.handlers.get(wireName)
             if (!handler) throw new Error(`Handler ${fn.name} is not registered.`)
             const invocation = createToolInvocation(tool, fn, runtime, wireName, {
                 ...context,
@@ -490,7 +492,7 @@ export async function callManagedToolDetailed(
                 rawResult = await Promise.race([handler(input, invocationApi), invocation.cancelled])
             } finally {
                 context.abortSignal?.removeEventListener('abort', abortInvocation)
-                if (invocation.viewId) closeToolAppSession(invocation.viewId)
+                await disposeInvocationView(invocation)
                 runtime.host.releaseRemoteInstance(invocationApi)
             }
             const response = normalizeToolResult(rawResult).map((part) => part.type === 'text'
@@ -580,7 +582,10 @@ async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
     const previous = runtimes.get(tool.id)
     const runtimeMount = getToolAppRuntimeMount()
     if (previous?.source === source && (!runtimeMount || previous.iframe.parentElement === runtimeMount)) return previous
-    previous?.host.terminate()
+    if (previous) {
+        cancelToolAppForTool(tool.id, 'runtime_reloaded')
+        previous.host.terminate()
+    }
 
     let compiled = source
     if (tool.plugin?.language === 'typescript') compiled = await pluginCodeTranspiler(source)
@@ -600,6 +605,25 @@ async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Tool plugin initialization timed out.')), 3000)),
     ])
     return runtime
+}
+
+async function disposeInvocationView(invocation: ToolInvocation) {
+    const runtimeOwnsView = invocation.runtime.viewOwnerId === invocation.id
+    if (!invocation.viewId && !runtimeOwnsView) return false
+    if (invocation.viewId) closeToolAppSession(invocation.viewId)
+    invocation.viewOpen = false
+    try {
+        if (runtimeOwnsView && runtimes.get(invocation.tool.id) === invocation.runtime) {
+            await invocation.runtime.host.executeInIframe('document.body.replaceChildren()')
+        }
+    } catch {
+        invocation.runtime.host.terminate()
+        if (runtimes.get(invocation.tool.id) === invocation.runtime) runtimes.delete(invocation.tool.id)
+    } finally {
+        if (invocation.runtime.viewOwnerId === invocation.id) invocation.runtime.viewOwnerId = undefined
+        invocation.viewId = undefined
+    }
+    return true
 }
 
 function snapshotFingerprint(value: unknown) {
@@ -664,18 +688,29 @@ export class ToolInvocationApi {
     async openView(options: ToolAppViewOptions) {
         this.requireV2()
         await requirePermission(this.invocation.tool, 'interactiveUi')
-        const viewId = v4()
-        const opened = openToolAppSession({
-            id: viewId,
-            ownerId: this.invocation.ownerId,
-            toolId: this.invocation.tool.id,
-            functionId: this.invocation.fn.id,
-            iframe: this.invocation.runtime.iframe,
-            options,
-            onCancel: (reason) => this.invocation.cancel(reason),
-        })
-        this.invocation.viewId = viewId
-        return opened
+        if (this.invocation.viewOpen) throw new Error('This invocation already has an open Tool App view.')
+        const runtime = this.invocation.runtime
+        if (runtime.viewOwnerId && runtime.viewOwnerId !== this.invocation.id) throw new Error('interaction_busy')
+        const hadView = !!this.invocation.viewId
+        const viewId = this.invocation.viewId ?? v4()
+        runtime.viewOwnerId = this.invocation.id
+        try {
+            const opened = openToolAppSession({
+                id: viewId,
+                ownerId: this.invocation.ownerId,
+                toolId: this.invocation.tool.id,
+                functionId: this.invocation.fn.id,
+                iframe: runtime.iframe,
+                options,
+                onCancel: (reason) => this.invocation.cancel(reason),
+            })
+            this.invocation.viewId = viewId
+            this.invocation.viewOpen = true
+            return opened
+        } catch (error) {
+            if (!hadView && runtime.viewOwnerId === this.invocation.id) runtime.viewOwnerId = undefined
+            throw error
+        }
     }
 
     setViewMode(mode: ToolAppViewMode) {
@@ -686,10 +721,15 @@ export class ToolInvocationApi {
 
     closeView() {
         this.requireV2()
-        if (!this.invocation.viewId) return false
+        if (!this.invocation.viewId || !this.invocation.viewOpen) return false
         const closed = closeToolAppSession(this.invocation.viewId)
-        this.invocation.viewId = undefined
+        if (closed) this.invocation.viewOpen = false
         return closed
+    }
+
+    async disposeView() {
+        this.requireV2()
+        return disposeInvocationView(this.invocation)
     }
 
     async requestChoice(request: unknown) {
@@ -774,7 +814,7 @@ function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, 
         __ready: () => ready(),
         registerFunction: (name: string, handler: ToolHandler) => {
             if (!(tool.functions ?? []).some((fn) => fn.name === name)) throw new Error(`Function ${name} is not declared.`)
-            handlers.set(name, handler)
+            handlers.set(toolWireName(tool.namespace, name), handler)
         },
         askUser: async (question: string, options: string[] = [], allowFreeText = true) => {
             await requirePermission(tool, 'askUser')
