@@ -21,7 +21,7 @@ import type { ApiKeyPoolEntry, ModelBindingFields, ModelBindingSet, ModelPreset,
 import { emptyModelBinding } from '../preset/types';
 import { isChatStub } from './chatStub';
 import { reconcileBuiltinTools } from '../process/tools/builtins';
-import { emptyToolPromptPolicy, type RisuToolPackage, type ToolPromptPolicy, type ToolStateStore } from '../process/tools/types';
+import { emptyToolPromptPolicy, type RisuToolPackage, type ToolNetworkSettings, type ToolPromptPolicy, type ToolStateStore } from '../process/tools/types';
 import type { AgentMessageVariantState, AgentPreset, AgentRunRecord } from '../agent/types';
 import { sanitizeAgentInfoBindings } from '../agent/pipeline';
 
@@ -566,6 +566,9 @@ export function setDatabase(data:Database){
     data.enabledTools ??= []
     data.toolStates ??= {}
     data.toolPermissions ??= {}
+    data.toolNetworkSettings ??= { profiles: [], approvedOrigins: {} }
+    data.toolNetworkSettings.profiles ??= []
+    data.toolNetworkSettings.approvedOrigins ??= {}
     data.toolPolicy = data.toolPolicy ? {
         tools: data.toolPolicy.tools ?? {},
         functions: data.toolPolicy.functions ?? {},
@@ -1310,6 +1313,7 @@ export interface Database{
     enabledTools: string[]
     toolStates: ToolStateStore
     toolPermissions: Record<string, Record<string, boolean>>
+    toolNetworkSettings: ToolNetworkSettings
     toolPolicy: ToolPromptPolicy
     sideMenuRerollButton?:boolean
     requestInfoInsideChat?:boolean

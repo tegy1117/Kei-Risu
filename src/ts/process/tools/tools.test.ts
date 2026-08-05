@@ -68,12 +68,16 @@ beforeEach(() => {
 })
 
 describe('built-in tool packages', () => {
-    test('ships Dice, Question, Localtime, and Memory as read-only packages', () => {
+    test('ships interactive, local, network, and memory packages as read-only tools', () => {
         const tools = createBuiltinTools()
-        expect(tools.map((tool) => tool.builtinId)).toEqual(['dice', 'question', 'localtime', 'memory'])
+        expect(tools.map((tool) => tool.builtinId)).toEqual(['dice', 'question', 'localtime', 'http', 'websearch', 'memory'])
         expect(tools.every((tool) => tool.readonly)).toBe(true)
         expect(tools.find((tool) => tool.builtinId === 'dice')?.functions[0].parameters.find((parameter) => parameter.name === 'kind')?.enum)
             .toEqual(['coin', 'd4', 'd6', 'd10', 'd20', 'd100', 'range'])
+        expect(tools.find((tool) => tool.builtinId === 'question')?.functions.map((fn) => fn.name))
+            .toEqual(['ask', 'choose'])
+        expect(tools.find((tool) => tool.builtinId === 'http')?.functions.every((fn) => fn.enabled)).toBe(true)
+        expect(tools.find((tool) => tool.builtinId === 'websearch')?.functions.every((fn) => fn.enabled)).toBe(true)
         expect(tools.find((tool) => tool.builtinId === 'memory')?.functions.map((fn) => fn.name))
             .toEqual(['list', 'search', 'read', 'upsert', 'delete'])
     })

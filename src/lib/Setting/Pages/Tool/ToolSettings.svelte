@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { CopyIcon, DatabaseIcon, DownloadIcon, GlobeIcon, HardDriveUploadIcon, PlusIcon, SquarePenIcon, TrashIcon, WrenchIcon } from '@lucide/svelte'
+    import { CopyIcon, DatabaseIcon, DownloadIcon, GlobeIcon, HardDriveUploadIcon, NetworkIcon, PlusIcon, SquarePenIcon, TrashIcon, WrenchIcon } from '@lucide/svelte'
     import { language } from 'src/lang'
     import SettingPage from 'src/lib/UI/GUI/SettingPage.svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
@@ -13,8 +13,9 @@
     import { v4 } from 'uuid'
     import ToolEditor from './ToolEditor.svelte'
     import ToolStateEditor from './ToolStateEditor.svelte'
+    import ToolNetworkProfiles from './ToolNetworkProfiles.svelte'
 
-    let mode = $state<'list' | 'create' | 'edit' | 'state'>('list')
+    let mode = $state<'list' | 'create' | 'edit' | 'state' | 'network'>('list')
     let search = $state('')
     let editIndex = $state(-1)
     let currentTool = $state<RisuToolPackage>(blankTool())
@@ -73,6 +74,7 @@
             <TextInput className="grow" placeholder={language.search} bind:value={search} />
             <button class="text-textcolor2 hover:text-primary" title={language.createTool} onclick={() => { currentTool = blankTool(); mode = 'create' }}><PlusIcon /></button>
             <button class="text-textcolor2 hover:text-primary" title={language.toolImport} onclick={importTool}><HardDriveUploadIcon /></button>
+            <button class="text-textcolor2 hover:text-primary" title="네트워크 툴 프로필" onclick={() => { mode = 'network' }}><NetworkIcon /></button>
         </div>
         <div class="w-full mt-4 flex flex-col border border-selected rounded-md overflow-hidden">
             {#if DBState.db.tools.length === 0}<div class="text-textcolor2 p-3">{language.noTools}</div>{/if}
@@ -92,6 +94,10 @@
                 </div>
             {/each}
         </div>
+    </SettingPage>
+{:else if mode === 'network'}
+    <SettingPage title="네트워크 툴 프로필">
+        <ToolNetworkProfiles onclose={() => { mode = 'list' }} />
     </SettingPage>
 {:else if mode === 'state'}
     <SettingPage title={`${language.toolStateManager}: ${currentTool.name}`}>

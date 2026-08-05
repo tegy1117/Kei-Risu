@@ -238,9 +238,13 @@ export let requiresFullEncoderReload = $state({
     state: false
 })
 
-let requestImmediateSaveImpl: ((options?: {
+interface ImmediateSaveOptions {
     forceFullWrite?: boolean
-}) => Promise<void> | void) = () => {}
+    throwOnError?: boolean
+    changes?: Partial<toSaveType>
+}
+
+let requestImmediateSaveImpl: ((options?: ImmediateSaveOptions) => Promise<void> | void) = () => {}
 let patchSyncBaseline: Database | null = null
 
 // Surfaces server-side persist failures (Stage 1 visibility — see issues.md).
@@ -344,9 +348,7 @@ export function previewPersistFailureToast() {
     })
 }
 
-export function requestImmediateSave(options?: {
-    forceFullWrite?: boolean
-}) {
+export function requestImmediateSave(options?: ImmediateSaveOptions) {
     return requestImmediateSaveImpl(options)
 }
 
@@ -1080,6 +1082,7 @@ export async function saveDb() {
     async function triggerSave(options?: {
         forceFullWrite?: boolean
         skipBroadcast?: boolean
+        throwOnError?: boolean
     }) {
         if (saveInFlight) {
             return saveInFlight
@@ -1112,6 +1115,7 @@ export async function saveDb() {
                     await sleep(Math.min(500 * savetrys, 3000))
                     changed = true
                 }
+                if (options?.throwOnError) throw error
             } finally {
                 saving.state = false
                 saveInFlight = null
@@ -1122,11 +1126,27 @@ export async function saveDb() {
     }
 
     requestImmediateSaveImpl = async (options) => {
+        if (options?.changes) requeueTrackedChanges({
+            character: options.changes.character ?? [],
+            chat: options.changes.chat ?? [],
+            root: options.changes.root ?? false,
+            botPreset: options.changes.botPreset ?? false,
+            modules: options.changes.modules ?? false,
+            plugins: options.changes.plugins ?? false,
+            pluginCustomStorage: options.changes.pluginCustomStorage ?? false,
+        })
         changed = true
         await tick()
-        await triggerSave({
+        const saveOptions = {
             forceFullWrite: options?.forceFullWrite,
-        })
+            throwOnError: options?.throwOnError,
+        }
+        await triggerSave(saveOptions)
+        // If another save was already in flight, the explicit changes above were
+        // queued after that save took its snapshot. Drain them before reporting a
+        // confirmed MCP write as complete. When this call owned the first save,
+        // the second pass is a cheap no-op.
+        if (options?.changes) await triggerSave(saveOptions)
     }
 
     let savetrys = 0
@@ -1962,13 +1982,14 @@ export class AppendableBuffer {
 export interface FetchNativeArgs {
     body?: string | Uint8Array | ArrayBuffer,
     headers?: { [key: string]: string },
-    method?: "POST" | "GET" | "PUT" | "DELETE",
+    method?: "POST" | "GET" | "PUT" | "PATCH" | "DELETE",
     signal?: AbortSignal,
     useRisuTk?: boolean,
     chatId?: string
     interceptor?: string
     requestTimeoutMs?: number
     networkRoute?: 'auto' | 'local_network'
+    networkPolicy?: 'public'
     /** Request-log classification; see GlobalFetchArgs for the same fields. */
     logCategory?: RequestLogCategory
     logSource?: RequestLogSource
@@ -2066,10 +2087,11 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
     // wrapper's view of arg.body.
     hooks?.onRealBody?.(realBody ? new TextDecoder().decode(realBody) : '')
     const useLocalNetworkRoute = arg.networkRoute === 'local_network' && isLocalNetworkUrl(url)
+    const usePublicToolRoute = arg.networkPolicy === 'public'
     const timeoutSignal = buildTimeoutSignal(arg.signal, arg.requestTimeoutMs)
     const requestSignal = timeoutSignal.signal
     const db = getDatabase()
-    let throughProxy = !db.usePlainFetch
+    let throughProxy = !db.usePlainFetch || usePublicToolRoute
     if (useLocalNetworkRoute) {
         throughProxy = true
     }
@@ -2083,6 +2105,11 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
                 method: arg.method,
                 signal: requestSignal
             })
+        }
+
+        if (usePublicToolRoute) {
+            hooks?.onRoute?.('proxy')
+            return await fetchViaProxy2(url, headers, realBody, { ...arg, signal: requestSignal })
         }
 
         // Local network streaming: try WebSocket proxy job, fallback to /proxy2
@@ -2145,7 +2172,7 @@ async function fetchViaProxy2(
     url: string,
     headers: Record<string, string>,
     realBody: Uint8Array | undefined,
-    arg: { method?: string, signal?: AbortSignal, useRisuTk?: boolean, requestTimeoutMs?: number }
+    arg: { method?: string, signal?: AbortSignal, useRisuTk?: boolean, requestTimeoutMs?: number, networkPolicy?: 'public' }
 ): Promise<Response> {
     const proxyHeaders: Record<string, string> = {
         "risu-header": encodeURIComponent(JSON.stringify(headers)),
@@ -2153,6 +2180,7 @@ async function fetchViaProxy2(
         "risu-auth": await forageStorage.createAuth(),
         ...(arg.useRisuTk ? { "x-risu-tk": "use" } : {}),
         ...(arg.requestTimeoutMs && { "risu-timeout-ms": Math.max(1, Math.floor(arg.requestTimeoutMs)).toString() }),
+        ...(arg.networkPolicy === 'public' ? { "risu-public-network": "1" } : {}),
         ...(DBState?.db?.requestLocation ? { "risu-location": DBState.db.requestLocation } : {}),
     }
 

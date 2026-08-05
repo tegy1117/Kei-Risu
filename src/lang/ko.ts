@@ -2564,7 +2564,7 @@ export const languageKorean = {
   toolNamespaceConflict: "네임스페이스 {namespace}은(는) 이미 사용 중입니다. 고유한 네임스페이스를 입력하세요:",
   toolImported: "툴을 가져왔습니다.",
   toolExported: "툴을 내보냈습니다.",
-  toolPluginApi: "사용 가능 API: registerFunction, askUser, requestDiceRoll, getVariable/setVariable/resetVariable, getList/setList, memoryList/memorySearch/memoryRead/memoryUpsert/memoryDelete, nativeFetch, databaseGet/databaseSet.",
+  toolPluginApi: "사용 가능 API: registerFunction, askUser, requestChoice, requestDiceRoll, getVariable/setVariable/resetVariable, getList/setList, memoryList/memorySearch/memoryRead/memoryUpsert/memoryDelete, nativeFetch, databaseGet/databaseSet.",
   toolStateManager: "상태 관리",
   toolStateGlobal: "글로벌",
   toolStateCharacter: "캐릭터",

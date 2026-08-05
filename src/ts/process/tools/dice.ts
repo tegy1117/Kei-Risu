@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store'
 import { v4 } from 'uuid'
+import { claimToolInteraction, releaseToolInteraction } from './interaction'
 
 export type DiceKind = 'coin' | 'd4' | 'd6' | 'd10' | 'd20' | 'd100' | 'range'
 
@@ -111,8 +112,12 @@ export function rollDice(request: DiceRollRequest, randomInt = secureRandomInt):
 
 export function requestDiceRoll(request: DiceRollRequest): Promise<DiceRollResult> {
     const normalized = normalizeRequest(request)
-    if (resolvers.size > 0) return Promise.reject(new Error('Another interactive dice roll is already waiting.'))
     const id = v4()
+    try {
+        claimToolInteraction('dice', id)
+    } catch (error) {
+        return Promise.reject(error)
+    }
     diceInteractionStore.set({ id, request: normalized, status: 'waiting' })
     return new Promise((resolve, reject) => resolvers.set(id, { resolve, reject }))
 }
@@ -132,6 +137,7 @@ export function activateDiceRoll(id: string, revealDelayMs = 800) {
         const active = resolvers.get(id)
         if (!active) return
         resolvers.delete(id)
+        releaseToolInteraction('dice', id)
         diceInteractionStore.set(null)
         active.resolve(interaction!.result!)
     }, Math.max(0, revealDelayMs))
@@ -141,6 +147,7 @@ export function cancelDiceRoll(id: string) {
     const resolver = resolvers.get(id)
     if (!resolver) return
     resolvers.delete(id)
+    releaseToolInteraction('dice', id)
     diceInteractionStore.set(null)
     resolver.reject(new Error('user_cancelled'))
 }

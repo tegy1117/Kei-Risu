@@ -524,6 +524,31 @@ function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, 
             const { requestDiceRoll } = await import('./dice')
             return requestDiceRoll(request as never)
         },
+        requestChoice: async (request: unknown) => {
+            await requirePermission(tool, 'askUser')
+            if (!isObject(request)) throw new Error('Choice request must be an object.')
+            const { requestChoice } = await import('./choice')
+            return requestChoice(request as never)
+        },
+        httpRequest: async (args: unknown) => {
+            if (tool.builtinId !== 'http') throw new Error('httpRequest is reserved for the bundled HTTP tool.')
+            if (!isObject(args)) throw new Error('HTTP request must be an object.')
+            const { executeHttpTool } = await import('./network')
+            return executeHttpTool(args as never)
+        },
+        webSearch: async (args: unknown) => {
+            if (tool.builtinId !== 'websearch') throw new Error('webSearch is reserved for the bundled Web Search tool.')
+            if (!isObject(args)) throw new Error('Search request must be an object.')
+            const { executeSearchTool } = await import('./network')
+            return executeSearchTool(args as never)
+        },
+        networkProfiles: async (kind: unknown) => {
+            if (tool.builtinId !== 'http' && tool.builtinId !== 'websearch') throw new Error('networkProfiles is reserved for bundled network tools.')
+            const expected = tool.builtinId === 'http' ? 'http' : 'search'
+            if (kind !== expected) throw new Error(`Expected ${expected} network profiles.`)
+            const { listNetworkProfiles } = await import('./network')
+            return listNetworkProfiles(expected)
+        },
         getVariable: (name: string) => getVariable(tool, name),
         setVariable: (name: string, value: unknown) => setVariable(tool, name, value),
         resetVariable: (name: string) => resetVariable(tool, name),

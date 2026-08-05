@@ -119,7 +119,7 @@ export interface RisuToolPackage {
     description: string
     namespace: string
     version: string
-    builtinId?: 'question' | 'localtime' | 'memory' | 'dice'
+    builtinId?: 'question' | 'localtime' | 'memory' | 'dice' | 'http' | 'websearch'
     readonly?: boolean
     functions: RisuToolFunction[]
     variables: RisuToolVariable[]
@@ -172,6 +172,36 @@ export interface RisuToolExportV1 {
     version: 1
     tool: RisuToolPackage
     state?: ToolPackageState
+}
+
+export type ToolHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export interface ToolSearchResultMapping {
+    itemsPath: string
+    titlePath: string
+    urlPath: string
+    snippetPath: string
+}
+
+export interface ToolNetworkProfile {
+    id: string
+    kind: 'http' | 'search'
+    name: string
+    description: string
+    baseUrl?: string
+    urlTemplate?: string
+    method: ToolHttpMethod
+    headers: Record<string, string>
+    secrets: Record<string, string>
+    bodyTemplate?: string
+    timeoutMs: number
+    maxResponseBytes: number
+    mapping?: ToolSearchResultMapping
+}
+
+export interface ToolNetworkSettings {
+    profiles: ToolNetworkProfile[]
+    approvedOrigins: Record<string, boolean>
 }
 
 export interface RisuToolExportAssetV2 {

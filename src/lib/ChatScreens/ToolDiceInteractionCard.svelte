@@ -2,6 +2,8 @@
     import { DicesIcon, XIcon } from '@lucide/svelte'
     import { activateDiceRoll, cancelDiceRoll, diceInteractionStore } from 'src/ts/process/tools/dice'
     import { language } from 'src/lang'
+    import { get } from 'svelte/store'
+    import { onDestroy } from 'svelte'
 
     let reducedMotion = $state(false)
     $effect(() => {
@@ -11,6 +13,11 @@
     function label(kind: string) {
         return kind === 'coin' ? language.toolDiceCoin : kind === 'range' ? language.toolDiceRoulette : kind.toUpperCase()
     }
+
+    onDestroy(() => {
+        const interaction = get(diceInteractionStore)
+        if (interaction) cancelDiceRoll(interaction.id)
+    })
 </script>
 
 {#if $diceInteractionStore}

@@ -1108,7 +1108,7 @@ export const languageEnglish = {
     toolNamespaceConflict: "Namespace {namespace} is already in use. Enter a unique namespace:",
     toolImported: "Tool imported successfully.",
     toolExported: "Tool exported successfully.",
-    toolPluginApi: "Available API: registerFunction, askUser, requestDiceRoll, getVariable/setVariable/resetVariable, getList/setList, memoryList/memorySearch/memoryRead/memoryUpsert/memoryDelete, nativeFetch, databaseGet/databaseSet.",
+    toolPluginApi: "Available API: registerFunction, askUser, requestChoice, requestDiceRoll, getVariable/setVariable/resetVariable, getList/setList, memoryList/memorySearch/memoryRead/memoryUpsert/memoryDelete, nativeFetch, databaseGet/databaseSet.",
     toolStateManager: "Manage state",
     toolStateGlobal: "Global",
     toolStateCharacter: "Character",
