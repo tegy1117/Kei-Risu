@@ -2180,7 +2180,6 @@ async function fetchViaProxy2(
         "risu-auth": await forageStorage.createAuth(),
         ...(arg.useRisuTk ? { "x-risu-tk": "use" } : {}),
         ...(arg.requestTimeoutMs && { "risu-timeout-ms": Math.max(1, Math.floor(arg.requestTimeoutMs)).toString() }),
-        ...(arg.networkPolicy === 'public' ? { "risu-public-network": "1" } : {}),
         ...(DBState?.db?.requestLocation ? { "risu-location": DBState.db.requestLocation } : {}),
     }
 
@@ -2188,7 +2187,8 @@ async function fetchViaProxy2(
         proxyHeaders["Content-Type"] = headers["Content-Type"] ?? headers["content-type"] ?? "application/json"
     }
 
-    const r = await fetch(`/proxy2`, {
+    const proxyEndpoint = arg.networkPolicy === 'public' ? '/public-proxy' : '/proxy2'
+    const r = await fetch(proxyEndpoint, {
         body: realBody as any,
         headers: proxyHeaders,
         method: arg.method,

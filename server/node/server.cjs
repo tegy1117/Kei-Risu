@@ -2605,22 +2605,12 @@ const reverseProxyFunc = async (req, res, next) => {
             }
         }
         // make request to original server
-        const publicNetworkPolicy = req.headers['risu-public-network'] === '1';
-        const requestInit = {
+        originalResponse = await fetch(urlParam, {
             method: req.method,
             headers: header,
             body: requestBody,
             signal: timeout.signal
-        };
-        if (publicNetworkPolicy) {
-            originalResponse = await fetchPublicNetworkUrl(urlParam, requestInit);
-        }
-        else {
-            // Legacy authenticated proxy behavior. The destination is intentionally
-            // user-configurable and is not used by public-network tools.
-            // codeql[js/request-forgery]
-            originalResponse = await fetch(urlParam, requestInit);
-        }
+        });
         // get response body as stream
         const originalBody = originalResponse.body;
         // get response headers
@@ -2699,21 +2689,11 @@ const reverseProxyFunc_get = async (req, res, next) => {
         header['x-forwarded-for'] = req.ip
     }
         // make request to original server
-        const publicNetworkPolicy = req.headers['risu-public-network'] === '1';
-        const requestInit = {
+        originalResponse = await fetch(urlParam, {
             method: 'GET',
             headers: header,
             signal: timeout.signal
-        };
-        if (publicNetworkPolicy) {
-            originalResponse = await fetchPublicNetworkUrl(urlParam, requestInit);
-        }
-        else {
-            // Legacy authenticated proxy behavior. The destination is intentionally
-            // user-configurable and is not used by public-network tools.
-            // codeql[js/request-forgery]
-            originalResponse = await fetch(urlParam, requestInit);
-        }
+        });
         // get response body as stream
         const originalBody = originalResponse.body;
         // get response headers
@@ -2754,6 +2734,82 @@ const reverseProxyFunc_get = async (req, res, next) => {
         next(err);
         return;
     } finally {
+        timeout.cleanup();
+    }
+}
+
+const publicNetworkProxyFunc = async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+
+    const urlParam = req.headers['risu-url'] ? decodeURIComponent(req.headers['risu-url']) : req.query.url;
+    if (!urlParam) {
+        res.status(400).send({ error: 'URL has no param' });
+        return;
+    }
+
+    const timeoutMs = getRequestTimeoutMs(req.headers['risu-timeout-ms']);
+    const timeout = createTimeoutController(timeoutMs);
+    try {
+        const headers = req.headers['risu-header']
+            ? JSON.parse(decodeURIComponent(req.headers['risu-header']))
+            : {};
+        if (req.headers['x-risu-tk'] && !headers['x-risu-tk']) {
+            headers['x-risu-tk'] = req.headers['x-risu-tk'];
+        }
+        if (req.headers['risu-location'] && !headers['risu-location']) {
+            headers['risu-location'] = req.headers['risu-location'];
+        }
+
+        let requestBody;
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            requestBody = Buffer.isBuffer(req.body) || typeof req.body === 'string'
+                ? req.body
+                : req.body === undefined ? undefined : JSON.stringify(req.body);
+        }
+
+        const originalResponse = await fetchPublicNetworkUrl(urlParam, {
+            method: req.method,
+            headers,
+            body: requestBody,
+            signal: timeout.signal,
+        });
+        const responseHeaders = new Headers(originalResponse.headers);
+        for (const name of [
+            'clear-site-data',
+            'connection',
+            'content-security-policy',
+            'content-security-policy-report-only',
+            'keep-alive',
+            'proxy-authenticate',
+            'proxy-authorization',
+            'set-cookie',
+            'te',
+            'trailer',
+            'transfer-encoding',
+            'upgrade',
+        ]) responseHeaders.delete(name);
+
+        res.status(originalResponse.status);
+        for (const [name, value] of responseHeaders) res.setHeader(name, value);
+        if (originalResponse.body) await pipeline(originalResponse.body, res);
+        else res.end();
+    }
+    catch (err) {
+        if (err?.name === 'AbortError') {
+            if (!res.headersSent) {
+                res.status(504).send({
+                    error: timeoutMs
+                        ? `Public proxy request timed out after ${timeoutMs}ms`
+                        : 'Public proxy request aborted',
+                });
+            }
+            else res.end();
+            return;
+        }
+        logger.error(`[PublicProxy] ${req.method} ${urlParam}`, err);
+        next(err);
+    }
+    finally {
         timeout.cleanup();
     }
 }
@@ -2920,16 +2976,21 @@ async function hubProxyFunc(req, res) {
 
 app.get('/proxy', reverseProxyFunc_get);
 app.get('/proxy2', reverseProxyFunc_get);
+app.get('/public-proxy', publicNetworkProxyFunc);
 app.get('/hub-proxy/*', hubProxyFunc);
 
 app.post('/proxy', reverseProxyFunc);
 app.post('/proxy2', reverseProxyFunc);
+app.post('/public-proxy', publicNetworkProxyFunc);
 app.put('/proxy', reverseProxyFunc);
 app.put('/proxy2', reverseProxyFunc);
+app.put('/public-proxy', publicNetworkProxyFunc);
 app.patch('/proxy', reverseProxyFunc);
 app.patch('/proxy2', reverseProxyFunc);
+app.patch('/public-proxy', publicNetworkProxyFunc);
 app.delete('/proxy', reverseProxyFunc);
 app.delete('/proxy2', reverseProxyFunc);
+app.delete('/public-proxy', publicNetworkProxyFunc);
 app.post('/hub-proxy/*', hubProxyFunc);
 
 // --- Proxy Stream Job endpoints ---
