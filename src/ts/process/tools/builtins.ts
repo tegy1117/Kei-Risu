@@ -5,8 +5,8 @@ const questionSource = `
 await risuai.registerFunction('ask', async (args) => {
     return await risuai.askUser(args.question, args.options || [], args.allowFreeText !== false)
 })
-await risuai.registerFunction('choose', async (args) => {
-    return await risuai.requestChoice(args || {})
+await risuai.registerFunction('choose', async (args, context) => {
+    return await context.requestChoice(args || {})
 })
 `.trim()
 
@@ -38,8 +38,8 @@ await risuai.registerFunction('delete', async (args) => risuai.memoryDelete(args
 `.trim()
 
 const diceSource = `
-await risuai.registerFunction('roll', async (args) => {
-    return await risuai.requestDiceRoll(args || {})
+await risuai.registerFunction('roll', async (args, context) => {
+    return await context.requestDiceRoll(args || {})
 })
 `.trim()
 
@@ -96,7 +96,7 @@ export function createBuiltinTools(): RisuToolPackage[] {
             }],
             variables: [], lists: [],
             backgroundEmbedding: '<style>.x-risu-dice-interaction{border-color:color-mix(in srgb,currentColor 24%,transparent)}</style>',
-            plugin: { language: 'javascript', source: diceSource, permissions: ['askUser'] },
+            plugin: { apiVersion: 2, language: 'javascript', source: diceSource, permissions: ['askUser'] },
         },
         {
             id: BUILTIN_TOOL_IDS.question,
@@ -124,7 +124,7 @@ export function createBuiltinTools(): RisuToolPackage[] {
                 ],
             }],
             variables: [], lists: [],
-            plugin: { language: 'javascript', source: questionSource, permissions: ['askUser'] },
+            plugin: { apiVersion: 2, language: 'javascript', source: questionSource, permissions: ['askUser'] },
         },
         {
             id: BUILTIN_TOOL_IDS.localtime,
@@ -261,11 +261,14 @@ export function reconcileBuiltinTools(tools: RisuToolPackage[] | undefined): Ris
 function normalizeUserTool(tool: RisuToolPackage): RisuToolPackage {
     return {
         ...tool,
+        plugin: { ...tool.plugin, apiVersion: tool.plugin?.apiVersion ?? 1, permissions: tool.plugin?.permissions ?? [] },
         functions: (tool.functions ?? []).map((fn) => ({
             ...fn,
             id: fn.id || v4(),
             parameters: (fn.parameters ?? []).map((parameter) => ({ ...parameter, id: parameter.id || v4() })),
-            execution: fn.execution ?? { kind: 'script' },
+            execution: fn.execution?.kind === 'script'
+                ? { ...fn.execution, allowedTools: fn.execution.allowedTools ?? [] }
+                : fn.execution ?? { kind: 'script', allowedTools: [] },
             ...(fn.execution?.kind === 'agent' ? {
                 execution: {
                     ...fn.execution,

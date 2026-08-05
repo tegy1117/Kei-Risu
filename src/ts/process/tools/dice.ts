@@ -110,11 +110,11 @@ export function rollDice(request: DiceRollRequest, randomInt = secureRandomInt):
     }
 }
 
-export function requestDiceRoll(request: DiceRollRequest): Promise<DiceRollResult> {
+export function requestDiceRoll(request: DiceRollRequest, ownerId?: string): Promise<DiceRollResult> {
     const normalized = normalizeRequest(request)
     const id = v4()
     try {
-        claimToolInteraction('dice', id)
+        claimToolInteraction('dice', id, ownerId, () => cancelDiceRoll(id))
     } catch (error) {
         return Promise.reject(error)
     }

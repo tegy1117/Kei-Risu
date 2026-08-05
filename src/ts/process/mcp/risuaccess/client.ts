@@ -70,7 +70,7 @@ Lorebooks are texts containing various information about the character with cond
 
 backgroundEmbedding is an HTML string mainly for custom styling. It can, and mostly include <style> tags with CSS. Note that all selectors will be prefixed with '.chattext ' so they cannot escape the chat boundary - No html, body, :root access.
 
-Managed Tools are user-authored packages of callable functions, state definitions, module features, and sandboxed plugin code. Use the tool draft APIs to make multiple in-memory edits, validate them, and request one user-approved commit. Built-in tools must be cloned before editing. Draft edits do not change saved data.
+Managed Tools are user-authored packages of callable functions, state definitions, module features, and sandboxed plugin code. API v2 tools can show inline, modal, or fullscreen Tool App UI, call only declared nested tools, read scoped character/chat/lorebook data, and propose confirmed shared-data changes. Use the tool draft APIs to make multiple in-memory edits, validate them, and request one user-approved commit. Built-in tools must be cloned before editing. Draft edits do not change saved data.
 `
     super('internal:risuai')
     this.serverInfo.serverInfo.name = 'Risuai Access MCP'

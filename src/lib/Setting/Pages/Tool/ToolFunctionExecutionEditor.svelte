@@ -15,6 +15,7 @@
         fn.execution ??= { kind: 'script' }
         fn.presentation ??= {}
         fn.presentation.showInChat ??= true
+        fn.presentation.manualLaunch ??= { enabled: false, includeInModelHistory: true }
     })
 
     function refresh() { currentTool.functions = currentTool.functions }
@@ -23,25 +24,28 @@
             currentTool.functionRegex = (currentTool.functionRegex ?? []).filter((script) =>
                 script.functionId !== fn.id || (script.type !== 'agentOutput' && script.type !== 'visibleCall'))
         }
-        fn.execution = kind === 'script' ? { kind: 'script' } : {
+        fn.execution = kind === 'script' ? { kind: 'script', allowedTools: [] } : {
             kind: 'agent', modelPresetId: '', systemPrompt: '', userPrompt: '{{tool_args}}', allowedTools: [], outputRoutes: [],
         }
         refresh()
     }
     function agent(): ToolAgentExecution | null { return fn.execution?.kind === 'agent' ? fn.execution : null }
+    function callableExecution() { return fn.execution?.kind === 'agent' || fn.execution?.kind === 'script' ? fn.execution : null }
     function addRoute() {
         agent()?.outputRoutes.push({ id: v4(), name: 'Success', pattern: '^(?<result>[\\s\\S]+)$', flags: '', outcome: 'success', modelTemplate: '{{tool_capture::result}}', cardTemplate: '{{tool_capture::result}}', actions: [] })
         refresh()
     }
     function addManagedTool(toolId: string, functionId: string, enabled: boolean) {
-        const execution = agent(); if (!execution) return
+        const execution = callableExecution(); if (!execution) return
+        execution.allowedTools ??= []
         execution.allowedTools = enabled
             ? [...execution.allowedTools, { kind: 'managed', toolId, functionId }]
             : execution.allowedTools.filter((ref) => ref.kind !== 'managed' || ref.toolId !== toolId || ref.functionId !== functionId)
         refresh()
     }
     function addExternalTool() {
-        const execution = agent(); if (!execution) return
+        const execution = callableExecution(); if (!execution) return
+        execution.allowedTools ??= []
         execution.allowedTools.push({ kind: 'external', name: '' }); refresh()
     }
     function addAction(routeIndex: number) {
@@ -114,11 +118,34 @@
                 {/each}
             </div>
         {/each}
+    {:else if fn.execution?.kind === 'script'}
+        {@const execution = fn.execution}
+        <div class="flex items-center"><strong>{language.toolAgentAllowedTools}</strong><button class="ml-auto hover:text-primary" onclick={addExternalTool} title={language.toolAgentAddExternal}><PlusIcon size={18}/></button></div>
+        <p class="text-xs text-textcolor2">{language.toolAppAllowedToolsHint}</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {#each DBState.db.tools ?? [] as tool}
+                {#each tool.functions ?? [] as candidate}
+                    {#if tool.id !== currentTool.id || candidate.id !== fn.id}
+                        <CheckInput check={(execution.allowedTools ?? []).some((ref) => ref.kind === 'managed' && ref.toolId === tool.id && ref.functionId === candidate.id)} name={`${tool.namespace}__${candidate.name}`} margin={false} onChange={(value) => addManagedTool(tool.id, candidate.id, value)} />
+                    {/if}
+                {/each}
+            {/each}
+        </div>
+        {#each execution.allowedTools ?? [] as ref, index}
+            {#if ref.kind === 'external'}
+                <div class="flex gap-2"><TextInput bind:value={ref.name} placeholder="external_tool_name"/><button class="text-textcolor2 hover:text-red-400" onclick={() => { execution.allowedTools?.splice(index, 1); refresh() }}><TrashIcon size={18}/></button></div>
+            {/if}
+        {/each}
     {/if}
 
     <strong class="mt-2">{language.toolPresentation}</strong>
     <CheckInput bind:check={fn.presentation.showInChat} name={language.toolShowInChat} margin={false} />
     <p class="text-xs text-textcolor2">{language.toolShowInChatHint}</p>
+    <CheckInput bind:check={fn.presentation.manualLaunch.enabled} name={language.toolManualLaunch} margin={false} />
+    {#if fn.presentation.manualLaunch?.enabled}
+        <TextInput bind:value={fn.presentation.manualLaunch.label} placeholder={language.toolManualLaunchLabel} />
+        <CheckInput bind:check={fn.presentation.manualLaunch.includeInModelHistory} name={language.toolManualIncludeHistory} margin={false} />
+    {/if}
     <TextAreaInput bind:value={fn.presentation.pendingTemplate} placeholder={language.toolPendingTemplate} />
     <TextAreaInput bind:value={fn.presentation.successTemplate} placeholder={language.toolSuccessTemplate} />
     <TextAreaInput bind:value={fn.presentation.errorTemplate} placeholder={language.toolErrorTemplate} />

@@ -63,10 +63,10 @@ function normalizeChoiceRequest(request: ChoiceRequest): ChoiceInteraction['requ
     return { question, options, reason: request.reason }
 }
 
-export function requestChoice(request: ChoiceRequest): Promise<ChoiceResult> {
+export function requestChoice(request: ChoiceRequest, ownerId?: string): Promise<ChoiceResult> {
     const normalized = normalizeChoiceRequest(request)
     const id = v4()
-    claimToolInteraction('choice', id)
+    claimToolInteraction('choice', id, ownerId, () => cancelChoice(id))
     choiceInteractionStore.set({ id, request: normalized })
     return new Promise((resolve) => resolvers.set(id, { resolve }))
 }

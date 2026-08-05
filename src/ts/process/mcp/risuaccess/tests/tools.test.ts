@@ -78,7 +78,17 @@ test('publishes the canonical agent execution schema with a usable preset exampl
   mockDb.modelPresets = [{ id: 'model-1', name: 'Model 1', toolUse: true }]
   const context = payload(await new ToolPackageHandler().handle('risu-get-tool-authoring-context', {}))
 
-  expect(context.schemaVersion).toBe(2)
+  expect(context.schemaVersion).toBe(3)
+  expect(context.operationSchemas.setFunctionExecution.anyOf[0].properties).toHaveProperty('allowedTools')
+  expect(context.operationSchemas.setFunctionPresentation.properties.manualLaunch.properties).toHaveProperty('includeInModelHistory')
+  expect(context.operationSchemas.setPlugin.properties.apiVersion.enum).toEqual([1, 2])
+  expect(context.invocationApiV2).toContain('openView')
+  expect(context.invocationApiV2).toContain('commitChanges')
+  expect(context.toolUiSdk).toContain('numberStepper')
+  expect(context.authoringExamples.attackToolAppTemplate.source).toContain('invocation.listLorebooks()')
+  expect(context.authoringExamples.attackToolAppTemplate.source).toContain('invocation.openView')
+  expect(context.authoringExamples.attackToolAppTemplate.source).toContain('invocation.callTool')
+  expect(context.authoringExamples.attackToolAppTemplate.source).toContain('invocation.commitChanges')
   expect(context.operationSchemas.setFunctionExecution.anyOf[1].required).toEqual([
     'kind', 'modelPresetId', 'systemPrompt', 'userPrompt', 'allowedTools', 'outputRoutes',
   ])

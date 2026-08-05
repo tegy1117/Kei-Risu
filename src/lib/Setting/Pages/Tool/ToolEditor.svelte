@@ -24,6 +24,14 @@
         { value: 'askUser', label: language.toolPermissionAskUser },
         { value: 'network', label: language.toolPermissionNetwork },
         { value: 'database', label: language.toolPermissionDatabase },
+        { value: 'interactiveUi', label: language.toolPermissionInteractiveUi },
+        { value: 'invokeTools', label: language.toolPermissionInvokeTools },
+        { value: 'character.read', label: language.toolPermissionCharacterRead },
+        { value: 'character.write', label: language.toolPermissionCharacterWrite },
+        { value: 'chat.read', label: language.toolPermissionChatRead },
+        { value: 'chat.write', label: language.toolPermissionChatWrite },
+        { value: 'lorebook.read', label: language.toolPermissionLorebookRead },
+        { value: 'lorebook.write', label: language.toolPermissionLorebookWrite },
     ]
 
     function togglePermission(permission: ToolPermission) {
@@ -33,7 +41,7 @@
     }
 
     function addFunction() {
-        currentTool.functions.push({ id: v4(), name: 'function_name', description: '', enabled: true, parameters: [], execution: { kind: 'script' }, presentation: { showInChat: true } })
+        currentTool.functions.push({ id: v4(), name: 'function_name', description: '', enabled: true, parameters: [], execution: { kind: 'script', allowedTools: [] }, presentation: { showInChat: true } })
         currentTool.functions = currentTool.functions
     }
 
@@ -163,6 +171,9 @@
 {:else}
     <div class="flex flex-col gap-2">
         <div class="flex items-center gap-2">
+            <select class="bg-darkbg border border-darkborderc rounded-md p-2" bind:value={currentTool.plugin.apiVersion} disabled={readonly}>
+                <option value={1}>API v1</option><option value={2}>API v2 Tool App</option>
+            </select>
             <select class="bg-darkbg border border-darkborderc rounded-md p-2" bind:value={currentTool.plugin.language} disabled={readonly}>
                 <option value="javascript">JavaScript</option><option value="typescript">TypeScript</option>
             </select>

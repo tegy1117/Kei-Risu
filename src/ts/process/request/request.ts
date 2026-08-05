@@ -717,6 +717,10 @@ function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
 const formatPresetReasoning = formatReasoningParts
 
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
+    arg.toolExecutionContext = {
+        ...(arg.toolExecutionContext ?? { stack: [] }),
+        abortSignal: abortSignal ?? arg.toolExecutionContext?.abortSignal,
+    }
     const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
     // arg.chatId is the per-request generationId for main chat (sendChat passes
@@ -1245,6 +1249,7 @@ async function runModelPresetToolLoop(
                 toolExecutionContext: {
                     ...(arg.toolExecutionContext ?? { stack: [] }),
                     requestStatusId: runtime.genId,
+                    abortSignal: abortSignal ?? undefined,
                     onPendingPresentation: runtime.onToolPending ? async (pending) => {
                         if (arg.persistToolDisplay === false || pending.showInChat === false) return
                         const encoded = await encodeToolCall({

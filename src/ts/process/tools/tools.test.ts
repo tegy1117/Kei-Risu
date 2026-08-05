@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { RisuToolPackage } from './types'
 
 let mockDb: any
+let mockCharacter: any
+let mockChat: any
 const requestMocks = vi.hoisted(() => ({
     requestAgentModelPreset: vi.fn(),
 }))
@@ -19,8 +21,8 @@ vi.mock('src/ts/plugins/apiV3/factory', () => ({ SandboxHost: class {} }))
 vi.mock('src/ts/storage/database.svelte', () => ({
     getDatabase: () => mockDb,
     setDatabase: vi.fn(),
-    getCurrentCharacter: () => undefined,
-    getCurrentChat: () => undefined,
+    getCurrentCharacter: () => mockCharacter,
+    getCurrentChat: () => mockChat,
 }))
 vi.mock('src/ts/parser/parser.svelte', () => ({ hasher: vi.fn(() => 'hash') }))
 vi.mock('src/ts/util', () => ({ selectSingleFile: vi.fn() }))
@@ -28,6 +30,7 @@ vi.mock('../mcp/mcp', () => ({ getTools: vi.fn(async () => []) }))
 vi.mock('../request/request', () => ({ requestAgentModelPreset: requestMocks.requestAgentModelPreset }))
 
 import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
+import { alertConfirm } from 'src/ts/alert'
 import { getToolTriggers } from './features'
 import {
     createToolScopeStateSnapshot,
@@ -43,6 +46,7 @@ import {
     resolveActiveToolPackages,
     routeAgentOutput,
     toolWireName,
+    ToolInvocationApi,
     validateToolScopeState,
     validateToolPackage,
     validateToolPluginSource,
@@ -65,6 +69,8 @@ beforeEach(() => {
     vi.clearAllMocks()
     requestMocks.requestAgentModelPreset.mockResolvedValue({ ok: true, text: 'OK:door-a', model: 'model' })
     mockDb = { tools: [], enabledTools: [], toolStates: {}, toolPermissions: {}, toolPolicy: { tools: {}, functions: {} } }
+    mockCharacter = undefined
+    mockChat = undefined
 })
 
 describe('built-in tool packages', () => {
@@ -91,7 +97,7 @@ describe('built-in tool packages', () => {
         expect(reconciled[0].description).not.toBe('stale')
         expect(reconciled[0].functions[0].enabled).toBe(false)
         expect(reconciled.at(-1)).toMatchObject(userTool)
-        expect(reconciled.at(-1)?.functions[0].execution).toEqual({ kind: 'script' })
+        expect(reconciled.at(-1)?.functions[0].execution).toEqual({ kind: 'script', allowedTools: [] })
     })
 
     test('each bundled plugin registers every declared function', async () => {
@@ -161,6 +167,20 @@ describe('tool state management', () => {
 })
 
 describe('tool package validation', () => {
+    test('validates Tool App permissions, manual launches, and nested call references', () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.permissions = ['interactiveUi', 'invokeTools', 'character.read', 'lorebook.read']
+        tool.functions[0].parameters = [{ id: 'required', name: 'value', description: '', type: 'string', required: true }]
+        tool.functions[0].presentation = { manualLaunch: { enabled: true } }
+        tool.functions[0].execution = { kind: 'script', allowedTools: [{ kind: 'managed', toolId: tool.id, functionId: tool.functions[0].id }] }
+
+        const errors = validateToolPackage(tool, [tool]).join('\n')
+        expect(errors).toContain('cannot have required parameters')
+        expect(errors).toContain('cannot call itself')
+        expect(errors).not.toContain('Unknown permission')
+    })
+
     test('validates plugin syntax and managed feature structures', async () => {
         const tool = sampleTool()
         tool.plugin.source = 'await risuai.registerFunction('
@@ -234,6 +254,97 @@ describe('tool package validation', () => {
         expect(getToolTriggers()[0].lowLevelAccess).toBe(true)
         tool.lowLevelAccess = false
         expect(getToolTriggers()[0].lowLevelAccess).toBe(false)
+    })
+})
+
+describe('Tool App shared changes', () => {
+    test('confirms and atomically applies character and lorebook changes', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['character.write', 'lorebook.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = {
+            chaId: 'char-1', name: 'Hero', personality: 'Old', chatPage: 0,
+            chats: [mockChat], globalLore: [],
+        }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const invocation = {
+            tool,
+            characterFingerprint: JSON.stringify(mockCharacter),
+            chatFingerprint: JSON.stringify(mockChat),
+            databaseFingerprint: '',
+        }
+        const api = new ToolInvocationApi(invocation as never)
+
+        const result = await api.commitChanges([
+            { kind: 'setCharacterField', path: 'personality', value: 'Brave' },
+            { kind: 'upsertLorebook', scope: 'character', entry: { comment: 'Sword', content: '{"damage": 4}' } },
+        ])
+
+        expect(result.committed).toBe(true)
+        expect(mockDb.characters[0].personality).toBe('Brave')
+        expect(mockDb.characters[0].globalLore[0]).toMatchObject({ comment: 'Sword', content: '{"damage": 4}' })
+        expect(alertConfirm).toHaveBeenCalledTimes(3)
+    })
+
+    test('rejects stale shared data before showing the final change confirmation', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['character.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = { chaId: 'char-1', name: 'Changed', chatPage: 0, chats: [mockChat], globalLore: [] }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const api = new ToolInvocationApi({ tool, characterFingerprint: 'stale', chatFingerprint: JSON.stringify(mockChat) } as never)
+
+        await expect(api.commitChanges([{ kind: 'setCharacterField', path: 'name', value: 'New' }])).rejects.toThrow('changed while')
+        expect(mockDb.characters[0].name).toBe('Changed')
+    })
+
+    test('rejects a chat-only write when another part of the character changed', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['chat.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = { chaId: 'char-1', name: 'Changed elsewhere', chatPage: 0, chats: [mockChat], globalLore: [] }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const api = new ToolInvocationApi({
+            tool,
+            characterFingerprint: 'stale',
+            chatFingerprint: JSON.stringify(mockChat),
+        } as never)
+
+        await expect(api.commitChanges([{ kind: 'setChatField', path: 'name', value: 'New chat name' }])).rejects.toThrow('character changed while')
+        expect(mockChat.name).toBeUndefined()
+    })
+
+    test('rechecks shared data after the user approves the final change summary', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['character.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = { chaId: 'char-1', name: 'Hero', chatPage: 0, chats: [mockChat], globalLore: [] }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm)
+            .mockResolvedValueOnce(true)
+            .mockImplementationOnce(async () => {
+                mockCharacter.name = 'Changed during confirmation'
+                return true
+            })
+        const api = new ToolInvocationApi({
+            tool,
+            characterFingerprint: JSON.stringify(mockCharacter),
+            chatFingerprint: JSON.stringify(mockChat),
+        } as never)
+
+        await expect(api.commitChanges([{ kind: 'setCharacterField', path: 'name', value: 'Requested value' }])).rejects.toThrow('character changed while')
+        expect(mockDb.characters[0].name).toBe('Changed during confirmation')
     })
 })
 
@@ -431,7 +542,7 @@ describe('.risutool definition format', () => {
         expect(parsed.tool.variables).toEqual([])
         expect(parsed.tool.lists).toEqual([])
         expect(parsed.tool.plugin.permissions).toEqual([])
-        expect(parsed.tool.functions[0].execution).toEqual({ kind: 'script' })
+        expect(parsed.tool.functions[0].execution).toEqual({ kind: 'script', allowedTools: [] })
         expect(parsed.tool.regex).toEqual([])
         expect(parsed.tool.functionRegex).toEqual([])
         expect(parsed.tool.trigger).toEqual([])
