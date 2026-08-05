@@ -1586,6 +1586,8 @@ export const languageKorean = {
   modelPresetToolUseHelp: "이 프리셋이 설정된 도구(MCP)를 호출하도록 허용합니다. 기본 꺼짐. 도구 실행 시 스트리밍 없이 전송됩니다.",
   modelPresetMaxToolSteps: "최대 도구 단계 수",
   modelPresetMaxToolStepsHelp: "요청 한 번에 허용할 도구 실행 라운드 수입니다. 기본값은 8, 최댓값은 128입니다. 긴 에이전트 작업에는 이 값을 늘리세요.",
+  modelPresetToolSchemaCompatibility: "도구 스키마 호환 모드",
+  modelPresetToolSchemaCompatibilityHelp: "AWS Bedrock 같은 프로바이더를 위해 최상위 oneOf, allOf, anyOf를 object 스키마로 평탄화합니다. 입력 제약이 일부 완화되므로 프로바이더가 도구 스키마를 거부할 때만 켜세요.",
   modelPresetAbilities: "모델 능력",
   modelPresetPickSuggestion: "추천에서 선택…",
   modelPresetSnapshotEmpty: "이 프리셋의 프로필 데이터가 비어 있습니다. 프로필을 다시 받거나 교체해 설정을 복구하세요.",

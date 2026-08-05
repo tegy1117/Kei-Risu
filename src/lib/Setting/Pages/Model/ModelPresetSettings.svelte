@@ -311,6 +311,18 @@
                                         className="w-32 shrink-0"
                                     />
                                 </div>
+                                <div class="flex items-center justify-between gap-3 pl-4">
+                                    <div class="flex flex-col gap-0.5 min-w-0">
+                                        <span class="text-sm text-textcolor">{language.modelPresetToolSchemaCompatibility}</span>
+                                        <span class="text-xs text-textcolor2">{language.modelPresetToolSchemaCompatibilityHelp}</span>
+                                    </div>
+                                    <div class="shrink-0">
+                                        <ShSwitch
+                                            checked={editingPreset.toolSchemaCompatibility === 'top-level-object'}
+                                            onCheckedChange={(v) => { editingPreset.toolSchemaCompatibility = v ? 'top-level-object' : undefined }}
+                                        />
+                                    </div>
+                                </div>
                             {/if}
                         {/if}
                     </div>

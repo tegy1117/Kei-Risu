@@ -139,6 +139,8 @@ export type RegistryCapability =
     | 'reasoning'
     | 'cache'
 
+export type ToolSchemaCompatibility = 'top-level-object'
+
 export interface ModelLimits {
     known?: boolean
     contextWindowTokens?: number
@@ -295,6 +297,11 @@ export interface ModelPreset {
     // Maximum tool-execution rounds allowed for one request. Undefined keeps the
     // default (8); runtime validation clamps configured values to the safe range.
     maxToolSteps?: number
+    // Some downstream providers (notably Bedrock routes hidden behind an
+    // OpenAI-compatible gateway) reject oneOf/allOf/anyOf at the root of a tool
+    // input schema. Opt in per preset so existing providers keep their exact
+    // schema while affected routes receive a relaxed top-level object schema.
+    toolSchemaCompatibility?: ToolSchemaCompatibility
     // Per-ModelPreset model-ability flags. The classic (custom model) path lets
     // users toggle LLMFlags directly; the preset path had no equivalent, so it
     // could neither attach images nor normalize system/role for models that need

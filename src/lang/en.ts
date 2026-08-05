@@ -1590,6 +1590,8 @@ export const languageEnglish = {
     modelPresetToolUseHelp: "Let this preset call your configured tools (MCP). Off by default. Tool runs are sent without streaming.",
     modelPresetMaxToolSteps: "Maximum tool steps",
     modelPresetMaxToolStepsHelp: "Tool-execution rounds allowed per request. Default 8, maximum 128. Increase this for longer agent workflows.",
+    modelPresetToolSchemaCompatibility: "Tool schema compatibility",
+    modelPresetToolSchemaCompatibilityHelp: "Flatten top-level oneOf, allOf, and anyOf into an object schema for providers such as AWS Bedrock. This relaxes some input constraints; leave it off unless the provider rejects a tool schema.",
     modelPresetAbilities: "Model abilities",
     modelPresetPickSuggestion: "Choose from suggestions…",
     modelPresetSnapshotEmpty: "This preset's profile data is empty. Re-download or replace the profile to restore its settings.",
