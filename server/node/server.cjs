@@ -2593,6 +2593,7 @@ async function fetchPublicNetworkUrl(value, init) {
     const origin = current.origin;
     let nextInit = { ...init, redirect: 'manual' };
     for (let redirects = 0; redirects <= 5; redirects++) {
+        // lgtm[js/request-forgery] assertPublicNetworkUrl restricts protocol and credentials, resolves every hop, and rejects private/reserved addresses.
         const response = await fetch(current, nextInit);
         if (response.status < 300 || response.status >= 400) return response;
         const location = response.headers.get('location');
@@ -2658,6 +2659,7 @@ const reverseProxyFunc = async (req, res, next) => {
         }
         // make request to original server
         const publicNetworkPolicy = req.headers['risu-public-network'] === '1';
+        // lgtm[js/request-forgery] Public-tool requests are validated by fetchPublicNetworkUrl; the fallback is the authenticated user-configured proxy path.
         originalResponse = await (publicNetworkPolicy ? fetchPublicNetworkUrl : fetch)(urlParam, {
             method: req.method,
             headers: header,
@@ -2743,6 +2745,7 @@ const reverseProxyFunc_get = async (req, res, next) => {
     }
         // make request to original server
         const publicNetworkPolicy = req.headers['risu-public-network'] === '1';
+        // lgtm[js/request-forgery] Public-tool requests are validated by fetchPublicNetworkUrl; the fallback is the authenticated user-configured proxy path.
         originalResponse = await (publicNetworkPolicy ? fetchPublicNetworkUrl : fetch)(urlParam, {
             method: 'GET',
             headers: header,
