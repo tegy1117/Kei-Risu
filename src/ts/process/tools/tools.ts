@@ -1546,15 +1546,16 @@ function getVariable(tool: RisuToolPackage, name: string) {
     if (!definition) throw new Error(`Variable ${name} is not declared.`)
     const state = scopeState(tool.id, definition.scope)
     if (!(name in state.variables)) state.variables[name] = safeStructuredClone(definition.defaultValue)
-    return state.variables[name]
+    return safeStructuredClone(state.variables[name])
 }
 
 function setVariable(tool: RisuToolPackage, name: string, value: unknown) {
     const definition = (tool.variables ?? []).find((item) => item.name === name)
     if (!definition) throw new Error(`Variable ${name} is not declared.`)
     if (!valueMatchesType(value, definition.type)) throw new Error(`Invalid value for ${name}; expected ${definition.type}.`)
-    scopeState(tool.id, definition.scope).variables[name] = value
-    return value
+    const stored = safeStructuredClone(value)
+    scopeState(tool.id, definition.scope).variables[name] = stored
+    return safeStructuredClone(stored)
 }
 
 function resetVariable(tool: RisuToolPackage, name: string) {
@@ -1562,7 +1563,7 @@ function resetVariable(tool: RisuToolPackage, name: string) {
     if (!definition) throw new Error(`Variable ${name} is not declared.`)
     const value = safeStructuredClone(definition.defaultValue)
     scopeState(tool.id, definition.scope).variables[name] = value
-    return value
+    return safeStructuredClone(value)
 }
 
 function getList(tool: RisuToolPackage, name: string) {
@@ -1570,7 +1571,7 @@ function getList(tool: RisuToolPackage, name: string) {
     if (!definition) throw new Error(`List ${name} is not declared.`)
     const state = scopeState(tool.id, definition.scope)
     if (!(name in state.lists)) state.lists[name] = safeStructuredClone(definition.defaultItems ?? [])
-    return state.lists[name]
+    return safeStructuredClone(state.lists[name])
 }
 
 function setList(tool: RisuToolPackage, name: string, value: unknown[]) {
@@ -1578,8 +1579,9 @@ function setList(tool: RisuToolPackage, name: string, value: unknown[]) {
     if (!definition) throw new Error(`List ${name} is not declared.`)
     if (!Array.isArray(value)) throw new Error('List value must be an array.')
     if (!value.every((item) => valueMatchesType(item, definition.itemType))) throw new Error(`Invalid list item for ${name}; expected ${definition.itemType}.`)
-    scopeState(tool.id, definition.scope).lists[name] = value
-    return value
+    const stored = safeStructuredClone(value)
+    scopeState(tool.id, definition.scope).lists[name] = stored
+    return safeStructuredClone(stored)
 }
 
 function validReadScopes(raw: unknown): Array<ToolScope> {

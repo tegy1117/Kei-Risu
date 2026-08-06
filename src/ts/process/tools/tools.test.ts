@@ -11,6 +11,7 @@ const sandboxMocks = vi.hoisted(() => ({
     handler: vi.fn(),
     executeInIframe: vi.fn(),
     terminate: vi.fn(),
+    apiFactory: undefined as Record<string, Function> | undefined,
 }))
 
 vi.mock('src/ts/alert', () => ({
@@ -28,6 +29,7 @@ vi.mock('src/ts/plugins/apiV3/factory', () => ({
         constructor(private readonly apiFactory: Record<string, Function>) {}
         run(iframe: HTMLIFrameElement) {
             this.iframe = iframe
+            sandboxMocks.apiFactory = this.apiFactory
             this.apiFactory.registerFunction('alpha', () => 'stale handler')
             this.apiFactory.registerFunction('alpha', (...args: unknown[]) => sandboxMocks.handler(this.iframe, ...args))
             this.apiFactory.__ready()
@@ -99,6 +101,7 @@ beforeEach(() => {
     resetToolInteractionForTests()
     document.body.replaceChildren()
     vi.clearAllMocks()
+    sandboxMocks.apiFactory = undefined
     sandboxMocks.handler.mockResolvedValue('latest handler')
     sandboxMocks.executeInIframe.mockImplementation(async (iframe: HTMLIFrameElement, code: string) => {
         if (code === 'document.body.replaceChildren()') iframe.contentDocument?.body.replaceChildren()
@@ -267,6 +270,37 @@ describe('memory tool results', () => {
 })
 
 describe('tool state management', () => {
+    test('returns detached cloneable values through the sandbox state API', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.variables = [{ id: 'v1', name: 'profile', description: '', type: 'json', scope: 'global', defaultValue: {} }]
+        tool.lists = [{ id: 'l1', name: 'labels', description: '', itemType: 'string', scope: 'global', defaultItems: [] }]
+        mockDb.tools = [tool]
+        mockDb.enabledTools = [tool.id]
+        mockDb.toolStates[tool.id] = {
+            global: {
+                variables: { profile: new Proxy({ name: 'Risu' }, {}) },
+                lists: { labels: new Proxy(['character', 'plot'], {}) },
+            },
+        }
+        sandboxMocks.handler.mockImplementation(async () => {
+            const profile = sandboxMocks.apiFactory?.getVariable('profile')
+            const labels = sandboxMocks.apiFactory?.getList('labels')
+            expect(() => structuredClone(profile)).not.toThrow()
+            expect(() => structuredClone(labels)).not.toThrow()
+            ;(profile as { name: string }).name = 'Changed'
+            ;(labels as string[]).push('changed')
+            return 'ok'
+        })
+
+        await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(readToolScopeState(tool.id, 'global')).toMatchObject({
+            variables: { profile: { name: 'Risu' } },
+            lists: { labels: ['character', 'plot'] },
+        })
+    })
+
     test('creates a cloneable snapshot from reactive state', () => {
         const state = createToolScopeStateSnapshot({
             variables: { count: 2 },
