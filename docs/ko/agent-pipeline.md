@@ -28,3 +28,28 @@ Agent 프리셋은 stage 순서대로 실행됩니다. **Main Output** 이전 wo
 ## 사용자 중단
 
 사용자 중단은 실패 분류보다 우선합니다. 중단 전에 완료되어 적용된 stage 결과는 유지하지만, 중단된 현재 stage의 결과는 적용하지 않습니다. 중단된 run은 자동 TTS와 완료 알림을 실행하지 않습니다.
+
+## 정규식 적용 범위
+
+Agent worker는 일반 Main Output 처리보다 의도적으로 좁은 정규식 규칙을 사용합니다. 중간 Agent 출력에 표시 전용 또는 입력 전용 변환이 섞이지 않게 하여 Agent 간 전달 값을 예측 가능하게 유지하기 위한 정책입니다.
+
+현재 worker 처리 순서는 다음과 같습니다.
+
+1. 선택한 프롬프트 프리셋, 채팅 컨텍스트, 로어북, 연결된 `AgentInfo` 출력을 사용해 worker 프롬프트를 만듭니다.
+2. 선택한 모델 프리셋으로 요청합니다.
+3. 반환된 worker 텍스트의 앞뒤 공백을 제거합니다.
+4. 해당 프롬프트 프리셋에서 활성화된 `editoutput` 정규식만 프리셋 순서대로 적용합니다.
+5. 변환된 텍스트를 worker의 출력으로 저장합니다.
+6. 이후 stage의 `AgentInfo`에는 이 변환된 값을 전달합니다.
+7. post-stage worker라면 `prepend`, `append`, `replace`, `none` 설정에 따라 같은 값을 최종 메시지에 반영합니다.
+
+다음 정규식 종류는 Agent worker가 응답한 뒤 별도의 추가 처리로 적용하지 않습니다.
+
+- `editinput`: 입력 측 처리는 일반 요청/프롬프트 파이프라인의 역할이며 worker 출력 후처리가 아닙니다.
+- `editdisplay`: 표시 전용 변환은 중간 Agent 출력에 사용하지 않습니다.
+- `editprocess`, `edittrans`: Agent worker 반환 이후 다시 실행하지 않습니다.
+- Tool 함수 정규식 stage (`arguments`, `agentOutput`, `modelResult`, `visibleCall`, 카드 관련 stage): Managed Tool 전용이며 Agent 프리셋과 별개입니다.
+
+따라서 worker 출력에는 하나의 표준 전달 값만 존재합니다. **모델 응답을 trim한 뒤 해당 worker 프롬프트 프리셋의 `editoutput` 정규식을 적용한 값**입니다. 실행 상세 기록, `AgentInfo` 전달, post-stage 결과 배치가 모두 같은 값을 사용합니다. 잘못된 정규식은 오류를 기록하고 해당 항목만 건너뛰어 정규식 하나 때문에 전체 Agent 실행이 중단되지 않게 합니다.
+
+향후 다른 적용 범위가 필요해지면 일반 채팅용 정규식 종류를 암묵적으로 재사용하지 말고 Agent 전용 stage를 명시적으로 추가합니다. 그래야 기존 Agent 프리셋의 동작 호환성을 유지할 수 있습니다.
