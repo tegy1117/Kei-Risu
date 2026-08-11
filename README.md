@@ -39,6 +39,7 @@ Kei-Risu is a self-hosted AI roleplay chat platform you run on your PC or person
 ## Documentation
 
 - [Installation guide](docs/en/install.md)
+- [Agent pipeline status and output policy](docs/en/agent-pipeline.md)
 - [RisuAI migration guide](docs/en/migration.md)
 - [Remote access guide](docs/en/remote.md)
 - [Termux installation guide (Android)](docs/en/termux.md)

@@ -11,6 +11,8 @@ import { requestAgentModelPreset } from '../process/request/request'
 import { applyExplicitPromptPresetParams } from '../process/request/modelPresetBinding'
 import { sayTTS } from '../process/tts'
 import { chatGenKey, endGeneration, isChatGenerating, startGeneration } from '../process/generationState'
+import { addBadge, beginPostProcessingStatus, endStatus } from '../status/requestStatus'
+import { language } from 'src/lang'
 
 export interface AgentMainPromptContext {
     generationId: string
@@ -191,6 +193,10 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
     let historyOutput = ''
     let displayOutput = ''
     let passedMain = false
+    const postFailures: AgentNodeRunRecord[] = []
+    const hasPostStages = preset.stages
+        .slice(validation.mainStageIndex + 1)
+        .some((stage) => stage.nodes.some((node) => node.kind === 'agent'))
 
     for(let stageIndex = 0; stageIndex < preset.stages.length; stageIndex++){
         const stage = preset.stages[stageIndex]
@@ -209,9 +215,18 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
             record.endedAt = Date.now()
             if(!ok){
                 record.status = options.signal?.aborted ? 'aborted' : 'failed'
-                run.status = record.status === 'aborted' ? 'aborted' : 'failed'
+                const outcome = record.status === 'aborted' ? 'aborted' : 'failed'
+                run.status = outcome
                 run.endedAt = Date.now()
+                console.warn('[Agent] main stage did not complete', {
+                    generationId,
+                    agentPresetId: preset.id,
+                    nodeId: record.nodeId,
+                    nodeName: record.nodeName,
+                    status: record.status,
+                })
                 restorePreviousMessage()
+                endStatus(generationId, outcome, { now: run.endedAt })
                 endGeneration(generationKey)
                 return false
             }
@@ -221,6 +236,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 record.error = 'Agent chat is no longer available.'
                 run.status = 'failed'
                 run.endedAt = Date.now()
+                endStatus(generationId, 'failed', { now: run.endedAt, error: record.error })
                 endGeneration(generationKey)
                 return false
             }
@@ -230,6 +246,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 record.error = 'Main output message was not created.'
                 run.status = 'failed'
                 run.endedAt = Date.now()
+                endStatus(generationId, 'failed', { now: run.endedAt, error: record.error })
                 endGeneration(generationKey)
                 return false
             }
@@ -247,6 +264,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
             message.agentRun = run
             delete message.displayData
             passedMain = true
+            if(hasPostStages) beginPostProcessingStatus(generationId, Date.now())
             continue
         }
 
@@ -254,23 +272,39 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         const stageRecords = await runWithConcurrency(workers, preset.maxParallel, (node) => executeWorker(node, stageIndex))
 
         if(!passedMain){
-            const failed = stageRecords.find((record) => record.status !== 'done')
-            if(failed){
-                run.status = failed.status === 'aborted' ? 'aborted' : 'failed'
+            const incomplete = stageRecords.filter((record) => record.status !== 'done')
+            if(incomplete.length > 0){
+                const failed = incomplete.filter((record) => record.status === 'failed')
+                const aborted = options.signal?.aborted || incomplete.some((record) => record.status === 'aborted')
+                const outcome = aborted ? 'aborted' : 'failed'
+                run.status = outcome
                 run.endedAt = Date.now()
                 restorePreviousMessage()
-                if(failed.status === 'failed') alertError(`${failed.nodeName}: ${failed.error || 'Agent request failed.'}`)
+                if(failed.length > 0){
+                    console.warn('[Agent] pre-stage failed', {
+                        generationId,
+                        agentPresetId: preset.id,
+                        failedAgents: failed.map((record) => ({
+                            nodeId: record.nodeId,
+                            nodeName: record.nodeName,
+                            error: record.error || 'Agent request failed.',
+                        })),
+                    })
+                    alertError(failed.map((record) => `${record.nodeName}: ${record.error || 'Agent request failed.'}`).join('\n'))
+                }
+                endStatus(generationId, outcome, { now: run.endedAt })
                 endGeneration(generationKey)
                 return false
             }
             continue
         }
 
-        if(options.signal?.aborted){
+        if(options.signal?.aborted || stageRecords.some((record) => record.status === 'aborted')){
             run.status = 'aborted'
             run.endedAt = Date.now()
             break
         }
+        postFailures.push(...stageRecords.filter((record) => record.status === 'failed'))
         for(const node of workers){
             const record = records.get(node.id)!
             if(record.status !== 'done') continue
@@ -284,6 +318,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         if(!target){
             run.status = 'failed'
             run.endedAt = Date.now()
+            endStatus(generationId, 'failed', { now: run.endedAt, error: 'Agent chat is no longer available.' })
             endGeneration(generationKey)
             return false
         }
@@ -294,21 +329,48 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         target.character.reloadKeys += 1
     }
 
-    if(!passedMain) return false
+    if(!passedMain){
+        endGeneration(generationKey)
+        return false
+    }
     const target = resolveTarget()
     if(!target){
+        run.status = 'failed'
+        run.endedAt = Date.now()
+        endStatus(generationId, 'failed', { now: run.endedAt, error: 'Agent chat is no longer available.' })
         endGeneration(generationKey)
         return false
     }
     const message = target.chat.message[messageIndex]
     run.historyOutput = historyOutput
     run.displayOutput = displayOutput
-    if(run.status === 'running') run.status = 'done'
+    const finalStatus = run.status === 'aborted' ? 'aborted' : postFailures.length > 0 ? 'partial' : 'done'
+    run.status = finalStatus
     run.endedAt = Date.now()
     message.agentRun = run
     message.data = historyOutput
     message.displayData = displayOutput !== historyOutput ? displayOutput : undefined
     target.character.reloadKeys += 1
+    if(postFailures.length > 0){
+        const failedNames = postFailures.map((record) => record.nodeName)
+        addBadge(generationId, {
+            key: 'agent-failures',
+            text: language.agent.failedAgents.replace('{names}', failedNames.join(', ')),
+            tone: 'warn',
+        })
+        console.warn('[Agent] post-stage worker failures', {
+            generationId,
+            agentPresetId: preset.id,
+            outcome: finalStatus,
+            failedAgents: postFailures.map((record) => ({
+                nodeId: record.nodeId,
+                nodeName: record.nodeName,
+                error: record.error || 'Agent request failed.',
+            })),
+        })
+    }
+    endStatus(generationId, finalStatus, { now: run.endedAt })
+    if(finalStatus === 'aborted') return false
     if(DBState.db.ttsAutoSpeech) await sayTTS(target.character, displayOutput)
     if(DBState.db.notification){
         try {

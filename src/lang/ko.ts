@@ -53,10 +53,14 @@ export const languageKorean = {
     noEarlierOutputs: "선택할 수 있는 이전 단계 출력이 없습니다.",
     runDetails: "에이전트 실행 상세",
     displayOnly: "표시 전용",
+    statusPending: "대기 중",
     statusRunning: "실행 중",
     statusDone: "완료",
+    statusPartial: "일부 실패",
     statusFailed: "실패",
     statusAborted: "중단",
+    statusSuperseded: "대체됨",
+    failedAgents: "실패한 Agent: {names}",
     warnings: "경고",
   },
   errors: {
@@ -2629,6 +2633,8 @@ export const languageKorean = {
     outputTokens: "출력",
     thinkingTokensLabel: "사고",
     tokensPerSec: "tok/s",
+    postprocessing: "후처리 중…",
+    partial: "일부 실패",
     cacheHit: "캐시 적중 · {n} 토큰",
   },
 } satisfies DeepPartial<typeof import("./en").languageEnglish>;

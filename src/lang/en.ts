@@ -53,10 +53,14 @@ export const languageEnglish = {
         noEarlierOutputs: "No earlier-stage outputs are available.",
         runDetails: "Agent run details",
         displayOnly: "Display only",
+        statusPending: "Pending",
         statusRunning: "Running",
         statusDone: "Done",
+        statusPartial: "Partially completed",
         statusFailed: "Failed",
         statusAborted: "Aborted",
+        statusSuperseded: "Superseded",
+        failedAgents: "Failed agents: {names}",
         warnings: "Warnings",
     },
     errors: {
@@ -2418,6 +2422,8 @@ export const languageEnglish = {
         outputTokens: "out",
         thinkingTokensLabel: "think",
         tokensPerSec: "tok/s",
+        postprocessing: "Post-processing…",
+        partial: "Partially completed",
         cacheHit: "Cache hit · {n} tokens",
     },
 

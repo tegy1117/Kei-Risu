@@ -3,6 +3,7 @@
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName } from "src/ts/globalApi.svelte"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { getModelInfo } from "src/ts/model/modellist"
+    import type { AgentNodeRunStatus, AgentRunRecord } from "src/ts/agent/types"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
     import { risuChatParser } from "src/ts/process/scripts"
     import { runTrigger } from 'src/ts/process/triggers'
@@ -88,6 +89,32 @@
 
     let msgDisplay = $state('')
     let translated = $state(false)
+
+    function agentRunStatusLabel(status: AgentRunRecord['status']): string {
+        switch(status){
+            case 'running': return language.agent.statusRunning
+            case 'done': return language.agent.statusDone
+            case 'partial': return language.agent.statusPartial
+            case 'failed': return language.agent.statusFailed
+            case 'aborted': return language.agent.statusAborted
+            case 'superseded': return language.agent.statusSuperseded
+        }
+    }
+
+    function agentNodeStatusLabel(status: AgentNodeRunStatus): string {
+        switch(status){
+            case 'pending': return language.agent.statusPending
+            case 'running': return language.agent.statusRunning
+            case 'done': return language.agent.statusDone
+            case 'failed': return language.agent.statusFailed
+            case 'aborted': return language.agent.statusAborted
+        }
+    }
+
+    function failedAgentSummary(run: AgentRunRecord): string {
+        const names = run.nodes.filter((node) => node.status === 'failed').map((node) => node.nodeName)
+        return names.length > 0 ? language.agent.failedAgents.replace('{names}', names.join(', ')) : ''
+    }
     let partialEditEnabled = $state(true)
 
     export function updateStreamingDisplay(state: {
@@ -358,12 +385,13 @@
     <div class="flex flex-col items-end">
         {#if idx >= 0 && DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage]?.message?.[idx]?.agentRun}
             {@const run = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[idx].agentRun!}
+            {@const failedSummary = failedAgentSummary(run)}
             <details class="text-xs text-textcolor2 border border-darkborderc rounded-md mr-2 my-1 max-w-[min(80vw,28rem)]">
-                <summary class="cursor-pointer p-2 text-textcolor">{language.agent.runDetails} · {run.agentPresetName} · {run.status}</summary>
+                <summary class="cursor-pointer p-2 text-textcolor">{language.agent.runDetails} · {run.agentPresetName} · {agentRunStatusLabel(run.status)}{#if failedSummary} · {failedSummary}{/if}</summary>
                 <div class="px-2 pb-2 flex flex-col gap-2">
                     {#each run.nodes as node (node.nodeId)}
                         <div class="border-t border-darkborderc pt-2">
-                            <div class="text-textcolor">{node.nodeName} · {node.status}</div>
+                            <div class="text-textcolor">{node.nodeName} · {agentNodeStatusLabel(node.status)}</div>
                             {#if node.promptPresetName}<div>{language.agent.promptPreset}: {node.promptPresetName}</div>{/if}
                             {#if node.modelPresetName}<div>{language.agent.modelPreset}: {node.modelPresetName}</div>{/if}
                             {#if node.error}<div class="text-draculared whitespace-pre-wrap">{node.error}</div>{/if}

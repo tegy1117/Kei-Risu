@@ -15,7 +15,8 @@ export type RequestPhase =
     | 'retrying'     // fallback / retry
     | 'stalled'      // chunks stopped arriving for a while
     | 'background'   // server-side job reattached after reload; renders on completion (jobRecovery)
-    | 'done' | 'failed' | 'aborted'
+    | 'postprocessing' // main response completed; agent post-stage workers are still running
+    | 'done' | 'partial' | 'failed' | 'aborted'
 
 // Request kind = the chip shown after the phase, so the toast says "what" the
 // request is in every state (including done/failed). Maps from the request
@@ -27,7 +28,7 @@ export type RequestKind = 'main' | 'translate' | 'memory' | 'emotion' | 'sub' | 
 // A phase is terminal when the request has finished one way or another; the
 // renderer uses this to decide dismissal/retention.
 export function isTerminalPhase(phase: RequestPhase): boolean {
-    return phase === 'done' || phase === 'failed' || phase === 'aborted'
+    return phase === 'done' || phase === 'partial' || phase === 'failed' || phase === 'aborted'
 }
 
 // Extension point for cache-keeper / web-search / tool badges, etc.
@@ -257,6 +258,25 @@ export function markPhase(id: string, phase: RequestPhase, now: number): void {
     })
 }
 
+// The main model request owns this status entry until its response is complete.
+// An agent pipeline can then reopen only that successful entry so the same card
+// remains the parent of post-stage workers and reflects the aggregate outcome.
+export function beginPostProcessingStatus(id: string, now: number): void {
+    let resumed = false
+    update(id, (e) => {
+        if (e.phase === 'failed' || e.phase === 'aborted' || e.phase === 'partial') return e
+        resumed = e.phase !== 'postprocessing'
+        return {
+            ...e,
+            phase: 'postprocessing',
+            endedAt: undefined,
+            lastChunkAt: now,
+            tokPerSec: 0,
+        }
+    })
+    if (resumed) startStatusTimer()
+}
+
 // Accumulate raw streamed text per kind. Token COUNTS are not computed here —
 // the render tick tokenizes the accumulated text (once per tick, native
 // tokenizer) so per-chunk cost is just string concat. tok/s still gets a
@@ -310,7 +330,7 @@ export interface EndStatusUsage {
 
 export function endStatus(
     id: string,
-    outcome: 'done' | 'failed' | 'aborted',
+    outcome: 'done' | 'partial' | 'failed' | 'aborted',
     opts: { now: number, usage?: EndStatusUsage, error?: string } = { now: 0 },
 ): void {
     let needFinalCount = false
