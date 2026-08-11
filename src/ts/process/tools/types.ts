@@ -31,6 +31,11 @@ export interface ToolFunctionPresentation {
     pendingTemplate?: string
     successTemplate?: string
     errorTemplate?: string
+    manualLaunch?: {
+        enabled: boolean
+        label?: string
+        includeInModelHistory?: boolean
+    }
 }
 
 export type ToolRegexStage =
@@ -91,7 +96,12 @@ export interface ToolAgentExecution {
     outputRoutes: ToolAgentOutputRoute[]
 }
 
-export type ToolFunctionExecution = { kind: 'script' } | ToolAgentExecution
+export interface ToolScriptExecution {
+    kind: 'script'
+    allowedTools?: ToolCallableRef[]
+}
+
+export type ToolFunctionExecution = ToolScriptExecution | ToolAgentExecution
 
 export interface RisuToolVariable {
     id: string
@@ -111,7 +121,34 @@ export interface RisuToolList {
     defaultItems: unknown[]
 }
 
-export type ToolPermission = 'askUser' | 'network' | 'database'
+export type ToolPermission =
+    | 'askUser'
+    | 'network'
+    | 'database'
+    | 'interactiveUi'
+    | 'invokeTools'
+    | 'character.read'
+    | 'character.write'
+    | 'chat.read'
+    | 'chat.write'
+    | 'lorebook.read'
+    | 'lorebook.write'
+
+export type ToolAppViewMode = 'inline' | 'modal' | 'fullscreen'
+
+export interface ToolAppViewOptions {
+    title: string
+    mode?: ToolAppViewMode
+    allowExpand?: boolean
+    minHeight?: number
+}
+
+export type ToolSharedChange =
+    | { kind: 'setCharacterField', path: string, value: unknown }
+    | { kind: 'setChatField', path: string, value: unknown }
+    | { kind: 'upsertLorebook', scope: 'character' | 'chat', entry: Record<string, unknown> }
+    | { kind: 'deleteLorebook', scope: 'character' | 'chat', id?: string, name?: string }
+    | { kind: 'replaceDatabase', value: Record<string, unknown> }
 
 export interface RisuToolPackage {
     id: string
@@ -119,7 +156,7 @@ export interface RisuToolPackage {
     description: string
     namespace: string
     version: string
-    builtinId?: 'question' | 'localtime' | 'memory' | 'dice'
+    builtinId?: 'question' | 'localtime' | 'memory' | 'dice' | 'http' | 'websearch'
     readonly?: boolean
     functions: RisuToolFunction[]
     variables: RisuToolVariable[]
@@ -132,6 +169,7 @@ export interface RisuToolPackage {
     trigger?: import('src/ts/storage/database.svelte').triggerscript[]
     assets?: [string, string, string][]
     plugin: {
+        apiVersion?: 1 | 2
         language: 'javascript' | 'typescript'
         source: string
         permissions: ToolPermission[]
@@ -172,6 +210,36 @@ export interface RisuToolExportV1 {
     version: 1
     tool: RisuToolPackage
     state?: ToolPackageState
+}
+
+export type ToolHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export interface ToolSearchResultMapping {
+    itemsPath: string
+    titlePath: string
+    urlPath: string
+    snippetPath: string
+}
+
+export interface ToolNetworkProfile {
+    id: string
+    kind: 'http' | 'search'
+    name: string
+    description: string
+    baseUrl?: string
+    urlTemplate?: string
+    method: ToolHttpMethod
+    headers: Record<string, string>
+    secrets: Record<string, string>
+    bodyTemplate?: string
+    timeoutMs: number
+    maxResponseBytes: number
+    mapping?: ToolSearchResultMapping
+}
+
+export interface ToolNetworkSettings {
+    profiles: ToolNetworkProfile[]
+    approvedOrigins: Record<string, boolean>
 }
 
 export interface RisuToolExportAssetV2 {

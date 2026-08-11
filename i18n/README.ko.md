@@ -39,6 +39,7 @@ Kei-Risu는 PC나 개인 서버에 띄워두고, PC·태블릿·스마트폰 등
 ## 문서
 
 - [설치 가이드](../docs/ko/install.md)
+- [Agent 파이프라인 상태 및 결과 정책](../docs/ko/agent-pipeline.md)
 - [RisuAI 데이터 이전 가이드](../docs/ko/migration.md)
 - [원격 접속 가이드](../docs/ko/remote.md)
 - [Termux 설치 가이드 (Android)](../docs/ko/termux.md)

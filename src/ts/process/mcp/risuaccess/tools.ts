@@ -166,6 +166,15 @@ const functionPresentationSchema = {
     pendingTemplate: { type: 'string' },
     successTemplate: { type: 'string' },
     errorTemplate: { type: 'string' },
+    manualLaunch: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        label: { type: 'string' },
+        includeInModelHistory: { type: 'boolean' },
+      },
+      required: ['enabled'],
+    },
   },
 }
 
@@ -229,7 +238,14 @@ const operationValueSchemas = {
   },
   setFunctionExecution: {
     anyOf: [
-      { type: 'object', properties: { kind: { type: 'string', enum: ['script'] } }, required: ['kind'] },
+      {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['script'] },
+          allowedTools: { type: 'array', items: callableToolSchema },
+        },
+        required: ['kind'],
+      },
       agentExecutionSchema,
     ],
   },
@@ -258,8 +274,9 @@ const operationValueSchemas = {
   upsertTrigger: triggerSchema,
   setPlugin: {
     type: 'object', properties: {
+      apiVersion: { type: 'integer', enum: [1, 2] },
       language: { type: 'string', enum: ['javascript', 'typescript'] }, source: { type: 'string' },
-      permissions: { type: 'array', items: { type: 'string', enum: ['askUser', 'network', 'database'] } },
+      permissions: { type: 'array', items: { type: 'string', enum: ['askUser', 'network', 'database', 'interactiveUi', 'invokeTools', 'character.read', 'character.write', 'chat.read', 'chat.write', 'lorebook.read', 'lorebook.write'] } },
     },
   },
 }
@@ -427,7 +444,7 @@ function blankTool(): RisuToolPackage {
     functionRegex: [],
     trigger: [],
     assets: [],
-    plugin: { language: 'javascript', source: '', permissions: [] },
+    plugin: { apiVersion: 2, language: 'javascript', source: '', permissions: [] },
   }
 }
 
@@ -450,7 +467,7 @@ function normalizeFunction(value: Record<string, any>, current?: RisuToolFunctio
     description: value.description ?? current?.description ?? '',
     enabled: value.enabled ?? current?.enabled ?? true,
     parameters,
-    execution: value.execution ?? current?.execution ?? { kind: 'script' },
+    execution: value.execution ?? current?.execution ?? { kind: 'script', allowedTools: [] },
     presentation: value.presentation ?? current?.presentation ?? {},
   }
 }
@@ -674,7 +691,7 @@ export class ToolPackageHandler extends MCPToolHandler {
     const modelPresets = (db.modelPresets ?? []).map((preset) => ({ id: preset.id, name: preset.name, toolUse: preset.toolUse === true }))
     const examplePreset = modelPresets[0]
     return {
-      schemaVersion: 2,
+      schemaVersion: 4,
       modelPresets,
       managedTools: db.tools.flatMap((tool) => tool.functions.map((fn) => ({ kind: 'managed', toolId: tool.id, functionId: fn.id, name: `${tool.namespace}__${fn.name}` }))),
       externalTools: external.map((tool) => ({ kind: 'external', name: tool.name, source: tool.mcpURL, description: tool.description })),
@@ -682,6 +699,7 @@ export class ToolPackageHandler extends MCPToolHandler {
       valueTypes: ['string', 'number', 'boolean', 'json'],
       scopes: ['global', 'character', 'chat'],
       executionKinds: ['script', 'agent'],
+      pluginApiVersions: [1, 2],
       operationSchemas: {
         ...operationValueSchemas,
         agentOutputRoute: agentOutputRouteSchema,
@@ -690,6 +708,18 @@ export class ToolPackageHandler extends MCPToolHandler {
       },
       draftOperationSchemas,
       authoringExamples: {
+        toolAppScript: {
+          execution: { kind: 'script', allowedTools: [] },
+          presentation: { showInChat: true, manualLaunch: { enabled: true, label: 'Attack', includeInModelHistory: true } },
+          permissions: ['interactiveUi', 'character.read', 'chat.read', 'lorebook.read'],
+          source: "await risuai.registerFunction('attack', async (_args, invocation) => { const view = await invocation.openView({ title: 'Attack', mode: 'inline', allowExpand: true }); const root = RisuToolUI.stack(); RisuToolUI.numberStepper(root, { value: 50, min: 0, max: 100, step: 1 }); await new Promise((resolve) => RisuToolUI.button(root, 'Attack', resolve)); await invocation.disposeView(); return { ok: true, view }; })",
+        },
+        attackToolAppTemplate: {
+          purpose: 'Acceptance template: inspect character/chat/lorebooks, select an item, ask a declared agent helper to decide success and attack attributes, let the user adjust a number stepper, then confirm a shared lorebook result.',
+          requiredPermissions: ['interactiveUi', 'invokeTools', 'character.read', 'chat.read', 'lorebook.read', 'lorebook.write'],
+          requiredFunctions: ['A no-argument script function with manualLaunch enabled.', 'A managed agent helper listed in the script function allowedTools.'],
+          source: "await risuai.registerFunction('attack', async (_args, invocation) => { const HELPER_REF = { kind: 'managed', toolId: 'REPLACE_WITH_HELPER_TOOL_ID', functionId: 'REPLACE_WITH_HELPER_FUNCTION_ID' }; const [character, chat, lorebooks] = await Promise.all([invocation.getCurrentCharacter(), invocation.getCurrentChat(), invocation.listLorebooks()]); await invocation.openView({ title: 'Attack', mode: 'inline', allowExpand: true, minHeight: 360 }); const root = RisuToolUI.stack(); const itemSelect = RisuToolUI.select(root, lorebooks.map(({ source, entry }) => ({ label: source + ': ' + (entry.comment || entry.id), value: entry.id || entry.comment }))); const success = RisuToolUI.numberStepper(root, { value: 50, min: 0, max: 100, step: 1 }); const decision = await invocation.callTool(HELPER_REF, { character, chat, item: itemSelect.value }); success.value = String(JSON.parse(decision.response[0].text).success); await new Promise((resolve) => RisuToolUI.button(root, 'Attack', resolve)); await invocation.commitChanges([{ kind: 'upsertLorebook', scope: 'chat', entry: { comment: 'Last attack', content: JSON.stringify({ item: itemSelect.value, success: Number(success.value) }), alwaysActive: true } }]); await invocation.disposeView(); return { ok: true, item: itemSelect.value, success: Number(success.value) }; })",
+        },
         setFunctionExecutionAgent: examplePreset ? {
           kind: 'agent',
           modelPresetId: examplePreset.id,
@@ -722,11 +752,20 @@ export class ToolPackageHandler extends MCPToolHandler {
         'Function regex uses operation.functionId and optional operation.targetId. Existing value.functionId and value.id inputs are normalized for compatibility.',
         'Function regex flag may include <order N> after ECMAScript flags; higher order runs first.',
         'agentOutput and visibleCall function regex stages require an agent function.',
+        'Use requestChoice for a non-blocking inline option card. askUser remains a modal for compatibility.',
+        'Tool App handlers use plugin.apiVersion 2 and receive an invocation object as their second argument.',
+        'closeView hides a Tool App for reuse within the current invocation; disposeView permanently removes its UI. Completed invocations are disposed automatically.',
+        'Manual-launch functions cannot have required parameters; collect manual input inside the Tool App UI.',
+        'Script functions may call only execution.allowedTools through invocation.callTool.',
+        'Shared character, chat, lorebook, and raw database writes must use invocation.commitChanges and receive native confirmation.',
+        'External API plugins use nativeFetch with the network permission. Bundled HTTP and Web Search tools use user-managed profiles whose secrets are never exposed here.',
       ],
       templateTokens: ['{{tool_args}}', '{{tool_arg::name}}', '{{tool_last_user}}', '{{tool_chat_history}}', '{{tool_character}}', '{{tool_state::chat}}', '{{tool_capture::name}}', '{{tool_result}}', '{{tool_updates}}', '{{tool_asset::filename}}'],
-      pluginApi: ['registerFunction', 'askUser', 'requestDiceRoll', 'getVariable', 'setVariable', 'resetVariable', 'getList', 'setList', 'memoryList', 'memorySearch', 'memoryRead', 'memoryUpsert', 'memoryDelete', 'nativeFetch', 'databaseGet', 'databaseSet'],
+      pluginApi: ['registerFunction', 'askUser', 'requestChoice', 'requestDiceRoll', 'getVariable', 'setVariable', 'resetVariable', 'getList', 'setList', 'memoryList', 'memorySearch', 'memoryRead', 'memoryUpsert', 'memoryDelete', 'nativeFetch', 'databaseGet', 'databaseSet'],
+      invocationApiV2: ['openView', 'setViewMode', 'closeView', 'disposeView', 'requestChoice', 'requestDiceRoll', 'callTool', 'getCurrentCharacter', 'getCurrentChat', 'listLorebooks', 'commitChanges'],
+      toolUiSdk: ['make', 'stack', 'row', 'card', 'button', 'textInput', 'textarea', 'select', 'numberStepper'],
       pluginExample: "await risuai.registerFunction('run', async (args) => ({ ok: true, value: args.value }))",
-      customToggleFormat: 'key=label=type=options; type may be omitted, select, text, group, groupEnd, or divider.',
+      customToggleFormat: 'key=label=type=options; type may be omitted, select, text, textarea, caption, group, groupEnd, or divider.',
       regexTypes: ['editdisplay', 'editinput', 'editoutput', 'editprocess', 'edittrans'],
       functionRegexTypes: ['arguments', 'agentOutput', 'modelResult', 'visibleCall', 'pendingCard', 'successCard', 'errorCard'],
       triggerExamples: {
@@ -818,7 +857,8 @@ export class ToolPackageHandler extends MCPToolHandler {
       case 'setFunctionExecution': {
         const fn = requireFunction()
         if (value.kind === 'script') {
-          fn.execution = { kind: 'script' }
+          if (value.allowedTools !== undefined && !Array.isArray(value.allowedTools)) throw new Error('allowedTools must be an array.')
+          fn.execution = { kind: 'script', allowedTools: safeStructuredClone(value.allowedTools ?? []) }
           tool.functionRegex = (tool.functionRegex ?? []).filter((script) =>
             script.functionId !== fn.id || (script.type !== 'agentOutput' && script.type !== 'visibleCall'))
         }
@@ -907,13 +947,15 @@ export class ToolPackageHandler extends MCPToolHandler {
         if (operation.index === undefined || !tool.trigger?.[operation.index]) throw new Error(`Trigger index ${operation.index} not found.`)
         tool.trigger.splice(operation.index, 1); return
       case 'setPlugin': {
+        const apiVersion = value.apiVersion ?? tool.plugin.apiVersion ?? 1
         const languageValue = value.language ?? tool.plugin.language
         const source = value.source ?? tool.plugin.source
         const permissions = value.permissions ?? tool.plugin.permissions
+        if (apiVersion !== 1 && apiVersion !== 2) throw new Error('Plugin API version must be 1 or 2.')
         if (languageValue !== 'javascript' && languageValue !== 'typescript') throw new Error('Plugin language must be JavaScript or TypeScript.')
         if (typeof source !== 'string') throw new Error('Plugin source must be text.')
         if (!Array.isArray(permissions)) throw new Error('Plugin permissions must be an array.')
-        tool.plugin = { language: languageValue, source, permissions: safeStructuredClone(permissions) as ToolPermission[] }
+        tool.plugin = { apiVersion, language: languageValue, source, permissions: safeStructuredClone(permissions) as ToolPermission[] }
         return
       }
       case 'setActivation':
@@ -946,12 +988,15 @@ export class ToolPackageHandler extends MCPToolHandler {
     }
     for (const fn of draft.tool.functions) {
       const execution = fn.execution
-      if (execution?.kind !== 'agent') continue
-      const hasPresetId = typeof execution.modelPresetId === 'string' && Boolean(execution.modelPresetId.trim())
-      const preset = hasPresetId ? (db.modelPresets ?? []).find((item) => item.id === execution.modelPresetId) : undefined
-      if (hasPresetId && !preset) errors.push(`Model preset ID "${execution.modelPresetId}" was not found for agent function ${fn.name}; use an exact modelPresets[].id from risu-get-tool-authoring-context.`)
+      if (!execution) continue
+      let preset: typeof db.modelPresets[number] | undefined
+      if (execution.kind === 'agent') {
+        const hasPresetId = typeof execution.modelPresetId === 'string' && Boolean(execution.modelPresetId.trim())
+        preset = hasPresetId ? (db.modelPresets ?? []).find((item) => item.id === execution.modelPresetId) : undefined
+        if (hasPresetId && !preset) errors.push(`Model preset ID "${execution.modelPresetId}" was not found for agent function ${fn.name}; use an exact modelPresets[].id from risu-get-tool-authoring-context.`)
+      }
       const allowedTools = Array.isArray(execution.allowedTools) ? execution.allowedTools : []
-      if (allowedTools.length > 0 && preset?.toolUse !== true) errors.push(`Tool use is disabled on the model preset for ${fn.name}.`)
+      if (execution.kind === 'agent' && allowedTools.length > 0 && preset?.toolUse !== true) errors.push(`Tool use is disabled on the model preset for ${fn.name}.`)
       for (const ref of allowedTools) {
         if (!ref || typeof ref !== 'object' || (ref.kind !== 'external' && ref.kind !== 'managed')) continue
         if (ref.kind === 'external') {
@@ -960,6 +1005,7 @@ export class ToolPackageHandler extends MCPToolHandler {
         }
         const targetTool = ref.toolId === draft.tool.id ? draft.tool : db.tools.find((item) => item.id === ref.toolId)
         if (!targetTool?.functions.some((item) => item.id === ref.functionId)) errors.push(`Managed tool reference not found in ${fn.name}.`)
+        if (ref.toolId === draft.tool.id && ref.functionId === fn.id) errors.push(`Function ${fn.name} cannot call itself.`)
       }
     }
     if (draft.activation === 'character' && !getCurrentCharacter()) errors.push('A current character is required for character activation.')
@@ -983,11 +1029,14 @@ export class ToolPackageHandler extends MCPToolHandler {
     const variables = count(previous?.variables ?? [], draft.tool.variables)
     const lists = count(previous?.lists ?? [], draft.tool.lists)
     const sourceChanged = !previous || previous.plugin.source !== draft.tool.plugin.source
+    const manualFunctions = draft.tool.functions.filter((fn) => fn.presentation?.manualLaunch?.enabled).map((fn) => fn.name)
+    const nestedCalls = draft.tool.functions.reduce((count, fn) => count + (fn.execution?.allowedTools?.length ?? 0), 0)
     return [
       `${draft.mode === 'edit' ? 'update' : 'create'} tool ${draft.tool.name} (${draft.tool.namespace})`,
       `functions +${functions.added}/-${functions.deleted}, variables +${variables.added}/-${variables.deleted}, lists +${lists.added}/-${lists.deleted}`,
       `regex ${draft.tool.regex?.length ?? 0}, function regex ${draft.tool.functionRegex?.length ?? 0}, triggers ${draft.tool.trigger?.length ?? 0}, activation ${draft.activation}`,
       `plugin ${draft.tool.plugin.language}, permissions ${Array.isArray(draft.tool.plugin.permissions) ? draft.tool.plugin.permissions.join(', ') || 'none' : 'invalid'}, source changed ${sourceChanged ? 'yes' : 'no'}`,
+      `plugin API v${draft.tool.plugin.apiVersion ?? 1}, manual functions ${manualFunctions.join(', ') || 'none'}, declared nested calls ${nestedCalls}`,
       `low-level trigger access ${draft.tool.lowLevelAccess ? 'ENABLED' : 'disabled'}`,
     ].join('\n')
   }

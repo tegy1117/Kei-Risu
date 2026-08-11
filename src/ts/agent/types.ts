@@ -68,7 +68,7 @@ export interface AgentRunRecord {
     rawMainOutput?: string
     historyOutput?: string
     displayOutput?: string
-    status: 'running' | 'done' | 'failed' | 'aborted' | 'superseded'
+    status: 'running' | 'done' | 'partial' | 'failed' | 'aborted' | 'superseded'
     nodes: AgentNodeRunRecord[]
     warnings: string[]
     supersededByEditAt?: number

@@ -333,7 +333,7 @@ await (async function() {
                         if (a.aborted) { controller.abort(); }
                         return controller.signal;
                     }
-                    return a;
+                    return deserializeResult(a);
                 });
                 const result = await fn(...deserializedArgs);
                 response.result = result;
@@ -438,6 +438,7 @@ export class SandboxHost {
     private csp = `connect-src 'none'; script-src 'nonce-${this.nonce}' 'wasm-unsafe-eval'; frame-src 'none'; object-src 'none'; style-src * 'unsafe-inline'; default-src 'none'; img-src * data: blob:; font-src * data: blob:; media-src * data: blob:; base-uri 'none';`;
 
     private instanceRegistry = new Map<string, any>();
+    private instanceIdByValue = new WeakMap<object, string>();
     private abortControllers = new Map<string, AbortController>();
     private messageHandlerRef: ((event: MessageEvent) => void) | null = null;
     private callbackWrapperCache = new Map<string, Function>();
@@ -515,9 +516,11 @@ export class SandboxHost {
             if (val === null) return null;
             if (Array.isArray(val)) return val;
 
-
+            const existingId = this.instanceIdByValue.get(val);
+            if (existingId) return { __type: 'REMOTE_REF', id: existingId } as RemoteRef;
             const id = 'ref_' + Math.random().toString(36).substring(2);
             this.instanceRegistry.set(id, val);
+            this.instanceIdByValue.set(val, id);
             return { __type: 'REMOTE_REF', id } as RemoteRef;
         }
 
@@ -584,7 +587,7 @@ export class SandboxHost {
                                 }
                                 return ref;
                             }
-                            return arg;
+                            return this.serialize(arg);
                         });
 
                         const message = {
@@ -923,6 +926,13 @@ export class SandboxHost {
         return () => {
             this.terminate();
         };
+    }
+
+    public releaseRemoteInstance(instance: object) {
+        const id = this.instanceIdByValue.get(instance);
+        if (!id) return;
+        this.instanceRegistry.delete(id);
+        this.instanceIdByValue.delete(instance);
     }
 
     public terminate() {

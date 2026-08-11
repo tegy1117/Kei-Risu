@@ -5,6 +5,7 @@ import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
 import { ModelPresetAdapterError } from './error'
 import { sendChatRequest, streamChatRequest, previewChatRequest } from './openaiCompatible'
 import type { AdapterChatMessage, AdapterToolCall } from './types'
+import { prepareToolSchema } from '../../process/request/toolSchemaCompatibility'
 
 function makeSnapshot(overrides: Partial<ResolvedModelProfileSnapshot> = {}): ResolvedModelProfileSnapshot {
     return {
@@ -852,6 +853,50 @@ describe('previewChatRequest (no network)', () => {
         expect(fetched).toBe(false)
         expect(prepared.url).toBe('https://demo.test/v1/chat/completions')
         expect((prepared.body.tools as unknown[]).length).toBe(1)
+    })
+
+    test('carries a Bedrock-compatible object schema in the OpenAI tool envelope', async () => {
+        const inputSchema = {
+            anyOf: [
+                {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string' },
+                        level: { type: 'string', enum: ['tool'] },
+                        policy: { type: 'string' },
+                    },
+                    required: ['id', 'level', 'policy'],
+                },
+                {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string' },
+                        level: { type: 'string', enum: ['function'] },
+                        functionId: { type: 'string' },
+                        policy: { type: 'string' },
+                    },
+                    required: ['id', 'level', 'functionId', 'policy'],
+                },
+            ],
+        }
+        const prepared = await previewChatRequest(
+            makePreset(),
+            {
+                messages: userMessages,
+                tools: [{
+                    name: 'risu-set-tool-policy',
+                    parameters: prepareToolSchema(inputSchema, 'top-level-object'),
+                }],
+            },
+            { apiKey: 'sk' },
+        )
+        const tools = prepared.body.tools as Array<{ function: { parameters: Record<string, unknown> } }>
+        const parameters = tools[0].function.parameters
+
+        expect(parameters.type).toBe('object')
+        expect(parameters).not.toHaveProperty('anyOf')
+        expect(parameters.required).toEqual(['id', 'level', 'policy'])
+        expect(parameters.properties).toHaveProperty('functionId')
     })
 })
 

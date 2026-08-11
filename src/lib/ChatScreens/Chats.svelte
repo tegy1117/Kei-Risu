@@ -8,6 +8,8 @@
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
     import ToolDiceInteractionCard from './ToolDiceInteractionCard.svelte';
+    import ToolChoiceInteractionCard from './ToolChoiceInteractionCard.svelte';
+    import ToolAppHost from './ToolAppHost.svelte';
     
     const getCurrentChatRoomId = () => {
         const charId = get(selectedCharID);
@@ -257,5 +259,7 @@
 
 </script>
 
+<ToolAppHost />
 <ToolDiceInteractionCard />
+<ToolChoiceInteractionCard />
 <div class="flex flex-col-reverse" bind:this={chatBody}></div>

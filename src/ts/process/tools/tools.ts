@@ -25,8 +25,21 @@ import type {
     ToolPromptPolicy,
     ToolScope,
     ToolScopeState,
+    ToolSharedChange,
+    ToolAppViewMode,
+    ToolAppViewOptions,
     ToolStateStore,
 } from './types'
+import {
+    cancelToolAppSession,
+    cancelToolAppForTool,
+    closeToolAppSession,
+    getToolAppRuntimeMount,
+    openToolAppSession,
+    setToolAppViewMode,
+    toolAppGuestBootstrap,
+} from './toolApp'
+import { cancelToolInteractionsForOwner } from './interaction'
 
 const namespacePattern = /^[A-Za-z0-9_-]+$/
 const functionPattern = /^[A-Za-z0-9_-]+$/
@@ -38,11 +51,13 @@ const toolRegexTypes = new Set(['arguments', 'agentOutput', 'modelResult', 'visi
 const agentOnlyToolRegexTypes = new Set(['agentOutput', 'visibleCall'])
 const triggerTypes = new Set(['start', 'manual', 'output', 'input', 'display', 'request'])
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
+type ToolHandler = (args: Record<string, unknown>, context?: ToolInvocationApi) => Promise<unknown>
 
 export interface ToolExecutionContext {
     stack: string[]
     requestStatusId?: string
+    interactionOwnerId?: string
+    abortSignal?: AbortSignal
     onPendingPresentation?: (presentation: ManagedToolPendingPresentation) => void | Promise<void>
 }
 
@@ -77,23 +92,58 @@ type ToolRuntime = {
     source: string
     host: SandboxHost
     handlers: Map<string, ToolHandler>
+    iframe: HTMLIFrameElement
+    viewOwnerId?: string
 }
 
 const runtimes = new Map<string, ToolRuntime>()
+
+interface ToolInvocation {
+    id: string
+    ownerId: string
+    tool: RisuToolPackage
+    fn: RisuToolFunction
+    runtime: ToolRuntime
+    executionContext: ToolExecutionContext
+    wireName: string
+    cancel: (reason: string) => void
+    cancelled: Promise<never>
+    characterFingerprint: string
+    chatFingerprint: string
+    databaseFingerprint: string
+    viewId?: string
+    viewOpen?: boolean
+}
 
 export function toolWireName(namespace: string, functionName: string) {
     return `${namespace}__${functionName}`
 }
 
+function validateAllowedToolRefs(value: unknown, functionName: string, errors: string[], required = false) {
+    if (!Array.isArray(value)) {
+        if (required) errors.push(`Allowed tools must be an array for ${functionName}.`)
+        return
+    }
+    for (const ref of value) {
+        if (!isObject(ref) || (ref.kind !== 'managed' && ref.kind !== 'external')) errors.push(`Invalid allowed tool reference in ${functionName}.`)
+        else if (ref.kind === 'managed' && (typeof ref.toolId !== 'string' || typeof ref.functionId !== 'string')) errors.push(`Invalid managed tool reference in ${functionName}.`)
+        else if (ref.kind === 'external' && typeof ref.name !== 'string') errors.push(`Invalid external tool reference in ${functionName}.`)
+    }
+}
+
 export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPackage[] = []): string[] {
     const errors: string[] = []
-    const allowedPermissions: ToolPermission[] = ['askUser', 'network', 'database']
+    const allowedPermissions: ToolPermission[] = [
+        'askUser', 'network', 'database', 'interactiveUi', 'invokeTools',
+        'character.read', 'character.write', 'chat.read', 'chat.write', 'lorebook.read', 'lorebook.write',
+    ]
     if (!tool.name?.trim()) errors.push('Tool name is required.')
     if (!namespacePattern.test(tool.namespace ?? '')) errors.push('Namespace may contain only letters, numbers, _ and -.')
     if (allTools.some((other) => other.id !== tool.id && other.namespace === tool.namespace)) {
         errors.push(`Namespace "${tool.namespace}" is already in use.`)
     }
     if (tool.plugin?.language !== 'javascript' && tool.plugin?.language !== 'typescript') errors.push('Plugin language must be JavaScript or TypeScript.')
+    if (tool.plugin?.apiVersion !== undefined && tool.plugin.apiVersion !== 1 && tool.plugin.apiVersion !== 2) errors.push('Plugin API version must be 1 or 2.')
     if (typeof tool.plugin?.source !== 'string') errors.push('Plugin source must be text.')
     if (tool.lowLevelAccess !== undefined && typeof tool.lowLevelAccess !== 'boolean') errors.push('Low-level access must be a boolean.')
     const pluginPermissions: unknown = tool.plugin?.permissions
@@ -119,6 +169,15 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
                 for (const key of ['pendingTemplate', 'successTemplate', 'errorTemplate'] as const) {
                     if (fn.presentation[key] !== undefined && typeof fn.presentation[key] !== 'string') errors.push(`presentation.${key} must be text for ${fn.name}.`)
                 }
+                const manual = fn.presentation.manualLaunch
+                if (manual !== undefined) {
+                    if (!isObject(manual) || typeof manual.enabled !== 'boolean') errors.push(`presentation.manualLaunch.enabled must be a boolean for ${fn.name}.`)
+                    else {
+                        if (manual.label !== undefined && typeof manual.label !== 'string') errors.push(`presentation.manualLaunch.label must be text for ${fn.name}.`)
+                        if (manual.includeInModelHistory !== undefined && typeof manual.includeInModelHistory !== 'boolean') errors.push(`presentation.manualLaunch.includeInModelHistory must be a boolean for ${fn.name}.`)
+                        if (manual.enabled && (fn.parameters ?? []).some((parameter) => parameter.required)) errors.push(`Manual function ${fn.name} cannot have required parameters.`)
+                    }
+                }
             }
         }
         const params = new Set<string>()
@@ -136,20 +195,14 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
         }
         const execution = fn.execution
         if (execution && execution.kind !== 'script' && execution.kind !== 'agent') errors.push(`Invalid execution kind for ${fn.name}.`)
+        if (execution?.kind === 'script' && execution.allowedTools !== undefined) validateAllowedToolRefs(execution.allowedTools, fn.name, errors)
         if (execution?.kind === 'agent') {
             if (typeof execution.modelPresetId !== 'string' || !execution.modelPresetId.trim()) errors.push(`execution.modelPresetId is required for agent function ${fn.name}.`)
             const systemPrompt = typeof execution.systemPrompt === 'string' ? execution.systemPrompt : ''
             const userPrompt = typeof execution.userPrompt === 'string' ? execution.userPrompt : ''
             if (typeof execution.systemPrompt !== 'string' || typeof execution.userPrompt !== 'string') errors.push(`execution.systemPrompt and execution.userPrompt must both be text for agent function ${fn.name}.`)
             if (!systemPrompt.trim() && !userPrompt.trim()) errors.push(`At least one of execution.systemPrompt or execution.userPrompt is required for agent function ${fn.name}.`)
-            if (!Array.isArray(execution.allowedTools)) errors.push(`Allowed tools must be an array for ${fn.name}.`)
-            else {
-                for (const ref of execution.allowedTools) {
-                    if (!isObject(ref) || (ref.kind !== 'managed' && ref.kind !== 'external')) errors.push(`Invalid allowed tool reference in ${fn.name}.`)
-                    else if (ref.kind === 'managed' && (typeof ref.toolId !== 'string' || typeof ref.functionId !== 'string')) errors.push(`Invalid managed tool reference in ${fn.name}.`)
-                    else if (ref.kind === 'external' && typeof ref.name !== 'string') errors.push(`Invalid external tool reference in ${fn.name}.`)
-                }
-            }
+            validateAllowedToolRefs(execution.allowedTools, fn.name, errors, true)
             if (!Array.isArray(execution.outputRoutes) || execution.outputRoutes.length === 0) errors.push(`At least one output route is required for ${fn.name}.`)
             for (const route of Array.isArray(execution.outputRoutes) ? execution.outputRoutes : []) {
                 if (!isObject(route)) {
@@ -179,6 +232,19 @@ export function validateToolPackage(tool: RisuToolPackage, allTools: RisuToolPac
                     if (action.kind === 'upsertMemory' && !toolScopes.has(String(action.scope))) errors.push(`Invalid memory scope in ${fn.name}.`)
                     if (!['setVariable', 'appendList', 'replaceList', 'upsertMemory'].includes(String(action.kind))) errors.push(`Invalid state action kind in ${fn.name}.`)
                 }
+            }
+        }
+    }
+    for (const fn of tool.functions ?? []) {
+        for (const ref of fn.execution?.allowedTools ?? []) {
+            if (ref.kind !== 'managed') continue
+            if (ref.toolId === tool.id && ref.functionId === fn.id) {
+                errors.push(`Function ${fn.name} cannot call itself.`)
+                continue
+            }
+            if (allTools.length > 0) {
+                const target = ref.toolId === tool.id ? tool : allTools.find((candidate) => candidate.id === ref.toolId)
+                if (!target?.functions.some((candidate) => candidate.id === ref.functionId)) errors.push(`Managed tool reference not found in ${fn.name}.`)
             }
         }
     }
@@ -342,7 +408,7 @@ export async function getManagedTools(): Promise<Array<MCPTool & { managedToolId
             const scriptFunctions = functions.filter((fn) => fn.execution?.kind !== 'agent')
             const runtime = scriptFunctions.length > 0 ? await ensureRuntime(tool) : null
             for (const fn of functions) {
-                if (fn.execution?.kind !== 'agent' && !runtime?.handlers.has(fn.name)) continue
+                if (fn.execution?.kind !== 'agent' && !runtime?.handlers.has(toolWireName(tool.namespace, fn.name))) continue
                 output.push({
                     name: toolWireName(tool.namespace, fn.name),
                     description: fn.description,
@@ -355,6 +421,28 @@ export async function getManagedTools(): Promise<Array<MCPTool & { managedToolId
         }
     }
     return output
+}
+
+export function getManualToolFunctions() {
+    return getActiveToolPackages().flatMap(({ tool, functions }) => functions
+        .filter((fn) => fn.presentation?.manualLaunch?.enabled === true)
+        .map((fn) => ({ tool, fn, wireName: toolWireName(tool.namespace, fn.name) })))
+}
+
+export async function callManualTool(toolId: string, functionId: string) {
+    const candidate = getManualToolFunctions().find((item) => item.tool.id === toolId && item.fn.id === functionId)
+    if (!candidate) throw new Error('This function is not available for manual launch.')
+    if (candidate.fn.parameters.some((parameter) => parameter.required)) throw new Error('Manual functions cannot require arguments.')
+    const call = { id: v4(), name: candidate.wireName, arg: {} }
+    const executed = await callManagedToolDetailed(candidate.wireName, {}, { stack: [] })
+    if (!executed) throw new Error('Manual tool function was not found.')
+    const { encodeToolExecution } = await import('../mcp/mcp')
+    const marker = await encodeToolExecution(call, executed, candidate.fn.presentation?.manualLaunch?.includeInModelHistory !== false)
+    const chat = getCurrentChat()
+    if (!chat) throw new Error('No current chat is selected.')
+    chat.message.push({ role: 'char', data: marker })
+    chat.message = chat.message
+    return executed
 }
 
 export async function callManagedToolDetailed(
@@ -389,9 +477,24 @@ export async function callManagedToolDetailed(
                 })
             }
             const runtime = await ensureRuntime(tool)
-            const handler = runtime.handlers.get(fn.name)
+            const handler = runtime.handlers.get(wireName)
             if (!handler) throw new Error(`Handler ${fn.name} is not registered.`)
-            const rawResult = await handler(input)
+            const invocation = createToolInvocation(tool, fn, runtime, wireName, {
+                ...context,
+                stack: [...context.stack, wireName],
+            })
+            const invocationApi = new ToolInvocationApi(invocation)
+            const abortInvocation = () => invocation.cancel('Tool call cancelled by the request.')
+            let rawResult: unknown
+            try {
+                if (context.abortSignal?.aborted) abortInvocation()
+                else context.abortSignal?.addEventListener('abort', abortInvocation, { once: true })
+                rawResult = await Promise.race([handler(input, invocationApi), invocation.cancelled])
+            } finally {
+                context.abortSignal?.removeEventListener('abort', abortInvocation)
+                await disposeInvocationView(invocation)
+                runtime.host.releaseRemoteInstance(invocationApi)
+            }
             const response = normalizeToolResult(rawResult).map((part) => part.type === 'text'
                 ? { ...part, text: applyToolFunctionRegexText(tool, fn.id, 'modelResult', part.text) }
                 : part)
@@ -477,8 +580,12 @@ function normalizeToolResult(value: unknown): RPCToolCallContent[] {
 async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
     const source = tool.plugin?.source ?? ''
     const previous = runtimes.get(tool.id)
-    if (previous?.source === source) return previous
-    previous?.host.terminate()
+    const runtimeMount = getToolAppRuntimeMount()
+    if (previous?.source === source && (!runtimeMount || previous.iframe.parentElement === runtimeMount)) return previous
+    if (previous) {
+        cancelToolAppForTool(tool.id, 'runtime_reloaded')
+        previous.host.terminate()
+    }
 
     let compiled = source
     if (tool.plugin?.language === 'typescript') compiled = await pluginCodeTranspiler(source)
@@ -488,9 +595,10 @@ async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
     const host = new SandboxHost(makeToolApi(tool, handlers, markReady))
     const iframe = document.createElement('iframe')
     iframe.style.display = 'none'
-    document.body.appendChild(iframe)
-    host.run(iframe, `${compiled}\nawait risuai.__ready()`)
-    const runtime = { source, host, handlers }
+    ;(runtimeMount ?? document.body).appendChild(iframe)
+    const bootstrap = (tool.plugin.apiVersion ?? 1) >= 2 ? `${toolAppGuestBootstrap}\n` : ''
+    host.run(iframe, `${bootstrap}${compiled}\nawait risuai.__ready()`)
+    const runtime = { source, host, handlers, iframe }
     runtimes.set(tool.id, runtime)
     await Promise.race([
         ready,
@@ -499,12 +607,214 @@ async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
     return runtime
 }
 
+async function disposeInvocationView(invocation: ToolInvocation) {
+    const runtimeOwnsView = invocation.runtime.viewOwnerId === invocation.id
+    if (!invocation.viewId && !runtimeOwnsView) return false
+    if (invocation.viewId) closeToolAppSession(invocation.viewId)
+    invocation.viewOpen = false
+    try {
+        if (runtimeOwnsView && runtimes.get(invocation.tool.id) === invocation.runtime) {
+            await invocation.runtime.host.executeInIframe('document.body.replaceChildren()')
+        }
+    } catch {
+        invocation.runtime.host.terminate()
+        if (runtimes.get(invocation.tool.id) === invocation.runtime) runtimes.delete(invocation.tool.id)
+    } finally {
+        if (invocation.runtime.viewOwnerId === invocation.id) invocation.runtime.viewOwnerId = undefined
+        invocation.viewId = undefined
+    }
+    return true
+}
+
+function snapshotFingerprint(value: unknown) {
+    try { return JSON.stringify(safeStructuredClone(value)) } catch { return '' }
+}
+
+function createToolInvocation(
+    tool: RisuToolPackage,
+    fn: RisuToolFunction,
+    runtime: ToolRuntime,
+    wireName: string,
+    executionContext: ToolExecutionContext,
+): ToolInvocation {
+    const id = v4()
+    let rejectCancellation: (error: Error) => void = () => {}
+    let cancelled = false
+    const cancelledPromise = new Promise<never>((_resolve, reject) => { rejectCancellation = reject })
+    const invocation: ToolInvocation = {
+        id,
+        ownerId: executionContext.interactionOwnerId ?? id,
+        tool,
+        fn,
+        runtime,
+        executionContext,
+        wireName,
+        cancelled: cancelledPromise,
+        cancel: (reason: string) => {
+            if (cancelled) return
+            cancelled = true
+            rejectCancellation(new Error(reason))
+            cancelToolInteractionsForOwner(invocation.ownerId, reason)
+            runtime.host.terminate()
+            if (runtimes.get(tool.id) === runtime) runtimes.delete(tool.id)
+        },
+        characterFingerprint: snapshotFingerprint(getCurrentCharacter()),
+        chatFingerprint: snapshotFingerprint(getCurrentChat()),
+        databaseFingerprint: sharedDatabaseFingerprint(),
+    }
+    return invocation
+}
+
+function callableRefEquals(left: ToolCallableRef, right: ToolCallableRef) {
+    return left.kind === right.kind && (left.kind === 'external'
+        ? left.name === (right as Extract<ToolCallableRef, { kind: 'external' }>).name
+        : left.toolId === (right as Extract<ToolCallableRef, { kind: 'managed' }>).toolId
+            && left.functionId === (right as Extract<ToolCallableRef, { kind: 'managed' }>).functionId)
+}
+
+function callableRefName(ref: ToolCallableRef) {
+    if (ref.kind === 'external') return ref.name
+    const target = getDatabase().tools.find((tool) => tool.id === ref.toolId)
+    const fn = target?.functions.find((candidate) => candidate.id === ref.functionId)
+    if (!target || !fn) throw new Error('Managed tool reference was not found.')
+    return toolWireName(target.namespace, fn.name)
+}
+
+export class ToolInvocationApi {
+    readonly __classType = 'REMOTE_REQUIRED'
+
+    constructor(private readonly invocation: ToolInvocation) {}
+
+    async openView(options: ToolAppViewOptions) {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'interactiveUi')
+        if (this.invocation.viewOpen) throw new Error('This invocation already has an open Tool App view.')
+        const runtime = this.invocation.runtime
+        if (runtime.viewOwnerId && runtime.viewOwnerId !== this.invocation.id) throw new Error('interaction_busy')
+        const hadView = !!this.invocation.viewId
+        const viewId = this.invocation.viewId ?? v4()
+        runtime.viewOwnerId = this.invocation.id
+        try {
+            const opened = openToolAppSession({
+                id: viewId,
+                ownerId: this.invocation.ownerId,
+                toolId: this.invocation.tool.id,
+                functionId: this.invocation.fn.id,
+                iframe: runtime.iframe,
+                options,
+                onCancel: (reason) => this.invocation.cancel(reason),
+            })
+            this.invocation.viewId = viewId
+            this.invocation.viewOpen = true
+            return opened
+        } catch (error) {
+            if (!hadView && runtime.viewOwnerId === this.invocation.id) runtime.viewOwnerId = undefined
+            throw error
+        }
+    }
+
+    setViewMode(mode: ToolAppViewMode) {
+        this.requireV2()
+        if (!this.invocation.viewId) throw new Error('No Tool App view is open.')
+        return setToolAppViewMode(this.invocation.viewId, mode)
+    }
+
+    closeView() {
+        this.requireV2()
+        if (!this.invocation.viewId || !this.invocation.viewOpen) return false
+        const closed = closeToolAppSession(this.invocation.viewId)
+        if (closed) this.invocation.viewOpen = false
+        return closed
+    }
+
+    async disposeView() {
+        this.requireV2()
+        return disposeInvocationView(this.invocation)
+    }
+
+    async requestChoice(request: unknown) {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'askUser')
+        if (!isObject(request)) throw new Error('Choice request must be an object.')
+        const { requestChoice } = await import('./choice')
+        return requestChoice(request as never, this.invocation.ownerId)
+    }
+
+    async requestDiceRoll(request: unknown) {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'askUser')
+        if (!isObject(request)) throw new Error('Dice roll request must be an object.')
+        const { requestDiceRoll } = await import('./dice')
+        return requestDiceRoll(request as never, this.invocation.ownerId)
+    }
+
+    async callTool(ref: ToolCallableRef, args: unknown = {}) {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'invokeTools')
+        if (!isObject(ref) || (ref.kind !== 'managed' && ref.kind !== 'external')) throw new Error('Invalid callable tool reference.')
+        const execution = this.invocation.fn.execution
+        const allowed = execution?.kind === 'script' ? execution.allowedTools ?? [] : []
+        if (!allowed.some((candidate) => callableRefEquals(candidate, ref))) throw new Error('Tool call was not declared in execution.allowedTools.')
+        if (this.invocation.executionContext.stack.length >= 32) throw new Error('Nested tool call limit reached.')
+        const name = callableRefName(ref)
+        const { callToolDetailed } = await import('../mcp/mcp')
+        return callToolDetailed(name, args, {
+            stack: this.invocation.executionContext.stack,
+            requestStatusId: this.invocation.executionContext.requestStatusId,
+            interactionOwnerId: this.invocation.ownerId,
+            abortSignal: this.invocation.executionContext.abortSignal,
+        })
+    }
+
+    async getCurrentCharacter() {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'character.read')
+        const character = getCurrentCharacter()
+        if (!character) return null
+        const snapshot = safeStructuredClone(character) as unknown as Record<string, unknown>
+        delete snapshot.chats
+        return snapshot
+    }
+
+    async getCurrentChat() {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'chat.read')
+        const chat = getCurrentChat()
+        return chat ? safeStructuredClone(chat) : null
+    }
+
+    async listLorebooks() {
+        this.requireV2()
+        await requirePermission(this.invocation.tool, 'lorebook.read')
+        const character = getCurrentCharacter()
+        const chat = getCurrentChat()
+        const { getModuleLorebooks } = await import('src/ts/process/modules')
+        return [
+            ...(character?.globalLore ?? []).map((entry) => ({ source: 'character', entry: safeStructuredClone(entry) })),
+            ...(chat?.localLore ?? []).map((entry) => ({ source: 'chat', entry: safeStructuredClone(entry) })),
+            ...getModuleLorebooks().map((entry) => ({ source: 'module', entry: safeStructuredClone(entry) })),
+        ]
+    }
+
+    async commitChanges(changes: ToolSharedChange[]) {
+        this.requireV2()
+        return commitToolSharedChanges(this.invocation, changes)
+    }
+
+    private requireV2() {
+        if ((this.invocation.tool.plugin.apiVersion ?? 1) < 2) throw new Error('Tool App invocation APIs require plugin.apiVersion 2.')
+    }
+}
+
 function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, ready: () => void) {
     return {
+        _getPropertiesForInitialization: () => ({ apiVersion: 'tool-2.0', apiVersionCompatibleWith: ['tool-1.0', 'tool-2.0'], list: ['apiVersion', 'apiVersionCompatibleWith'] }),
+        _getAliases: () => ({}),
+        _getOldKeys: () => [],
         __ready: () => ready(),
         registerFunction: (name: string, handler: ToolHandler) => {
             if (!(tool.functions ?? []).some((fn) => fn.name === name)) throw new Error(`Function ${name} is not declared.`)
-            handlers.set(name, handler)
+            handlers.set(toolWireName(tool.namespace, name), handler)
         },
         askUser: async (question: string, options: string[] = [], allowFreeText = true) => {
             await requirePermission(tool, 'askUser')
@@ -523,6 +833,31 @@ function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, 
             if (!isObject(request)) throw new Error('Dice roll request must be an object.')
             const { requestDiceRoll } = await import('./dice')
             return requestDiceRoll(request as never)
+        },
+        requestChoice: async (request: unknown) => {
+            await requirePermission(tool, 'askUser')
+            if (!isObject(request)) throw new Error('Choice request must be an object.')
+            const { requestChoice } = await import('./choice')
+            return requestChoice(request as never)
+        },
+        httpRequest: async (args: unknown) => {
+            if (tool.builtinId !== 'http') throw new Error('httpRequest is reserved for the bundled HTTP tool.')
+            if (!isObject(args)) throw new Error('HTTP request must be an object.')
+            const { executeHttpTool } = await import('./network')
+            return executeHttpTool(args as never)
+        },
+        webSearch: async (args: unknown) => {
+            if (tool.builtinId !== 'websearch') throw new Error('webSearch is reserved for the bundled Web Search tool.')
+            if (!isObject(args)) throw new Error('Search request must be an object.')
+            const { executeSearchTool } = await import('./network')
+            return executeSearchTool(args as never)
+        },
+        networkProfiles: async (kind: unknown) => {
+            if (tool.builtinId !== 'http' && tool.builtinId !== 'websearch') throw new Error('networkProfiles is reserved for bundled network tools.')
+            const expected = tool.builtinId === 'http' ? 'http' : 'search'
+            if (kind !== expected) throw new Error(`Expected ${expected} network profiles.`)
+            const { listNetworkProfiles } = await import('./network')
+            return listNetworkProfiles(expected)
         },
         getVariable: (name: string) => getVariable(tool, name),
         setVariable: (name: string, value: unknown) => setVariable(tool, name, value),
@@ -544,6 +879,7 @@ function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, 
         },
         databaseSet: async (value: unknown) => {
             await requirePermission(tool, 'database')
+            if ((tool.plugin.apiVersion ?? 1) >= 2) throw new Error('API v2 tools must use invocation.commitChanges for database writes.')
             if (!isObject(value)) throw new Error('Database value must be an object.')
             setDatabase(value as never)
             return true
@@ -564,10 +900,150 @@ async function requirePermission(tool: RisuToolPackage, permission: ToolPermissi
     if (stored === true) return
     if (stored === false) throw new Error(`Permission ${permission} was denied.`)
     const permissionLabel = permission === 'askUser' ? language.toolPermissionAskUser
-        : permission === 'network' ? language.toolPermissionNetwork : language.toolPermissionDatabase
+        : permission === 'network' ? language.toolPermissionNetwork
+            : permission === 'database' ? language.toolPermissionDatabase
+                : permission
     const granted = await alertConfirm(language.toolPermissionRequest.replace('{name}', tool.name).replace('{permission}', permissionLabel))
     db.toolPermissions[tool.id][key] = granted
     if (!granted) throw new Error(`Permission ${permission} was denied.`)
+}
+
+function safeSharedPath(path: string, blockedRoots: string[]) {
+    const parts = path.split('.').filter(Boolean)
+    if (parts.length === 0 || parts.length > 12) throw new Error(`Invalid shared data path: ${path}`)
+    if (blockedRoots.includes(parts[0])) throw new Error(`Shared data path is protected: ${path}`)
+    if (parts.some((part) => ['__proto__', 'prototype', 'constructor'].includes(part))) throw new Error(`Unsafe shared data path: ${path}`)
+    return parts
+}
+
+function setSharedPath(target: Record<string, unknown>, parts: string[], value: unknown) {
+    let current = target
+    for (const part of parts.slice(0, -1)) {
+        const existing = current[part]
+        if (!isObject(existing)) current[part] = {}
+        current = current[part] as Record<string, unknown>
+    }
+    current[parts.at(-1)!] = safeStructuredClone(value)
+}
+
+function normalizeSharedLorebook(value: Record<string, unknown>) {
+    const content = typeof value.content === 'string' ? value.content.trim() : ''
+    if (!content) throw new Error('Lorebook content is required.')
+    const comment = typeof value.comment === 'string' ? value.comment.trim() : ''
+    return {
+        key: typeof value.key === 'string' ? value.key : '',
+        secondkey: typeof value.secondkey === 'string' ? value.secondkey : '',
+        insertorder: Number.isFinite(value.insertorder) ? Number(value.insertorder) : 0,
+        comment,
+        content,
+        mode: ['multiple', 'constant', 'normal', 'child', 'folder'].includes(String(value.mode)) ? value.mode : 'normal',
+        alwaysActive: value.alwaysActive === true,
+        selective: value.selective === true,
+        ...(typeof value.id === 'string' && value.id ? { id: value.id } : { id: v4() }),
+    }
+}
+
+function sharedDatabaseFingerprint() {
+    const snapshot = safeStructuredClone(getDatabase()) as unknown as Record<string, unknown>
+    delete snapshot.toolPermissions
+    delete snapshot.toolStates
+    return snapshotFingerprint(snapshot)
+}
+
+async function commitToolSharedChanges(invocation: ToolInvocation, changes: ToolSharedChange[]) {
+    if (!Array.isArray(changes) || changes.length === 0 || changes.length > 100) throw new Error('Changes must contain 1 to 100 operations.')
+    if (changes.some((change) => change.kind === 'replaceDatabase') && changes.length !== 1) throw new Error('replaceDatabase cannot be combined with other changes.')
+
+    const permissions = new Set<ToolPermission>()
+    for (const change of changes) {
+        if (!isObject(change)) throw new Error('Every shared change must be an object.')
+        if (change.kind === 'setCharacterField') permissions.add('character.write')
+        else if (change.kind === 'setChatField') permissions.add('chat.write')
+        else if (change.kind === 'upsertLorebook' || change.kind === 'deleteLorebook') permissions.add('lorebook.write')
+        else if (change.kind === 'replaceDatabase') permissions.add('database')
+        else throw new Error('Unsupported shared change.')
+    }
+    for (const permission of permissions) await requirePermission(invocation.tool, permission)
+
+    const replacementChange = changes[0].kind === 'replaceDatabase' ? changes[0] : null
+    const replacesDatabase = replacementChange !== null
+    const requiresCharacterSnapshot = !replacesDatabase
+    const requiresChatSnapshot = changes.some((change) => change.kind === 'setChatField' || change.kind === 'upsertLorebook' && change.scope === 'chat' || change.kind === 'deleteLorebook' && change.scope === 'chat')
+    const assertSnapshotsAreCurrent = () => {
+        const currentCharacter = getCurrentCharacter()
+        const currentChat = getCurrentChat()
+        if (requiresCharacterSnapshot) {
+            if (!currentCharacter) throw new Error('No current character is selected.')
+            if (snapshotFingerprint(currentCharacter) !== invocation.characterFingerprint) throw new Error('The current character changed while the Tool App was open.')
+        }
+        if (requiresChatSnapshot) {
+            if (!currentChat) throw new Error('No current chat is selected.')
+            if (snapshotFingerprint(currentChat) !== invocation.chatFingerprint) throw new Error('The current chat changed while the Tool App was open.')
+        }
+        if (replacesDatabase && sharedDatabaseFingerprint() !== invocation.databaseFingerprint) {
+            throw new Error('The database changed while the Tool App was open.')
+        }
+    }
+    assertSnapshotsAreCurrent()
+
+    const character = getCurrentCharacter()
+    const chat = getCurrentChat()
+
+    const characterDraft = character ? safeStructuredClone(character) as unknown as Record<string, unknown> : null
+    const chatIndex = character?.chatPage ?? -1
+    const chatDraft = characterDraft && chatIndex >= 0
+        ? (characterDraft.chats as Array<Record<string, unknown>> | undefined)?.[chatIndex]
+        : null
+    const summaries: string[] = []
+    for (const change of changes) {
+        if (change.kind === 'setCharacterField') {
+            if (!characterDraft) throw new Error('No current character is selected.')
+            setSharedPath(characterDraft, safeSharedPath(change.path, ['chaId', 'chats', 'globalLore']), change.value)
+            summaries.push(`Character: set ${change.path}`)
+        } else if (change.kind === 'setChatField') {
+            if (!chatDraft) throw new Error('No current chat is selected.')
+            setSharedPath(chatDraft, safeSharedPath(change.path, ['id', 'localLore']), change.value)
+            summaries.push(`Chat: set ${change.path}`)
+        } else if (change.kind === 'upsertLorebook') {
+            const target = change.scope === 'character'
+                ? characterDraft?.globalLore as Array<Record<string, unknown>> | undefined
+                : chatDraft?.localLore as Array<Record<string, unknown>> | undefined
+            if (!target) throw new Error(`No current ${change.scope} lorebook is available.`)
+            const entry = normalizeSharedLorebook(change.entry)
+            const index = target.findIndex((candidate) => candidate.id === entry.id || (!!entry.comment && candidate.comment === entry.comment))
+            if (index >= 0) target[index] = { ...target[index], ...entry }
+            else target.push(entry)
+            summaries.push(`${change.scope} lorebook: ${index >= 0 ? 'update' : 'add'} ${entry.comment || entry.id}`)
+        } else if (change.kind === 'deleteLorebook') {
+            const target = change.scope === 'character'
+                ? characterDraft?.globalLore as Array<Record<string, unknown>> | undefined
+                : chatDraft?.localLore as Array<Record<string, unknown>> | undefined
+            if (!target) throw new Error(`No current ${change.scope} lorebook is available.`)
+            const index = target.findIndex((candidate) => change.id ? candidate.id === change.id : candidate.comment === change.name)
+            if (index < 0) throw new Error('Lorebook entry to delete was not found.')
+            const [deleted] = target.splice(index, 1)
+            summaries.push(`${change.scope} lorebook: delete ${deleted.comment || deleted.id}`)
+        } else {
+            if (!isObject(change.value)) throw new Error('Replacement database must be an object.')
+            summaries.push('Replace the complete RisuAI database')
+        }
+    }
+
+    const approved = await alertConfirm(`Tool App "${invocation.tool.name}" requests these changes:\n\n${summaries.join('\n')}\n\nApply all changes?`)
+    if (!approved) return { committed: false, cancelled: true, changes: summaries }
+    assertSnapshotsAreCurrent()
+    if (replacementChange) setDatabase(safeStructuredClone(replacementChange.value) as never)
+    else if (characterDraft && character) {
+        const db = getDatabase()
+        const index = db.characters.findIndex((candidate) => candidate.chaId === character.chaId)
+        if (index < 0) throw new Error('The current character is no longer available.')
+        db.characters[index] = characterDraft as never
+        db.characters = db.characters
+    }
+    invocation.characterFingerprint = snapshotFingerprint(getCurrentCharacter())
+    invocation.chatFingerprint = snapshotFingerprint(getCurrentChat())
+    invocation.databaseFingerprint = sharedDatabaseFingerprint()
+    return { committed: true, changes: summaries }
 }
 
 function getToolStates(): ToolStateStore {
@@ -710,14 +1186,18 @@ async function executeAgentFunction(
         chatId: `tool-agent:${v4()}`,
         rememberToolUsage: false,
         tools: allowedTools,
-        toolExecutionContext: { stack: context.stack, requestStatusId: context.requestStatusId },
+        toolExecutionContext: {
+            stack: context.stack,
+            requestStatusId: context.requestStatusId,
+            abortSignal: context.abortSignal,
+        },
         requestStatus: {
             kind: 'tool-agent',
             label: `${tool.name} · ${fn.name}`,
             parentId: context.requestStatusId,
         },
         persistToolDisplay: false,
-    }, preset)
+    }, preset, context.abortSignal ?? null)
     if (!response.ok) return managedError(tool, fn, 'error' in response ? response.error : 'Agent request failed.', args)
     const agentOutput = applyToolFunctionRegexText(tool, fn.id, 'agentOutput', response.text)
     const routed = await routeAgentOutput(tool, fn, execution.outputRoutes, args, agentOutput)
@@ -1066,15 +1546,16 @@ function getVariable(tool: RisuToolPackage, name: string) {
     if (!definition) throw new Error(`Variable ${name} is not declared.`)
     const state = scopeState(tool.id, definition.scope)
     if (!(name in state.variables)) state.variables[name] = safeStructuredClone(definition.defaultValue)
-    return state.variables[name]
+    return safeStructuredClone(state.variables[name])
 }
 
 function setVariable(tool: RisuToolPackage, name: string, value: unknown) {
     const definition = (tool.variables ?? []).find((item) => item.name === name)
     if (!definition) throw new Error(`Variable ${name} is not declared.`)
     if (!valueMatchesType(value, definition.type)) throw new Error(`Invalid value for ${name}; expected ${definition.type}.`)
-    scopeState(tool.id, definition.scope).variables[name] = value
-    return value
+    const stored = safeStructuredClone(value)
+    scopeState(tool.id, definition.scope).variables[name] = stored
+    return safeStructuredClone(stored)
 }
 
 function resetVariable(tool: RisuToolPackage, name: string) {
@@ -1082,7 +1563,7 @@ function resetVariable(tool: RisuToolPackage, name: string) {
     if (!definition) throw new Error(`Variable ${name} is not declared.`)
     const value = safeStructuredClone(definition.defaultValue)
     scopeState(tool.id, definition.scope).variables[name] = value
-    return value
+    return safeStructuredClone(value)
 }
 
 function getList(tool: RisuToolPackage, name: string) {
@@ -1090,7 +1571,7 @@ function getList(tool: RisuToolPackage, name: string) {
     if (!definition) throw new Error(`List ${name} is not declared.`)
     const state = scopeState(tool.id, definition.scope)
     if (!(name in state.lists)) state.lists[name] = safeStructuredClone(definition.defaultItems ?? [])
-    return state.lists[name]
+    return safeStructuredClone(state.lists[name])
 }
 
 function setList(tool: RisuToolPackage, name: string, value: unknown[]) {
@@ -1098,8 +1579,9 @@ function setList(tool: RisuToolPackage, name: string, value: unknown[]) {
     if (!definition) throw new Error(`List ${name} is not declared.`)
     if (!Array.isArray(value)) throw new Error('List value must be an array.')
     if (!value.every((item) => valueMatchesType(item, definition.itemType))) throw new Error(`Invalid list item for ${name}; expected ${definition.itemType}.`)
-    scopeState(tool.id, definition.scope).lists[name] = value
-    return value
+    const stored = safeStructuredClone(value)
+    scopeState(tool.id, definition.scope).lists[name] = stored
+    return safeStructuredClone(stored)
 }
 
 function validReadScopes(raw: unknown): Array<ToolScope> {
@@ -1185,10 +1667,12 @@ function memoryDelete(tool: RisuToolPackage, args: Record<string, unknown>) {
 
 export function unloadToolRuntime(toolId?: string) {
     if (toolId) {
+        cancelToolAppForTool(toolId)
         runtimes.get(toolId)?.host.terminate()
         runtimes.delete(toolId)
         return
     }
+    for (const id of runtimes.keys()) cancelToolAppForTool(id)
     for (const runtime of runtimes.values()) runtime.host.terminate()
     runtimes.clear()
 }
@@ -1239,12 +1723,14 @@ export function parseToolExport(text: string): RisuToolExportV1 | RisuToolExport
     payload.tool.assets ??= []
     payload.tool.lowLevelAccess ??= false
     payload.tool.plugin ??= { language: 'javascript', source: '', permissions: [] }
+    payload.tool.plugin.apiVersion ??= 1
     payload.tool.plugin.permissions ??= []
     for (const fn of payload.tool.functions) {
         fn.id ||= v4()
         fn.parameters ??= []
         for (const parameter of fn.parameters) parameter.id ||= v4()
-        fn.execution ??= { kind: 'script' }
+        fn.execution ??= { kind: 'script', allowedTools: [] }
+        if (fn.execution.kind === 'script') fn.execution.allowedTools ??= []
         if (fn.execution.kind === 'agent') {
             fn.execution.allowedTools ??= []
             fn.execution.outputRoutes ??= []

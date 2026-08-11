@@ -3,6 +3,7 @@ import { get } from 'svelte/store'
 import {
     addBadge,
     appendText,
+    beginPostProcessingStatus,
     clearStatus,
     computeTokPerSec,
     endStatus,
@@ -133,8 +134,10 @@ describe('recomputeEntry', () => {
 describe('isTerminalPhase', () => {
     it('classifies terminal vs live', () => {
         expect(isTerminalPhase('done')).toBe(true)
+        expect(isTerminalPhase('partial')).toBe(true)
         expect(isTerminalPhase('failed')).toBe(true)
         expect(isTerminalPhase('aborted')).toBe(true)
+        expect(isTerminalPhase('postprocessing')).toBe(false)
         expect(isTerminalPhase('connecting')).toBe(false)
         expect(isTerminalPhase('stalled')).toBe(false)
     })
@@ -240,6 +243,37 @@ describe('publish API', () => {
         expect(e.phase).toBe('done')
         expect(e.responseTokens).toBe(999)
         expect(e.thinkingTokens).toBe(3)
+    })
+
+    it('hands a completed main request to post-processing and closes it as partial', () => {
+        startStatus('g1', { kind: 'main', label: 'x', now: 0 })
+        appendText('g1', { response: 'hi' }, 10)
+        endStatus('g1', 'done', { now: 20, usage: { responseTokens: 2 } })
+
+        beginPostProcessingStatus('g1', 30)
+        const live = get(requestStatuses).get('g1')!
+        expect(live.phase).toBe('postprocessing')
+        expect(live.endedAt).toBeUndefined()
+        expect(live.responseTokens).toBe(2)
+
+        addBadge('g1', { key: 'agent-failures', text: 'Failed agents: Agent 1', tone: 'warn' })
+        endStatus('g1', 'partial', { now: 40 })
+        const partial = get(requestStatuses).get('g1')!
+        expect(partial.phase).toBe('partial')
+        expect(partial.endedAt).toBe(40)
+        expect(partial.badges).toContainEqual({ key: 'agent-failures', text: 'Failed agents: Agent 1', tone: 'warn' })
+    })
+
+    it('does not reopen failed or aborted requests for post-processing', () => {
+        startStatus('failed', { kind: 'main', label: 'x', now: 0 })
+        endStatus('failed', 'failed', { now: 10 })
+        beginPostProcessingStatus('failed', 20)
+        expect(get(requestStatuses).get('failed')!.phase).toBe('failed')
+
+        startStatus('aborted', { kind: 'main', label: 'x', now: 0 })
+        endStatus('aborted', 'aborted', { now: 10 })
+        beginPostProcessingStatus('aborted', 20)
+        expect(get(requestStatuses).get('aborted')!.phase).toBe('aborted')
     })
 
     it('markPhase does not regress out of a terminal phase', () => {

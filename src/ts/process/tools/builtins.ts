@@ -5,6 +5,9 @@ const questionSource = `
 await risuai.registerFunction('ask', async (args) => {
     return await risuai.askUser(args.question, args.options || [], args.allowFreeText !== false)
 })
+await risuai.registerFunction('choose', async (args, context) => {
+    return await context.requestChoice(args || {})
+})
 `.trim()
 
 const localtimeSource = `
@@ -35,9 +38,23 @@ await risuai.registerFunction('delete', async (args) => risuai.memoryDelete(args
 `.trim()
 
 const diceSource = `
-await risuai.registerFunction('roll', async (args) => {
-    return await risuai.requestDiceRoll(args || {})
+await risuai.registerFunction('roll', async (args, context) => {
+    return await context.requestDiceRoll(args || {})
 })
+`.trim()
+
+const httpSource = `
+await risuai.registerFunction('request', async (args) => {
+    return await risuai.httpRequest(args || {})
+})
+await risuai.registerFunction('profiles', async () => risuai.networkProfiles('http'))
+`.trim()
+
+const webSearchSource = `
+await risuai.registerFunction('search', async (args) => {
+    return await risuai.webSearch(args || {})
+})
+await risuai.registerFunction('profiles', async () => risuai.networkProfiles('search'))
 `.trim()
 
 export const BUILTIN_TOOL_IDS = {
@@ -45,6 +62,8 @@ export const BUILTIN_TOOL_IDS = {
     localtime: 'builtin-tool-localtime',
     memory: 'builtin-tool-memory',
     dice: 'builtin-tool-dice',
+    http: 'builtin-tool-http',
+    websearch: 'builtin-tool-websearch',
 } as const
 
 export function createBuiltinTools(): RisuToolPackage[] {
@@ -77,7 +96,7 @@ export function createBuiltinTools(): RisuToolPackage[] {
             }],
             variables: [], lists: [],
             backgroundEmbedding: '<style>.x-risu-dice-interaction{border-color:color-mix(in srgb,currentColor 24%,transparent)}</style>',
-            plugin: { language: 'javascript', source: diceSource, permissions: ['askUser'] },
+            plugin: { apiVersion: 2, language: 'javascript', source: diceSource, permissions: ['askUser'] },
         },
         {
             id: BUILTIN_TOOL_IDS.question,
@@ -95,9 +114,17 @@ export function createBuiltinTools(): RisuToolPackage[] {
                     { id: 'question-options', name: 'options', description: 'Optional answer choices.', type: 'string[]' },
                     { id: 'question-free', name: 'allowFreeText', description: 'Allow a custom text answer. Defaults to true.', type: 'boolean' },
                 ],
+            }, {
+                id: 'question-choose', name: 'choose', enabled: true,
+                description: 'Show a non-blocking inline card and let the user choose one option.',
+                parameters: [
+                    { id: 'question-choose-text', name: 'question', description: 'Question shown on the inline card.', type: 'string', required: true },
+                    { id: 'question-choose-options', name: 'options', description: 'One to twenty answer choices.', type: 'string[]', required: true },
+                    { id: 'question-choose-reason', name: 'reason', description: 'Optional context shown below the question.', type: 'string' },
+                ],
             }],
             variables: [], lists: [],
-            plugin: { language: 'javascript', source: questionSource, permissions: ['askUser'] },
+            plugin: { apiVersion: 2, language: 'javascript', source: questionSource, permissions: ['askUser'] },
         },
         {
             id: BUILTIN_TOOL_IDS.localtime,
@@ -117,6 +144,59 @@ export function createBuiltinTools(): RisuToolPackage[] {
             }],
             variables: [], lists: [],
             plugin: { language: 'javascript', source: localtimeSource, permissions: [] },
+        },
+        {
+            id: BUILTIN_TOOL_IDS.http,
+            builtinId: 'http',
+            readonly: true,
+            name: 'HTTP',
+            description: 'Call an approved public HTTP API using a saved profile or a temporary URL.',
+            namespace: 'http',
+            version: '1.0.0',
+            functions: [{
+                id: 'http-request', name: 'request', enabled: true,
+                description: 'Send a size-limited request to a user-approved public HTTP origin.',
+                parameters: [
+                    { id: 'http-profile', name: 'profile', description: 'Optional saved HTTP profile name or id.', type: 'string' },
+                    { id: 'http-url', name: 'url', description: 'Temporary absolute public URL. Omit when using a profile base URL.', type: 'string' },
+                    { id: 'http-path', name: 'path', description: 'Optional path resolved within the selected profile origin.', type: 'string' },
+                    { id: 'http-method', name: 'method', description: 'GET, POST, PUT, PATCH, or DELETE.', type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+                    { id: 'http-query', name: 'query', description: 'Query parameters as a JSON object.', type: 'json' },
+                    { id: 'http-headers', name: 'headers', description: 'Non-sensitive request headers as a JSON object.', type: 'json' },
+                    { id: 'http-body', name: 'body', description: 'Text or JSON request body.', type: 'json' },
+                ],
+            }, {
+                id: 'http-profiles', name: 'profiles', enabled: true,
+                description: 'List configured HTTP profile IDs, names, and model-visible descriptions without exposing secrets.',
+                parameters: [],
+            }],
+            variables: [], lists: [],
+            plugin: { language: 'javascript', source: httpSource, permissions: ['network'] },
+        },
+        {
+            id: BUILTIN_TOOL_IDS.websearch,
+            builtinId: 'websearch',
+            readonly: true,
+            name: 'Web Search',
+            description: 'Search the web through a user-configured URL-template provider.',
+            namespace: 'websearch',
+            version: '1.0.0',
+            functions: [{
+                id: 'websearch-search', name: 'search', enabled: true,
+                description: 'Search with a named profile and return normalized title, URL, and snippet results when mapping is configured.',
+                parameters: [
+                    { id: 'websearch-profile', name: 'profile', description: 'Saved search profile name or id.', type: 'string', required: true },
+                    { id: 'websearch-query', name: 'query', description: 'Search query.', type: 'string', required: true },
+                    { id: 'websearch-count', name: 'count', description: 'Requested results, 1 to 20.', type: 'integer' },
+                    { id: 'websearch-offset', name: 'offset', description: 'Zero-based result offset.', type: 'integer' },
+                ],
+            }, {
+                id: 'websearch-profiles', name: 'profiles', enabled: true,
+                description: 'List configured Web Search profile IDs, names, and model-visible descriptions without exposing secrets.',
+                parameters: [],
+            }],
+            variables: [], lists: [],
+            plugin: { language: 'javascript', source: webSearchSource, permissions: ['network'] },
         },
         {
             id: BUILTIN_TOOL_IDS.memory,
@@ -181,11 +261,14 @@ export function reconcileBuiltinTools(tools: RisuToolPackage[] | undefined): Ris
 function normalizeUserTool(tool: RisuToolPackage): RisuToolPackage {
     return {
         ...tool,
+        plugin: { ...tool.plugin, apiVersion: tool.plugin?.apiVersion ?? 1, permissions: tool.plugin?.permissions ?? [] },
         functions: (tool.functions ?? []).map((fn) => ({
             ...fn,
             id: fn.id || v4(),
             parameters: (fn.parameters ?? []).map((parameter) => ({ ...parameter, id: parameter.id || v4() })),
-            execution: fn.execution ?? { kind: 'script' },
+            execution: fn.execution?.kind === 'script'
+                ? { ...fn.execution, allowedTools: fn.execution.allowedTools ?? [] }
+                : fn.execution ?? { kind: 'script', allowedTools: [] },
             ...(fn.execution?.kind === 'agent' ? {
                 execution: {
                     ...fn.execution,

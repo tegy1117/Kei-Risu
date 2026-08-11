@@ -2,8 +2,16 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { RisuToolPackage } from './types'
 
 let mockDb: any
+let mockCharacter: any
+let mockChat: any
 const requestMocks = vi.hoisted(() => ({
     requestAgentModelPreset: vi.fn(),
+}))
+const sandboxMocks = vi.hoisted(() => ({
+    handler: vi.fn(),
+    executeInIframe: vi.fn(),
+    terminate: vi.fn(),
+    apiFactory: undefined as Record<string, Function> | undefined,
 }))
 
 vi.mock('src/ts/alert', () => ({
@@ -15,12 +23,32 @@ vi.mock('src/ts/globalApi.svelte', () => ({
     readImage: vi.fn(async () => Uint8Array.from([60, 115, 118, 103, 47, 62])),
 }))
 vi.mock('src/ts/plugins/apiV3/transpiler', () => ({ pluginCodeTranspiler: vi.fn((source) => source) }))
-vi.mock('src/ts/plugins/apiV3/factory', () => ({ SandboxHost: class {} }))
+vi.mock('src/ts/plugins/apiV3/factory', () => ({
+    SandboxHost: class {
+        private iframe!: HTMLIFrameElement
+        constructor(private readonly apiFactory: Record<string, Function>) {}
+        run(iframe: HTMLIFrameElement) {
+            this.iframe = iframe
+            sandboxMocks.apiFactory = this.apiFactory
+            this.apiFactory.registerFunction('alpha', () => 'stale handler')
+            this.apiFactory.registerFunction('alpha', (...args: unknown[]) => sandboxMocks.handler(this.iframe, ...args))
+            this.apiFactory.__ready()
+        }
+        executeInIframe(code: string) {
+            return sandboxMocks.executeInIframe(this.iframe, code)
+        }
+        releaseRemoteInstance() {}
+        terminate() {
+            sandboxMocks.terminate(this.iframe)
+            this.iframe?.remove()
+        }
+    },
+}))
 vi.mock('src/ts/storage/database.svelte', () => ({
     getDatabase: () => mockDb,
     setDatabase: vi.fn(),
-    getCurrentCharacter: () => undefined,
-    getCurrentChat: () => undefined,
+    getCurrentCharacter: () => mockCharacter,
+    getCurrentChat: () => mockChat,
 }))
 vi.mock('src/ts/parser/parser.svelte', () => ({ hasher: vi.fn(() => 'hash') }))
 vi.mock('src/ts/util', () => ({ selectSingleFile: vi.fn() }))
@@ -28,6 +56,7 @@ vi.mock('../mcp/mcp', () => ({ getTools: vi.fn(async () => []) }))
 vi.mock('../request/request', () => ({ requestAgentModelPreset: requestMocks.requestAgentModelPreset }))
 
 import { createBuiltinTools, reconcileBuiltinTools } from './builtins'
+import { alertConfirm } from 'src/ts/alert'
 import { getToolTriggers } from './features'
 import {
     createToolScopeStateSnapshot,
@@ -43,11 +72,16 @@ import {
     resolveActiveToolPackages,
     routeAgentOutput,
     toolWireName,
+    ToolInvocationApi,
+    unloadToolRuntime,
     validateToolScopeState,
     validateToolPackage,
     validateToolPluginSource,
     writeToolScopeState,
 } from './tools'
+import { resetToolAppSessionForTests, toolAppSessionStore } from './toolApp'
+import { resetToolInteractionForTests } from './interaction'
+import { get } from 'svelte/store'
 
 function sampleTool(): RisuToolPackage {
     return {
@@ -62,18 +96,34 @@ function sampleTool(): RisuToolPackage {
 }
 
 beforeEach(() => {
+    unloadToolRuntime()
+    resetToolAppSessionForTests()
+    resetToolInteractionForTests()
+    document.body.replaceChildren()
     vi.clearAllMocks()
+    sandboxMocks.apiFactory = undefined
+    sandboxMocks.handler.mockResolvedValue('latest handler')
+    sandboxMocks.executeInIframe.mockImplementation(async (iframe: HTMLIFrameElement, code: string) => {
+        if (code === 'document.body.replaceChildren()') iframe.contentDocument?.body.replaceChildren()
+        return true
+    })
     requestMocks.requestAgentModelPreset.mockResolvedValue({ ok: true, text: 'OK:door-a', model: 'model' })
     mockDb = { tools: [], enabledTools: [], toolStates: {}, toolPermissions: {}, toolPolicy: { tools: {}, functions: {} } }
+    mockCharacter = undefined
+    mockChat = undefined
 })
 
 describe('built-in tool packages', () => {
-    test('ships Dice, Question, Localtime, and Memory as read-only packages', () => {
+    test('ships interactive, local, network, and memory packages as read-only tools', () => {
         const tools = createBuiltinTools()
-        expect(tools.map((tool) => tool.builtinId)).toEqual(['dice', 'question', 'localtime', 'memory'])
+        expect(tools.map((tool) => tool.builtinId)).toEqual(['dice', 'question', 'localtime', 'http', 'websearch', 'memory'])
         expect(tools.every((tool) => tool.readonly)).toBe(true)
         expect(tools.find((tool) => tool.builtinId === 'dice')?.functions[0].parameters.find((parameter) => parameter.name === 'kind')?.enum)
             .toEqual(['coin', 'd4', 'd6', 'd10', 'd20', 'd100', 'range'])
+        expect(tools.find((tool) => tool.builtinId === 'question')?.functions.map((fn) => fn.name))
+            .toEqual(['ask', 'choose'])
+        expect(tools.find((tool) => tool.builtinId === 'http')?.functions.every((fn) => fn.enabled)).toBe(true)
+        expect(tools.find((tool) => tool.builtinId === 'websearch')?.functions.every((fn) => fn.enabled)).toBe(true)
         expect(tools.find((tool) => tool.builtinId === 'memory')?.functions.map((fn) => fn.name))
             .toEqual(['list', 'search', 'read', 'upsert', 'delete'])
     })
@@ -87,7 +137,7 @@ describe('built-in tool packages', () => {
         expect(reconciled[0].description).not.toBe('stale')
         expect(reconciled[0].functions[0].enabled).toBe(false)
         expect(reconciled.at(-1)).toMatchObject(userTool)
-        expect(reconciled.at(-1)?.functions[0].execution).toEqual({ kind: 'script' })
+        expect(reconciled.at(-1)?.functions[0].execution).toEqual({ kind: 'script', allowedTools: [] })
     })
 
     test('each bundled plugin registers every declared function', async () => {
@@ -100,6 +150,109 @@ describe('built-in tool packages', () => {
             await new AsyncFunction('risuai', tool.plugin.source)(risuai)
             expect([...handlers.keys()]).toEqual(tool.functions.map((fn) => fn.name))
         }
+    })
+})
+
+describe('Tool App invocation lifecycle', () => {
+    function activateTool() {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'registered plugin'
+        tool.plugin.permissions = ['interactiveUi']
+        mockDb.tools = [tool]
+        mockDb.enabledTools = [tool.id]
+        return tool
+    }
+
+    test('replaces registrations by namespace and function wire name across reloads', async () => {
+        const tool = activateTool()
+
+        const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(result?.response).toEqual([{ type: 'text', text: 'latest handler' }])
+        expect(sandboxMocks.handler).toHaveBeenCalledOnce()
+
+        tool.plugin.source = 'reloaded plugin'
+        sandboxMocks.handler.mockResolvedValue('reloaded handler')
+        const reloaded = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(reloaded?.response).toEqual([{ type: 'text', text: 'reloaded handler' }])
+        expect(sandboxMocks.terminate).toHaveBeenCalledOnce()
+    })
+
+    test('preserves a closed view for the invocation and disposes it explicitly', async () => {
+        activateTool()
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        sandboxMocks.handler.mockImplementation(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            const opened = await invocation.openView({ title: 'Attack' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            expect(invocation.closeView()).toBe(true)
+            expect(await invocation.openView({ title: 'Attack again' })).toEqual(opened)
+            expect(iframe.contentDocument?.body.childElementCount).toBe(1)
+            expect(await invocation.disposeView()).toBe(true)
+            expect(await invocation.disposeView()).toBe(false)
+            return 'disposed'
+        })
+
+        const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(result?.response).toEqual([{ type: 'text', text: 'disposed' }])
+        expect(sandboxMocks.executeInIframe).toHaveBeenCalledOnce()
+        expect(get(toolAppSessionStore)).toBeNull()
+    })
+
+    test('automatically clears the reused iframe after every completed invocation', async () => {
+        const tool = activateTool()
+        tool.functions[0].presentation = { showInChat: false }
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const visibleChildCounts: number[] = []
+        sandboxMocks.handler.mockImplementation(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            await invocation.openView({ title: 'Repeated view' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            visibleChildCounts.push(iframe.contentDocument?.body.childElementCount ?? -1)
+            await invocation.closeView()
+            return 'done'
+        })
+
+        for (let index = 0; index < 3; index++) {
+            const result = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+            expect(result?.presentation?.showInChat).toBe(false)
+        }
+
+        expect(visibleChildCounts).toEqual([1, 1, 1])
+        expect(sandboxMocks.executeInIframe).toHaveBeenCalledTimes(3)
+        expect(get(toolAppSessionStore)).toBeNull()
+    })
+
+    test('cleans an open view after handler failure and request cancellation', async () => {
+        activateTool()
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        sandboxMocks.handler.mockImplementationOnce(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            await invocation.openView({ title: 'Failing view' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            throw new Error('handler failed')
+        })
+
+        const failed = await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(failed).toMatchObject({ success: false, error: 'handler failed' })
+        expect(sandboxMocks.executeInIframe).toHaveBeenCalledOnce()
+        expect(get(toolAppSessionStore)).toBeNull()
+
+        const controller = new AbortController()
+        sandboxMocks.handler.mockImplementationOnce(async (iframe: HTMLIFrameElement, _args: unknown, invocation: ToolInvocationApi) => {
+            await invocation.openView({ title: 'Cancelled view' })
+            iframe.contentDocument?.body.append(document.createElement('section'))
+            controller.abort()
+            await new Promise(() => {})
+        })
+
+        const cancelled = await callManagedToolDetailed('sample__alpha', {}, { stack: [], abortSignal: controller.signal })
+
+        expect(cancelled).toMatchObject({ success: false, error: 'Tool call cancelled by the request.' })
+        expect(sandboxMocks.terminate).toHaveBeenCalledOnce()
+        expect(get(toolAppSessionStore)).toBeNull()
+        expect(document.querySelectorAll('iframe')).toHaveLength(0)
     })
 })
 
@@ -117,6 +270,37 @@ describe('memory tool results', () => {
 })
 
 describe('tool state management', () => {
+    test('returns detached cloneable values through the sandbox state API', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.variables = [{ id: 'v1', name: 'profile', description: '', type: 'json', scope: 'global', defaultValue: {} }]
+        tool.lists = [{ id: 'l1', name: 'labels', description: '', itemType: 'string', scope: 'global', defaultItems: [] }]
+        mockDb.tools = [tool]
+        mockDb.enabledTools = [tool.id]
+        mockDb.toolStates[tool.id] = {
+            global: {
+                variables: { profile: new Proxy({ name: 'Risu' }, {}) },
+                lists: { labels: new Proxy(['character', 'plot'], {}) },
+            },
+        }
+        sandboxMocks.handler.mockImplementation(async () => {
+            const profile = sandboxMocks.apiFactory?.getVariable('profile')
+            const labels = sandboxMocks.apiFactory?.getList('labels')
+            expect(() => structuredClone(profile)).not.toThrow()
+            expect(() => structuredClone(labels)).not.toThrow()
+            ;(profile as { name: string }).name = 'Changed'
+            ;(labels as string[]).push('changed')
+            return 'ok'
+        })
+
+        await callManagedToolDetailed('sample__alpha', {}, { stack: [] })
+
+        expect(readToolScopeState(tool.id, 'global')).toMatchObject({
+            variables: { profile: { name: 'Risu' } },
+            lists: { labels: ['character', 'plot'] },
+        })
+    })
+
     test('creates a cloneable snapshot from reactive state', () => {
         const state = createToolScopeStateSnapshot({
             variables: { count: 2 },
@@ -157,6 +341,20 @@ describe('tool state management', () => {
 })
 
 describe('tool package validation', () => {
+    test('validates Tool App permissions, manual launches, and nested call references', () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.permissions = ['interactiveUi', 'invokeTools', 'character.read', 'lorebook.read']
+        tool.functions[0].parameters = [{ id: 'required', name: 'value', description: '', type: 'string', required: true }]
+        tool.functions[0].presentation = { manualLaunch: { enabled: true } }
+        tool.functions[0].execution = { kind: 'script', allowedTools: [{ kind: 'managed', toolId: tool.id, functionId: tool.functions[0].id }] }
+
+        const errors = validateToolPackage(tool, [tool]).join('\n')
+        expect(errors).toContain('cannot have required parameters')
+        expect(errors).toContain('cannot call itself')
+        expect(errors).not.toContain('Unknown permission')
+    })
+
     test('validates plugin syntax and managed feature structures', async () => {
         const tool = sampleTool()
         tool.plugin.source = 'await risuai.registerFunction('
@@ -230,6 +428,97 @@ describe('tool package validation', () => {
         expect(getToolTriggers()[0].lowLevelAccess).toBe(true)
         tool.lowLevelAccess = false
         expect(getToolTriggers()[0].lowLevelAccess).toBe(false)
+    })
+})
+
+describe('Tool App shared changes', () => {
+    test('confirms and atomically applies character and lorebook changes', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['character.write', 'lorebook.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = {
+            chaId: 'char-1', name: 'Hero', personality: 'Old', chatPage: 0,
+            chats: [mockChat], globalLore: [],
+        }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const invocation = {
+            tool,
+            characterFingerprint: JSON.stringify(mockCharacter),
+            chatFingerprint: JSON.stringify(mockChat),
+            databaseFingerprint: '',
+        }
+        const api = new ToolInvocationApi(invocation as never)
+
+        const result = await api.commitChanges([
+            { kind: 'setCharacterField', path: 'personality', value: 'Brave' },
+            { kind: 'upsertLorebook', scope: 'character', entry: { comment: 'Sword', content: '{"damage": 4}' } },
+        ])
+
+        expect(result.committed).toBe(true)
+        expect(mockDb.characters[0].personality).toBe('Brave')
+        expect(mockDb.characters[0].globalLore[0]).toMatchObject({ comment: 'Sword', content: '{"damage": 4}' })
+        expect(alertConfirm).toHaveBeenCalledTimes(3)
+    })
+
+    test('rejects stale shared data before showing the final change confirmation', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['character.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = { chaId: 'char-1', name: 'Changed', chatPage: 0, chats: [mockChat], globalLore: [] }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const api = new ToolInvocationApi({ tool, characterFingerprint: 'stale', chatFingerprint: JSON.stringify(mockChat) } as never)
+
+        await expect(api.commitChanges([{ kind: 'setCharacterField', path: 'name', value: 'New' }])).rejects.toThrow('changed while')
+        expect(mockDb.characters[0].name).toBe('Changed')
+    })
+
+    test('rejects a chat-only write when another part of the character changed', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['chat.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = { chaId: 'char-1', name: 'Changed elsewhere', chatPage: 0, chats: [mockChat], globalLore: [] }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm).mockResolvedValue(true)
+        const api = new ToolInvocationApi({
+            tool,
+            characterFingerprint: 'stale',
+            chatFingerprint: JSON.stringify(mockChat),
+        } as never)
+
+        await expect(api.commitChanges([{ kind: 'setChatField', path: 'name', value: 'New chat name' }])).rejects.toThrow('character changed while')
+        expect(mockChat.name).toBeUndefined()
+    })
+
+    test('rechecks shared data after the user approves the final change summary', async () => {
+        const tool = sampleTool()
+        tool.plugin.apiVersion = 2
+        tool.plugin.source = 'source'
+        tool.plugin.permissions = ['character.write']
+        mockChat = { id: 'chat-1', message: [], localLore: [] }
+        mockCharacter = { chaId: 'char-1', name: 'Hero', chatPage: 0, chats: [mockChat], globalLore: [] }
+        mockDb.characters = [mockCharacter]
+        vi.mocked(alertConfirm)
+            .mockResolvedValueOnce(true)
+            .mockImplementationOnce(async () => {
+                mockCharacter.name = 'Changed during confirmation'
+                return true
+            })
+        const api = new ToolInvocationApi({
+            tool,
+            characterFingerprint: JSON.stringify(mockCharacter),
+            chatFingerprint: JSON.stringify(mockChat),
+        } as never)
+
+        await expect(api.commitChanges([{ kind: 'setCharacterField', path: 'name', value: 'Requested value' }])).rejects.toThrow('character changed while')
+        expect(mockDb.characters[0].name).toBe('Changed during confirmation')
     })
 })
 
@@ -427,7 +716,7 @@ describe('.risutool definition format', () => {
         expect(parsed.tool.variables).toEqual([])
         expect(parsed.tool.lists).toEqual([])
         expect(parsed.tool.plugin.permissions).toEqual([])
-        expect(parsed.tool.functions[0].execution).toEqual({ kind: 'script' })
+        expect(parsed.tool.functions[0].execution).toEqual({ kind: 'script', allowedTools: [] })
         expect(parsed.tool.regex).toEqual([])
         expect(parsed.tool.functionRegex).toEqual([])
         expect(parsed.tool.trigger).toEqual([])

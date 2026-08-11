@@ -38,6 +38,7 @@ import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch } from "./jobFetch";
 import { resolveChatModelBinding, buildModelPresetCredential, applyPromptPresetParams } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
+import { prepareToolSchema } from "./toolSchemaCompatibility";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, stringifyRequestLogValue, type RequestLogRoute, type RequestLogScope, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
 import {
@@ -702,13 +703,13 @@ function resolvePresetStreaming(preset: ModelPreset, arg: RequestDataArgumentExt
 // bounding re-parse cost. The final chunk is always flushed regardless.
 const STREAM_FLUSH_INTERVAL_MS = 50
 
-function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
+function toAdapterToolDef(tool: MCPTool, preset: ModelPreset): AdapterToolDef {
     return {
         name: tool.name,
         description: tool.description,
-        // simplifySchema mutates; clone first. Stage 1 targets openai-compatible,
-        // whose schema shape matches the default simplification.
-        parameters: simplifySchema(safeStructuredClone(tool.inputSchema)),
+        // Compatibility processing clones before it changes the provider-facing
+        // shape; simplifySchema then keeps the existing adapter schema subset.
+        parameters: simplifySchema(prepareToolSchema(tool.inputSchema, preset.toolSchemaCompatibility)),
     }
 }
 
@@ -717,6 +718,10 @@ function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
 const formatPresetReasoning = formatReasoningParts
 
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
+    arg.toolExecutionContext = {
+        ...(arg.toolExecutionContext ?? { stack: [] }),
+        abortSignal: abortSignal ?? arg.toolExecutionContext?.abortSignal,
+    }
     const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
     // arg.chatId is the per-request generationId for main chat (sendChat passes
@@ -767,7 +772,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         && TOOL_CAPABLE_ADAPTER_KINDS.includes(kind)
         && (caps?.includes('tools') ?? false)
     const tools = (supportsTools && arg.tools && arg.tools.length > 0)
-        ? arg.tools.map(toAdapterToolDef)
+        ? arg.tools.map((tool) => toAdapterToolDef(tool, preset))
         : undefined
 
     // Server-side job routing (Stage 3, model-preset-server-side-requests.md):
@@ -1245,6 +1250,7 @@ async function runModelPresetToolLoop(
                 toolExecutionContext: {
                     ...(arg.toolExecutionContext ?? { stack: [] }),
                     requestStatusId: runtime.genId,
+                    abortSignal: abortSignal ?? undefined,
                     onPendingPresentation: runtime.onToolPending ? async (pending) => {
                         if (arg.persistToolDisplay === false || pending.showInChat === false) return
                         const encoded = await encodeToolCall({

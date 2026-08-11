@@ -4,6 +4,7 @@ import { CharacterHandler } from './characters'
 import { ChatHandler } from './chats'
 import { ModuleHandler } from './modules'
 import { ToolPackageHandler } from './tools'
+import { CharacterRuntimeHandler } from './characterRuntime'
 
 export class RisuAccessClient extends MCPClientLike {
   private handlers: MCPToolHandler[]
@@ -18,6 +19,10 @@ Characters are the AI personas that Risuai users chat with. Fields:
 - 'replaceGlobalNote': A note used to provide instructions to AI models (but not you).
 - 'alternateGreetings': An array of alternate greetings that the character can use.
 - 'backgroundEmbedding': See below.
+- 'defaultVariables': Character defaults used when a chat has no explicit value. Use the structured variable tools instead of editing this field directly.
+- 'customModuleToggle': Character-owned toggle definitions. Current toggle values are intentionally separate and are not exposed by this MCP.
+
+Chats have stable chatId values. Use risu-list-chats before targeting an unopened chat. Chat reads hydrate server-backed placeholders without switching the user's selected character or chat. Chat mutation is limited to name, note, and explicit variables; message bodies are read-only.
 
 Modules are independant packages of lorebooks and scripts. Fields:
 - 'name': The name of the module.
@@ -31,14 +36,15 @@ Modules are independant packages of lorebooks and scripts. Fields:
   - Types:
     - (omit): Checkbox, '0'|'1'.
     - select: Dropdown. Index of the selected option.
-    - text: Text input. User typed text.
+    - text, textarea: User typed text.
+    - caption: Read-only caption. Keyless.
     - group, groupEnd: Collapsible group start and end. Keyless.
     - divider. Keyless.
   - Examples:
     - booleanValue=Check Me
     - selectValue=Select Me=select=opt1,opt2,opt3
     - textValue=Type Me=text
-    - =Collapsible Group=groupStart
+    - =Collapsible Group=group
     - =Optional Label=divider
     - ==groupEnd
 
@@ -64,16 +70,16 @@ Lorebooks are texts containing various information about the character with cond
 
 backgroundEmbedding is an HTML string mainly for custom styling. It can, and mostly include <style> tags with CSS. Note that all selectors will be prefixed with '.chattext ' so they cannot escape the chat boundary - No html, body, :root access.
 
-Managed Tools are user-authored packages of callable functions, state definitions, module features, and sandboxed plugin code. Use the tool draft APIs to make multiple in-memory edits, validate them, and request one user-approved commit. Built-in tools must be cloned before editing. Draft edits do not change saved data.
+Managed Tools are user-authored packages of callable functions, state definitions, module features, and sandboxed plugin code. API v2 tools can show inline, modal, or fullscreen Tool App UI, call only declared nested tools, read scoped character/chat/lorebook data, and propose confirmed shared-data changes. Use the tool draft APIs to make multiple in-memory edits, validate them, and request one user-approved commit. Built-in tools must be cloned before editing. Draft edits do not change saved data.
 `
     super('internal:risuai')
     this.serverInfo.serverInfo.name = 'Risuai Access MCP'
-    this.serverInfo.serverInfo.version = '1.1.0'
+    this.serverInfo.serverInfo.version = '1.2.0'
     this.serverInfo.instructions =
       "Risuai Access MCP provides access to Risuai's features and tools, which is the software currently running on. Use the available tools to interact with Risuai's functionalities." +
       additionalServerInfo
 
-    this.handlers = [new CharacterHandler(), new ChatHandler(), new ModuleHandler(), new ToolPackageHandler()]
+    this.handlers = [new CharacterHandler(), new CharacterRuntimeHandler(), new ChatHandler(), new ModuleHandler(), new ToolPackageHandler()]
   }
 
   async getToolList(): Promise<MCPTool[]> {

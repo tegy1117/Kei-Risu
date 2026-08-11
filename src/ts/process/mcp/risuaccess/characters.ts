@@ -3,6 +3,8 @@ import { alertConfirm } from 'src/ts/alert'
 import { type character, type loreBook } from 'src/ts/storage/database.svelte'
 import { DBState } from 'src/ts/stores.svelte'
 import { pickHashRand } from 'src/ts/util'
+import { requestImmediateSave } from 'src/ts/globalApi.svelte'
+import { safeStructuredClone } from 'src/ts/polyfill'
 import { type MCPTool, MCPToolHandler, type RPCToolCallContent } from '../mcplib'
 import { getCharacter } from './utils'
 
@@ -331,6 +333,33 @@ export class CharacterHandler extends MCPToolHandler {
   }
 
   async handle(toolName: string, args: any): Promise<RPCToolCallContent[] | null> {
+    const mutating = new Set([
+      'risu-set-character-info', 'risu-set-character-lorebook', 'risu-delete-character-lorebook',
+      'risu-set-character-regex-scripts', 'risu-delete-character-regex-scripts',
+      'risu-set-character-lua-script', 'risu-delete-character-additional-assets',
+    ])
+    if (!mutating.has(toolName)) return this.dispatch(toolName, args)
+    const char = getCharacter(args.id)
+    const index = char ? DBState.db.characters.indexOf(char) : -1
+    const previous = char ? safeStructuredClone(char) : undefined
+    let result: RPCToolCallContent[] | null
+    try {
+      result = await this.dispatch(toolName, args)
+    } catch (error) {
+      if (previous && index >= 0) DBState.db.characters[index] = previous
+      throw error
+    }
+    if (!char || !result || result.some((item) => item.type === 'text' && item.text === 'Access denied by user.')) return result
+    try {
+      await requestImmediateSave({ changes: { character: [char.chaId] }, throwOnError: true })
+      return result
+    } catch (error) {
+      if (previous && index >= 0) DBState.db.characters[index] = previous
+      throw error
+    }
+  }
+
+  private async dispatch(toolName: string, args: any): Promise<RPCToolCallContent[] | null> {
     switch (toolName) {
       case 'risu-get-character-info':
         return await this.getCharacterInfo(args.id, args.fields)
