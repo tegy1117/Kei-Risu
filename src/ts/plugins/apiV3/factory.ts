@@ -1,3 +1,5 @@
+import { v4 } from "uuid";
+
 type MsgType =
     | 'CALL_ROOT'
     | 'CALL_INSTANCE'
@@ -434,7 +436,9 @@ await (async function() {
 export class SandboxHost {
     private iframe: HTMLIFrameElement;
     private apiFactory: any;
-    private nonce = crypto.randomUUID();
+    // uuid v4 draws from crypto.getRandomValues, which works on plain-HTTP
+    // origins; crypto.randomUUID is secure-context only and threw here.
+    private nonce = v4();
     private csp = `connect-src 'none'; script-src 'nonce-${this.nonce}' 'wasm-unsafe-eval'; frame-src 'none'; object-src 'none'; style-src * 'unsafe-inline'; default-src 'none'; img-src * data: blob:; font-src * data: blob:; media-src * data: blob:; base-uri 'none';`;
 
     private instanceRegistry = new Map<string, any>();
@@ -787,6 +791,10 @@ export class SandboxHost {
         this.iframe.sandbox.add('allow-scripts');
         this.iframe.sandbox.add('allow-modals')
         this.iframe.sandbox.add('allow-downloads')
+
+        // Permissions Policy: let plugins keep the screen awake during
+        // long-running streams (mobile Safari kills streaming on screen-off).
+        this.iframe.setAttribute('allow', 'screen-wake-lock')
 
         this.iframe.setAttribute('csp', this.csp);
 

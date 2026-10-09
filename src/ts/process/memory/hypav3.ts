@@ -12,44 +12,21 @@ import {
     type Chat,
     type character,
     getDatabase,
+    getCurrentCharacter,
+    getCurrentChat,
 } from "src/ts/storage/database.svelte";
 import { type OpenAIChat } from "../index.svelte";
 import { requestChatData } from "../request/request";
-import { resolveChatMaxResponseTokens } from "../request/modelPresetBinding";
+import { resolveChatMaxResponseTokens, resolveClassicModelId } from "../request/modelPresetBinding";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { chatCompletion, unloadEngine } from "../webllm";
 import { hypaV3ProgressStore } from "src/ts/stores.svelte";
 import { type ChatTokenizer } from "src/ts/tokenizer";
 import { inlayTokenRegex } from "src/ts/util/inlayTokens";
 
-export interface HypaV3Preset {
-    name: string;
-    settings: HypaV3Settings;
-}
-
-export interface HypaV3Settings {
-    summarizationModel: string;
-    summarizationPrompt: string;
-    reSummarizationPrompt: string;
-    memoryTokensRatio: number;
-    extraSummarizationRatio: number;
-    maxChatsPerSummary: number;
-    recentMemoryRatio: number;
-    similarMemoryRatio: number;
-    enableSimilarityCorrection: boolean;
-    preserveOrphanedMemory: boolean;
-    processRegexScript: boolean;
-    doNotSummarizeUserMessage: boolean;
-    summaryChunkSeparator: string;
-    // Experimental
-    useExperimentalImpl: boolean;
-    summarizationRequestsPerMinute: number;
-    summarizationMaxConcurrent: number;
-    embeddingRequestsPerMinute: number;
-    embeddingMaxConcurrent: number;
-    alwaysToggleOn: boolean;
-    queryChatCount: number;
-}
+export { createHypaV3Preset, type HypaV3Preset, type HypaV3Settings } from "./hypav3Preset";
+import { type HypaV3Preset, type HypaV3Settings } from "./hypav3Preset";
+import { getActiveHypaV3Preset } from "./memoryPresets";
 
 interface HypaV3Data {
     summaries: Summary[];
@@ -269,7 +246,7 @@ async function hypaMemoryV3MainExp(
                 return {
                     currentTokens,
                     chats,
-                    error: `${logPrefix} Cannot summarize further: input token count (${currentTokens}) exceeds max context size (${maxContextTokens}), but minimum ${settings.queryChatCount} messages required.`,
+                    error: `${logPrefix} Cannot summarize further: input token count (${currentTokens}) exceeds max context size (${maxContextTokens}), but minimum ${settings.queryChatCount} messages required. (reserved memory: ${memoryTokens}, memoryTokensRatio: ${settings.memoryTokensRatio})`,
                     memory: toSerializableHypaV3Data(data),
                 };
             }
@@ -1052,7 +1029,7 @@ async function hypaMemoryV3Main(
                 return {
                     currentTokens,
                     chats,
-                    error: `${logPrefix} Cannot summarize further: input token count (${currentTokens}) exceeds max context size (${maxContextTokens}), but minimum ${settings.queryChatCount} messages required.`,
+                    error: `${logPrefix} Cannot summarize further: input token count (${currentTokens}) exceeds max context size (${maxContextTokens}), but minimum ${settings.queryChatCount} messages required. (reserved memory: ${memoryTokens}, memoryTokensRatio: ${settings.memoryTokensRatio})`,
                     memory: toSerializableHypaV3Data(data),
                 };
             }
@@ -1712,11 +1689,10 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
     if (settings.summarizationModel === "subModel") {
         console.log(logPrefix, `Using ax model ${db.subModel} for summarization.`);
 
-        // Match requestChatDataMain's model resolution: when seperateModelsForAxModels
-        // is on, the 'memory' slot overrides db.subModel for this request.
-        const actualModel = (db.seperateModelsForAxModels && db.seperateModels?.memory)
-            ? db.seperateModels.memory
-            : db.subModel;
+        // Match requestChatDataMain's model resolution (a legacy model bound
+        // to the chat's memory slot included). A ModelPreset memory slot sends
+        // no classic request, so no local-network URL applies.
+        const actualModel = resolveClassicModelId(getCurrentChat(), 'memory');
         let subModelUrl = '';
         if (actualModel === 'reverse_proxy') {
             subModelUrl = db.forceReplaceUrl ?? '';
@@ -1790,59 +1766,14 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
 
 export function getCurrentHypaV3Preset(): HypaV3Preset {
     const db = getDatabase();
-    const preset = db.hypaV3Presets?.[db.hypaV3PresetId];
+    const char = getCurrentCharacter();
+    const preset = getActiveHypaV3Preset(db, char, char?.chats?.[char.chatPage]);
 
     if (!preset) {
         throw new Error("Preset not found. Please select a valid preset.");
     }
 
     return preset;
-}
-
-export function createHypaV3Preset(
-    name = "New Preset",
-    existingSettings = {}
-): HypaV3Preset {
-    const settings: HypaV3Settings = {
-        summarizationModel: "subModel",
-        summarizationPrompt: "",
-        reSummarizationPrompt: "",
-        memoryTokensRatio: 0.2,
-        extraSummarizationRatio: 0,
-        maxChatsPerSummary: 6,
-        recentMemoryRatio: 0.4,
-        similarMemoryRatio: 0.4,
-        enableSimilarityCorrection: false,
-        preserveOrphanedMemory: false,
-        processRegexScript: false,
-        doNotSummarizeUserMessage: false,
-        summaryChunkSeparator: "\\n\\n",
-        // Experimental
-        useExperimentalImpl: false,
-        summarizationRequestsPerMinute: 20,
-        summarizationMaxConcurrent: 1,
-        embeddingRequestsPerMinute: 100,
-        embeddingMaxConcurrent: 1,
-        alwaysToggleOn: false,
-        queryChatCount: 3,
-    };
-
-    if (
-        existingSettings &&
-        typeof existingSettings === "object" &&
-        !Array.isArray(existingSettings)
-    ) {
-        for (const [key, value] of Object.entries(existingSettings)) {
-            if (key in settings && typeof value === typeof settings[key]) {
-                settings[key] = value;
-            }
-        }
-    }
-
-    return {
-        name,
-        settings,
-    };
 }
 
 function simpleCC<T>(

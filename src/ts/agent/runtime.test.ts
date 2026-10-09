@@ -222,4 +222,24 @@ describe('agent pipeline runtime', () => {
         expect(message.agentRun.status).toBe('aborted')
         expect(mocks.sayTTS).not.toHaveBeenCalled()
     })
+
+    test('does not apply post output to a different character after an archive rebase', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const replacement = {
+            chaId: 'replacement', chatPage: 0, reloadKeys: 0,
+            chats: [{ id: 'other-chat', message: [{ role: 'char', data: 'keep me' }] }],
+        }
+        mocks.requestAgentModelPreset.mockImplementation(async () => {
+            mocks.db.characters = [replacement]
+            return { ok: true, output: 'late output', model: 'worker-model', inputTokens: 1, outputTokens: 1 }
+        })
+
+        expect(await runAgentPipeline({
+            runMain: async () => { appendMainMessage(); return true },
+        })).toBe(false)
+        expect(replacement.chats[0].message).toEqual([{ role: 'char', data: 'keep me' }])
+        expect(mocks.endGeneration).toHaveBeenCalledWith('chat', {
+            generationId: mocks.startGeneration.mock.calls[0][1],
+        })
+    })
 })

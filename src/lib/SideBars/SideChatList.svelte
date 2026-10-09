@@ -26,6 +26,8 @@
     import ModelBind from "./ModelBind.svelte";
     import AgentBind from "./AgentBind.svelte";
     import { changeChatTo, createChatCopyName, requestImmediateSave } from "src/ts/globalApi.svelte";
+    import { reissueMessageIds } from "src/ts/chatClone";
+    import MemoryBind from "./MemoryBind.svelte";
 
     interface Props {
         chara: character;
@@ -282,7 +284,7 @@
                                     alertError('Failed to load chat data.')
                                     return
                                 }
-                                const newChat = $state.snapshot(chara.chats[chatIdx])
+                                const newChat = reissueMessageIds($state.snapshot(chara.chats[chatIdx]), chara.chats[chatIdx].message.map(m => m.chatId))
                                 newChat.name = createChatCopyName(newChat.name, 'Copy')
                                 newChat.id = v4()
                                 chara.chats.unshift(newChat)
@@ -374,7 +376,7 @@
                             alertError('Failed to load chat data.')
                             return
                         }
-                        const newChat = $state.snapshot(chara.chats[i])
+                        const newChat = reissueMessageIds($state.snapshot(chara.chats[i]), chara.chats[i].message.map(m => m.chatId))
                         newChat.name = createChatCopyName(newChat.name, 'Copy')
                         newChat.id = v4()
                         chara.chats.unshift(newChat)
@@ -493,6 +495,7 @@
             {#if DBState.db.showPersonaInSidebar}
                 <PersonaBind />
             {/if}
+            <MemoryBind />
             <Toggles bind:chara={chara} noContainer />
             <ShButton className="w-full mt-2" onclick={() => {
                 const char = DBState.db.characters[$selectedCharID]

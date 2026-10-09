@@ -1,12 +1,13 @@
 import { get } from "svelte/store";
 import { CharEmotion, selectedCharID } from "../stores.svelte";
 import { type character, type customscript, getDatabase, getCurrentCharacter, getCurrentChat } from "../storage/database.svelte";
-import { downloadFile } from "../globalApi.svelte";
+import { downloadFile, loadAssetManifestItems } from "../globalApi.svelte";
 import { alertError, notifySuccess } from "../alert";
 import { language } from "src/lang";
 import { selectSingleFile } from "../util";
 import { assetRegex, type CbsConditions, risuChatParser as risuChatParserOrg, type simpleCharacterArgument } from "../parser/parser.svelte";
-import { getModuleAssets, getModuleRegexScripts } from "./modules";
+import { hydrateAssetListsForCbs } from "../parser/assetListHydration";
+import { getModuleAssets, getModuleRegexScripts, getModules } from "./modules";
 import { getToolAssets, getToolRegexScripts } from './tools/features'
 import { HypaProcesser } from "./memory/hypamemory";
 import { runLuaEditTrigger } from "./scriptings";
@@ -41,7 +42,7 @@ export function exportRegex(s?:customscript[]){
 
 export async function importRegex(o?:customscript[]):Promise<customscript[]>{
     o = o ?? []
-    const filedata = (await selectSingleFile(['json'])).data
+    const filedata = (await selectSingleFile(['json']))?.data
     if(!filedata){
         return o
     }
@@ -131,8 +132,14 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
         }
     }
 
-    data = risuChatParser(data, { chatID: chatID, cbsConditions })
     const scripts = (db.presetRegex ?? []).concat(char.customscript).concat(getModuleRegexScripts()).concat(getToolRegexScripts())
+    // Scripts below run the synchronous parser on their own output, so a list
+    // token introduced by a script template needs its manifests loaded now.
+    await hydrateAssetListsForCbs(char, [
+        data,
+        ...scripts.filter((script) => script.type === mode).flatMap((script) => [script.in, script.out]),
+    ])
+    data = risuChatParser(data, { chatID: chatID, cbsConditions })
     const hash = generateScriptCacheKey(scripts, data, mode, chatID, cbsConditions)
     const cached = getScriptCache(hash)
     if(cached){
@@ -344,13 +351,19 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
 
     
 
-    if(db.dynamicAssets && (char.type === 'simple' || char.type === 'character') && char.additionalAssets && char.additionalAssets.length > 0){
+    if(db.dynamicAssets && (char.type === 'simple' || char.type === 'character')
+        && ((char.additionalAssets?.length ?? 0) > 0 || !!char.additionalAssetManifest)){
         if((!db.dynamicAssetsEditDisplay && mode === 'editdisplay')
             || mode === 'editinput' || mode === 'editprocess'){
             cacheScript(hash, data)
             return {data, emoChanged}
         }
-        const assetNames = char.additionalAssets.map((v) => v[0])
+        const assetNames = (char.additionalAssets ?? []).map((v) => v[0])
+
+        if (char.additionalAssetManifest) {
+            const items = await loadAssetManifestItems(char.additionalAssetManifest)
+            assetNames.push(...items.map((item) => item[0]))
+        }
 
         const moduleAssets = getModuleAssets().concat(getToolAssets())
         if(moduleAssets.length > 0){
@@ -358,9 +371,16 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
                 assetNames.push(asset[0])
             }
         }
+        for (const module of getModules()) {
+            if (!module?.assetManifest) continue
+            const items = await loadAssetManifestItems(module.assetManifest)
+            assetNames.push(...items.map((item) => item[0]))
+        }
 
-        const processer = new HypaProcesser()
-        await processer.addText(assetNames)
+        // The embedding index over every asset name is built only when a tag
+        // actually needs a fuzzy match — building it for each reply (asset
+        // tags or not) stalled replies on phones over a remote link.
+        let processer: HypaProcesser | null = null
         const matches = data.matchAll(assetRegex)
 
         for(const match of matches){
@@ -372,8 +392,19 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
                     data = data.replaceAll(match[0], `{{${type}::${bestMatchCache.get(cacheKey)}}}`)
                 }
                 else if(!assetNames.includes(assetName)){
-                    const searched = await processer.similaritySearch(assetName)
-                    const bestMatch = searched[0]
+                    let bestMatch: string | undefined
+                    try {
+                        if(!processer){
+                            processer = new HypaProcesser()
+                            await processer.addText(assetNames)
+                        }
+                        bestMatch = (await processer.similaritySearch(assetName))[0]
+                    } catch (error) {
+                        // Embedding unavailable (model load / WebGPU / network):
+                        // keep the tag as written rather than block the reply.
+                        console.warn('[DynamicAssets] fuzzy match failed; leaving the tag as is', error)
+                        break
+                    }
                     if(bestMatch){
                         data = data.replaceAll(match[0], `{{${type}::${bestMatch}}}`)
                         bestMatchCache.set(cacheKey, bestMatch)

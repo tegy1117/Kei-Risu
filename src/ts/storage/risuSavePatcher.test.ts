@@ -839,6 +839,34 @@ describe('fast-path — expectedHash stays protocol-consistent', () => {
     })
 })
 
+describe('out-of-band asset manifest baseline updates', () => {
+    test('accepted module manifest edit becomes the next patch pre-image without a replace op', async () => {
+        const before = {
+            characters: [],
+            botPresets: [],
+            modules: [{ id: 'm1', assetManifest: { id: 'old', version: 1, count: 1, sha256: 'a' } }],
+        }
+        const descriptor = {
+            id: 'new', version: 1, count: 2, sha256: 'b',
+            ownerKind: 'module', ownerId: 'm1',
+        }
+        const after = {
+            ...before,
+            modules: [{ ...before.modules[0], assetManifest: descriptor }],
+        }
+        const patcher = new RisuSavePatcher()
+        await patcher.init(before)
+        expect(patcher.updateAssetManifestBaseline('module', 'm1', descriptor)).toBe(true)
+
+        const result = await patcher.set(after, emptyToSave())
+        expect(result.patch).toEqual([])
+
+        const fresh = new RisuSavePatcher()
+        await fresh.init(after)
+        expect(result.expectedHash).toBe((await fresh.set(after, emptyToSave())).expectedHash)
+    })
+})
+
 // ──────────────────────────────────────────────────────────────────────────
 // Fast-path granularity — per-ROOT-KEY and per-MODULE pre-checks.
 //
@@ -1057,6 +1085,52 @@ describe('fast-path — per-module granularity', () => {
         expect(liveHash).toBe(freshHash)
     })
 
+    test('character with a huge shifted lorebook does not trip the spread limit', async () => {
+        // Regression for the last surviving `patch.push(...ops)` in the
+        // per-character branch: deleting one entry from the front of a
+        // multi-thousand-entry character lorebook shifts every index, and
+        // fast-json-patch emits several ops per shifted entry. At ~30k
+        // entries that exceeds V8's spread-argument limit, so the old code
+        // threw RangeError before this was converted to an iterating push.
+        const entries = Array.from({ length: 30000 }, (_, k) => ({
+            key: `key-${k}`,
+            secondkey: `second-${k}`,
+            comment: `comment ${k}`,
+            content: `content for entry ${k}`,
+            insertorder: k,
+        }))
+        const db = dbWith([chr('a', { globalLore: entries })])
+        const p = new RisuSavePatcher()
+        await p.init(db)
+
+        const changed = clone(db)
+        changed.characters[0].globalLore.splice(0, 1)
+        const { patch } = await p.set(clone(changed), { ...emptyToSave(), character: ['a'] })
+        expect(patch.length).toBeGreaterThan(0)
+        for (const op of patch) {
+            expect(op.path.startsWith('/characters/0')).toBe(true)
+        }
+    })
+
+    test('character lorebook edit round-trips through applyPatch', async () => {
+        const { applyPatch: apply } = await import('fast-json-patch')
+        const entries = Array.from({ length: 50 }, (_, k) => ({
+            key: `key-${k}`, content: `content ${k}`, insertorder: k,
+        }))
+        const db = dbWith([chr('a', { globalLore: entries })])
+        const p = new RisuSavePatcher()
+        await p.init(db)
+
+        const changed = clone(db)
+        changed.characters[0].globalLore.splice(3, 1)
+        changed.characters[0].globalLore[0].content = 'edited'
+        const { patch } = await p.set(clone(changed), { ...emptyToSave(), character: ['a'] })
+
+        const serverState = JSON.parse(JSON.stringify(normalizeJSON(db)))
+        apply(serverState, patch)
+        expect(serverState.characters[0].globalLore).toEqual(normalizeJSON(clone(changed)).characters[0].globalLore)
+    })
+
     test('non-string module ids (1 vs "1") force the structural path — no key collision', async () => {
         const db = dbWith([chr('a')], { } as any)
         db.modules = [{ ...mod('x'), id: 1 as any }, { ...mod('y'), id: '1' }]
@@ -1074,5 +1148,198 @@ describe('fast-path — per-module granularity', () => {
         await fresh.init(clone(s1))
         const freshHash = (await fresh.set(clone(s1), emptyToSave())).expectedHash
         expect(liveHash).toBe(freshHash)
+    })
+})
+
+// ──────────────────────────────────────────────────────────────────────────
+// pluginCustomStorage is excluded from the patch protocol: plugin values live
+// in the server kv (pluginStorageStore) and the DB field is always {} on the
+// server. The client must neither diff the key nor hash anything but {}.
+// ──────────────────────────────────────────────────────────────────────────
+
+const { calculateHash } = await import('./risuSave')
+
+describe('RisuSavePatcher — pluginCustomStorage excluded', () => {
+    test('non-empty pluginCustomStorage emits no ops and hashes as {}', async () => {
+        const base = { characters: [], botPresets: [], modules: [], foo: 1, pluginCustomStorage: { big: 'x'.repeat(1000) } }
+        const patcher = new RisuSavePatcher()
+        await patcher.init(base)
+
+        const serverDb = { ...base, pluginCustomStorage: {} }
+        expect(patcher.hash()).toBe((calculateHash(serverDb) >>> 0).toString(16))
+
+        const changed = { ...base, pluginCustomStorage: { other: 'y', big: 'z' } }
+        const { patch, expectedHash } = await patcher.set(changed, { ...emptyToSave(), root: true })
+        expect(patch.filter((p: any) => p.path.startsWith('/pluginCustomStorage'))).toEqual([])
+        expect(expectedHash).toBe((calculateHash(serverDb) >>> 0).toString(16))
+        // Baseline still pinned to {} for the next save.
+        expect(patcher.hash()).toBe((calculateHash(serverDb) >>> 0).toString(16))
+    })
+
+    test('deleting the key from the live db emits no remove op', async () => {
+        const base = { characters: [], botPresets: [], modules: [], pluginCustomStorage: {} }
+        const patcher = new RisuSavePatcher()
+        await patcher.init(base)
+        const { characters, botPresets, modules } = base
+        const { patch } = await patcher.set({ characters, botPresets, modules }, { ...emptyToSave(), root: true })
+        expect(patch).toEqual([])
+    })
+})
+
+describe('describeHashMismatch — naming the diverged keys from a 409', () => {
+    const hex = (v: any) => calculateHash(normalizeJSON(v)).toString(16)
+    const remoteFor = (db: any) => ({
+        serverHash: 'deadbeef',
+        keyHashes: Object.fromEntries(Object.keys(db).map((k) => [k, hex(db[k])])),
+        characterHashes: Object.fromEntries(db.characters.map((c: any) => [c.chaId, hex(c)])),
+    })
+
+    test('identical server view reports nothing and flags composition-only', async () => {
+        const db = dbWith([chr('a'), chr('b')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        const report = patcher.describeHashMismatch(remoteFor(db))
+        expect(report.roots).toEqual({ mismatched: [], onlyLocal: [], onlyRemote: [] })
+        expect(report.characters).toEqual({ mismatched: [], onlyLocal: [], onlyRemote: [] })
+        expect(report.compositionOnly).toBe(true)
+        expect(report.serverHash).toBe('deadbeef')
+        expect(typeof report.localHash).toBe('string')
+    })
+
+    test('names changed roots, changed characters, and keys present on one side only', async () => {
+        const db = dbWith([chr('a'), chr('b')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+
+        const server = clone(db)
+        server.personaPrompt = 'changed on server'
+        server.characters[1].desc = 'edited elsewhere'
+        server.characters.push(chr('c'))
+        delete server.username
+        server.nodeOnlyExtra = { added: true }
+
+        const report = patcher.describeHashMismatch(remoteFor(server))
+        expect(report.roots.mismatched.sort()).toEqual(['characters', 'personaPrompt'])
+        expect(report.roots.onlyLocal).toEqual(['username'])
+        expect(report.roots.onlyRemote).toEqual(['nodeOnlyExtra'])
+        expect(report.characters).toEqual({ mismatched: ['b'], onlyLocal: [], onlyRemote: ['c'] })
+        expect(report.compositionOnly).toBe(false)
+    })
+
+    test('id-less characters are compared under the #index key on both sides', async () => {
+        const noId = { ...chr('x'), chaId: undefined }
+        const db = dbWith([chr('a'), noId])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        const serverSame = clone(db)
+        const same = patcher.describeHashMismatch({
+            keyHashes: {},
+            characterHashes: { a: hex(serverSame.characters[0]), '#1': hex(serverSame.characters[1]) },
+        })
+        expect(same.characters).toEqual({ mismatched: [], onlyLocal: [], onlyRemote: [] })
+
+        const serverChanged = clone(db)
+        serverChanged.characters[1].desc = 'changed'
+        const changed = patcher.describeHashMismatch({
+            keyHashes: {},
+            characterHashes: { a: hex(serverChanged.characters[0]), '#1': hex(serverChanged.characters[1]) },
+        })
+        expect(changed.characters.mismatched).toEqual(['#1'])
+    })
+
+    test('duplicate chaIds are surfaced instead of silently collapsing', async () => {
+        const db = dbWith([chr('a'), chr('a', { desc: 'second copy' })])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        const report = patcher.describeHashMismatch({
+            keyHashes: {},
+            characterHashes: { a: hex(clone(db).characters[0]) },
+        })
+        expect(report.duplicateCharIds).toEqual(['a'])
+        expect(report.serverDuplicateCharIds).toEqual([])
+        expect(report.characters.mismatched).toEqual([])
+        expect(report.compositionOnly).toBe(false)
+    })
+
+    test('server-reported duplicate chaIds are carried into the report', async () => {
+        const db = dbWith([chr('a')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        const report = patcher.describeHashMismatch({
+            keyHashes: {},
+            characterHashes: { a: hex(clone(db).characters[0]) },
+            duplicateCharIds: ['a'],
+        })
+        expect(report.serverDuplicateCharIds).toEqual(['a'])
+        expect(report.duplicateCharIds).toEqual([])
+        expect(report.compositionOnly).toBe(false)
+    })
+
+    test('missing per-key data degrades to an empty report without throwing', async () => {
+        const patcher = new RisuSavePatcher()
+        await patcher.init(dbWith([chr('a')]))
+        const report = patcher.describeHashMismatch({ serverHash: '1' })
+        expect(report.roots).toEqual({ mismatched: [], onlyLocal: [], onlyRemote: [] })
+        expect(report.characters).toEqual({ mismatched: [], onlyLocal: [], onlyRemote: [] })
+    })
+})
+
+describe('changedCharacterIdsOfLastSet — which characters a save actually changed', () => {
+    test('per-character path: an untracked edit is reported, untouched characters are not', async () => {
+        const db = dbWith([chr('a'), chr('b'), chr('c')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        const next = clone(db)
+        next.characters[1].desc = 'edited without a tracker entry'
+        await patcher.set(clone(next), emptyToSave())
+        expect(patcher.changedCharacterIdsOfLastSet()).toEqual(['b'])
+    })
+
+    test('a tracked but unchanged character is not reported', async () => {
+        const db = dbWith([chr('a'), chr('b')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        await patcher.set(clone(db), { ...emptyToSave(), character: ['a'] })
+        expect(patcher.changedCharacterIdsOfLastSet()).toEqual([])
+    })
+
+    test('structural path: only added or edited bodies are reported, a pure reorder reports nothing', async () => {
+        const db = dbWith([chr('a'), chr('b'), chr('c')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+
+        const reordered = clone(db)
+        reordered.characters.reverse()
+        await patcher.set(clone(reordered), emptyToSave())
+        expect(patcher.changedCharacterIdsOfLastSet()).toEqual([])
+
+        const changed = clone(reordered)
+        changed.characters.splice(1, 1) // remove b
+        changed.characters[0].desc = 'edited c'
+        changed.characters.push(chr('d'))
+        await patcher.set(clone(changed), emptyToSave())
+        expect(patcher.changedCharacterIdsOfLastSet().sort()).toEqual(['c', 'd'])
+    })
+
+    test('the list is reset on every set()', async () => {
+        const db = dbWith([chr('a')])
+        const patcher = new RisuSavePatcher()
+        await patcher.init(clone(db))
+        const next = clone(db); next.characters[0].desc = 'x'
+        await patcher.set(clone(next), emptyToSave())
+        expect(patcher.changedCharacterIdsOfLastSet()).toEqual(['a'])
+        await patcher.set(clone(next), emptyToSave())
+        expect(patcher.changedCharacterIdsOfLastSet()).toEqual([])
+    })
+})
+
+describe('baselineArchivedCharacterIds', () => {
+    test('lists the deactivated chaIds of the baseline and ignores malformed stubs', async () => {
+        const patcher = new RisuSavePatcher()
+        await patcher.init(dbWith([chr('a')], { nodeOnlyArchivedCharacters: [{ chaId: 'x' }, { chaId: '' }, null, { name: 'no id' }] }))
+        expect([...patcher.baselineArchivedCharacterIds()]).toEqual(['x'])
+        const bare = new RisuSavePatcher()
+        await bare.init(dbWith([]))
+        expect(bare.baselineArchivedCharacterIds().size).toBe(0)
     })
 })

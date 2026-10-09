@@ -23,12 +23,16 @@ import { runInlayScreen } from "./inlayScreen";
 import { runImageEmbedding } from "./transformers";
 import { runLuaEditTrigger } from "./scriptings";
 import { getModelInfo, LLMFlags } from "../model/modellist";
-import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
+import { resolveChatModelBinding, resolveClassicModelId, resolvePresetMaxOutputTokens, presetSupportsVision } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
-import { getModuleAssets, getModuleToggles } from "./modules";
+import { getActiveHypaV3Preset } from "./memory/memoryPresets"
+import { resolveModelPresetContextBudget } from "./request/contextBudget"
+import { getModuleAssets, getModuleLorebooks, getModules, getModuleToggles, getModuleTriggers } from "./modules";
+import { hydrateAssetListsForCbs, serializeForCbsScan } from "../parser/assetListHydration";
+import { forageStorage, readImage, resolvePrioritizedAssetManifestNames } from "../globalApi.svelte";
+import { pluginV2 } from "../plugins/plugins.svelte";
+import { abortGeneration, chatGenKey, chatProcessStage, endGeneration, isChatGenerating, onDatabaseRebased, registerAbort, setGenerationStage, startGeneration } from "./generationState";
 import { getToolAssets, getToolToggles } from './tools/features'
-import { readImage } from "../globalApi.svelte";
-import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
 import { runAgentPipeline, type AgentMainPromptContext } from "../agent/runtime";
 
@@ -44,6 +48,37 @@ export interface OpenAIChat{
     cachePoint?: boolean
 }
 
+function findMessageIndexByChatId(chat: Chat, chatId?: string){
+    if(!chatId){
+        return -1
+    }
+
+    return chat.message.findIndex((message) => message.chatId === chatId)
+}
+
+async function runChatOutputListeners(char: any, chat: any, characterIndex: number, chatIndex: number, messageIndex: number){
+    if(pluginV2.chatOutput.size === 0){
+        return
+    }
+
+    const charSnapshot = $state.snapshot(char)
+    const chatSnapshot = $state.snapshot(chat)
+    for(const listener of pluginV2.chatOutput){
+        try {
+            await listener({
+                char: charSnapshot,
+                chat: chatSnapshot,
+                characterIndex,
+                chatIndex,
+                messageIndex,
+            })
+        }
+        catch(e) {
+            console.error(e)
+        }
+    }
+}
+
 export interface MultiModal{
     type:'image'|'video'|'audio'|'signature'
     base64:string,
@@ -57,9 +92,30 @@ export interface requestTokenPart{
 }
 
 export { doingChat, chatProcessStage } from "./generationState"
+
+// 403 (not loopback) and 503 (not a Termux environment) cannot change within
+// a session, so remember the verdict instead of probing on every response.
+let termuxNotifyUnavailable = false
+
 export let requestTokenParts:{[key:string]:requestTokenPart[]} = {}
 export let previewFormated:OpenAIChat[] = []
 export let previewBody:string = ''
+
+// Text that sendChat feeds to the synchronous parser, serialized so one scan
+// covers all of it.
+function promptCbsSources(char:character, chat:Chat):string[] {
+    const db = DBState.db
+    return [serializeForCbsScan([
+        db.mainPrompt, db.jailbreak, db.globalNote, db.descriptionPrefix, db.additionalPrompt, db.promptTemplate,
+        char.systemPrompt, char.replaceGlobalNote, char.desc, char.personality, char.scenario,
+        char.firstMessage, char.alternateGreetings, char.exampleMessage, char.additionalText, char.depth_prompt,
+        char.globalLore, char.triggerscript, chat?.note, chat?.localLore, chat?.message,
+        // Injected into the prompt when the character opts in (see the
+        // customimageinstruction handling below); it carries {{chardisplayasset}}.
+        char.prebuiltAssetCommand ? prebuiltAssetCommand : '',
+        getPersonaPrompt(), getModuleLorebooks(), getModuleTriggers(),
+    ])]
+}
 
 export interface SendChatArgs {
     chatAdditonalTokens?:number,
@@ -68,6 +124,7 @@ export interface SendChatArgs {
     usedContinueTokens?:number,
     preview?:boolean
     previewPrompt?:boolean
+    responseStartedAt?:number
     agentContext?: AgentMainPromptContext
 }
 
@@ -84,7 +141,12 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
 async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise<boolean> {
 
     chatProcessStage.set(0)
-    const abortSignal = arg.signal ?? (new AbortController()).signal
+    // Callers without a signal (multisend, commands, dev tools) get an
+    // internal controller that is registered with the generation entry below,
+    // so abortGeneration() reaches every send, not only UI-initiated ones.
+    const internalAbort = arg.signal ? null : new AbortController()
+    const abortSignal = arg.signal ?? internalAbort.signal
+    const responseStartedAt = arg.responseStartedAt ?? performance.now()
     
     // NOTE: `throwError()` can be called before these are populated (e.g. HypaV3 early validation errors).
     // Keep them declared up-front to avoid TDZ ReferenceErrors in production builds.
@@ -200,6 +262,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         }
     }
     const generationId = arg.agentContext?.generationId ?? v4()
+    if (internalAbort) registerAbort(genKey, internalAbort)
     if(!arg.agentContext || !isChatGenerating(genKey)){
         startGeneration(genKey, generationId)
     }
@@ -210,6 +273,11 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     // No-op unless the server-side requests toggle is on.
     if (realChatId && !arg.preview && !arg.previewPrompt) {
         registerPendingSend(realChatId, generationId)
+    }
+    // Module-scoped result of the last preview: cleared up front so a failed
+    // preview cannot hand the previous prompt to the caller as if it were new.
+    if (arg.previewPrompt) {
+        previewBody = ''
     }
 
     if(chatProcessIndex === -1 && DBState.db.presetChain){
@@ -234,10 +302,35 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     const nowChatroom = DBState.db.characters[selectedChar]
     nowChatroom.lastInteraction = Date.now()
     selectedChat = nowChatroom.chatPage
+    // The indices above address DBState.db for the rest of this send. A save
+    // conflict rebase may replace the database (and reorder characters) while
+    // streaming, so re-resolve them by id when that happens; the listener is
+    // dropped with the generation entry.
+    {
+        const sendChaId = nowChatroom.chaId
+        const sendChatId = nowChatroom.chats?.[selectedChat]?.id
+        onDatabaseRebased(genKey, () => {
+            const chars = DBState.db.characters ?? []
+            const charIdx = chars.findIndex((c) => c?.chaId === sendChaId)
+            if (charIdx === -1) {
+                // Deactivated on another device mid-generation. The rebase
+                // aborts such generations and waits for them to end BEFORE
+                // swapping the database (globalApi), so this branch is only
+                // reached if that wait timed out; abort again as a last
+                // resort and leave the indices (the old target object is
+                // gone either way).
+                abortGeneration(genKey)
+                return
+            }
+            selectedChar = charIdx
+            const chatIdx = sendChatId ? (chars[charIdx].chats ?? []).findIndex((c) => c?.id === sendChatId) : -1
+            if (chatIdx !== -1) selectedChat = chatIdx
+        })
+    }
     // Block send if chat is still a placeholder (hydration not complete)
     if (nowChatroom.chats[nowChatroom.chatPage]?._placeholder) {
         alertError('Chat is still loading. Please wait a moment.')
-        endGeneration(genKey)
+        endGeneration(genKey, { generationId })
         if (realChatId) clearPendingSend(realChatId)
         return false
     }
@@ -272,8 +365,12 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         }
     }
 
+    // The classic model the main request goes to (a slot-pinned legacy model
+    // included); the global db.aiModel when the main slot is a ModelPreset, as
+    // before. Drives the classic prompt-shaping checks below.
+    const mainModel = resolveClassicModelId(nowChatroom.chats[selectedChat], 'model') ?? DBState.db.aiModel
     let caculatedChatTokens = 0
-    if(DBState.db.aiModel.startsWith('gpt')){
+    if(mainModel.startsWith('gpt')){
         caculatedChatTokens += 5
     }
     else{
@@ -282,8 +379,13 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
 
     currentChar = nowChatroom
 
+    // Everything below runs the synchronous parser (messages, prompt, lorebook,
+    // triggers). Asset-list CBS in any of those sources needs its manifests
+    // loaded first — same rule as the display path (#82).
+    await hydrateAssetListsForCbs(currentChar, promptCbsSources(currentChar, nowChatroom.chats[selectedChat]))
+
     let chatAdditonalTokens = arg.chatAdditonalTokens ?? caculatedChatTokens
-    const tokenizer = new ChatTokenizer(chatAdditonalTokens, DBState.db.aiModel.startsWith('gpt') ? 'noName' : 'name')
+    const tokenizer = new ChatTokenizer(chatAdditonalTokens, mainModel.startsWith('gpt') ? 'noName' : 'name', mainModel)
     let currentChat = runCurrentChatFunction(nowChatroom.chats[selectedChat])
     nowChatroom.chats[selectedChat] = currentChat
     let maxContextTokens = DBState.db.maxContext
@@ -291,6 +393,11 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     // global db.maxResponse (the "[채팅 봇]" max response size), overridden below
     // when this chat is bound to a ModelPreset.
     let maxResponseTokens = DBState.db.maxResponse
+    let presetVisionCapable = false
+    // Where maxContextTokens came from, for the token-limit errors below:
+    // users cannot otherwise tell a registry context-window cap from their
+    // own settings.
+    let maxContextSource = 'global max context setting'
     // When this chat is bound to a ModelPreset, use the preset's own input
     // budget (preset.maxContext, default 65000) instead of the global
     // db.maxContext — clamped to the model's context window when known.
@@ -298,10 +405,12 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     {
         const mainBinding = resolveChatModelBinding(currentChat, 'model')
         if (mainBinding.kind === 'modelPreset') {
-            const ctxWindow = mainBinding.preset.profileSnapshot.limits?.contextWindowTokens
-            const set = mainBinding.preset.maxContext
-            const budget = set && set > 0 ? set : 65000
-            maxContextTokens = ctxWindow ? Math.min(budget, ctxWindow) : budget
+            const contextBudget = resolveModelPresetContextBudget(
+                mainBinding.preset,
+                mainBinding.preset.profileSnapshot.limits?.contextWindowTokens,
+            )
+            maxContextTokens = contextBudget.maxContextTokens
+            maxContextSource = contextBudget.source
             // Reserve output tokens from the preset's own max-output setting
             // rather than db.maxResponse — the legacy global value can be a
             // stray figure (e.g. 65535 carried over from an imported prompt
@@ -309,6 +418,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             // first message fail with a false "too much token" error.
             const presetOut = resolvePresetMaxOutputTokens(mainBinding.preset)
             if (presetOut !== undefined) maxResponseTokens = presetOut
+            presetVisionCapable = presetSupportsVision(mainBinding.preset)
         }
     }
 
@@ -798,7 +908,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
 
     let chats:OpenAIChat[] = examples
 
-    if(!DBState.db.aiModel.startsWith('novelai') && !DBState.db?.promptSettings?.trimStartNewChat){
+    if(!mainModel.startsWith('novelai') && !DBState.db?.promptSettings?.trimStartNewChat){
         chats.push({
             role: 'system',
             content: '[Start a new chat]',
@@ -854,7 +964,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         ms = makeMs(currentChat)
         currentTokens += triggerResult.tokens
         if(triggerResult.stopSending){
-            endGeneration(genKey)
+            endGeneration(genKey, { generationId })
             if (realChatId) clearPendingSend(realChatId)
             return false
         }
@@ -903,13 +1013,13 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         }
 
         let multimodal:MultiModal[] = []
-        const modelinfo = getModelInfo(DBState.db.aiModel)
+        const modelinfo = getModelInfo(mainModel)
         if(inlays.length > 0){
             for(const inlay of inlays){
                 const inlayName = inlay.replace('{{inlayed::', '').replace('{{inlay::', '').replace('}}', '').replace('{{inlayeddata::', '')
                 const inlayData = await getInlayAsset(inlayName)
                 if(inlayData?.type === 'image'){
-                    if(modelinfo.flags.includes(LLMFlags.hasImageInput)){
+                    if(modelinfo.flags.includes(LLMFlags.hasImageInput) || presetVisionCapable){
                         multimodal.push({
                             type: 'image',
                             base64: inlayData.data,
@@ -972,14 +1082,30 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                     })
                 })())
             }
-            else if(p1 === 'icon'){
-                assetPromises.push((async () => {
-                    const assetDataBuf = await readImage(currentChar.image ?? '')
-                    multimodal.push({
-                        type: "image",
-                        base64: `data:image/png;base64,${Buffer.from(assetDataBuf).toString('base64')}`
-                    })
-                })())
+            else {
+                const moduleManifests = getModules()
+                    .map((module) => module?.assetManifest)
+                    .filter((manifest) => !!manifest)
+                if (moduleManifests.length > 0 || currentChar.additionalAssetManifest || p1 === 'icon') {
+                    assetPromises.push((async () => {
+                        // The legacy array path above matches asset_prompt names
+                        // exactly; keep the manifest path at the same strictness.
+                        const resolved = await resolvePrioritizedAssetManifestNames(
+                            currentChar.additionalAssetManifest,
+                            moduleManifests,
+                            [p1],
+                            { fuzzy: false },
+                        )
+                        const path = resolved[p1.toLocaleLowerCase()]?.path
+                        const source = path || (p1 === 'icon' ? currentChar.image ?? '' : '')
+                        if (!source) return
+                        const assetDataBuf = await readImage(source)
+                        multimodal.push({
+                            type: "image",
+                            base64: `data:image/png;base64,${Buffer.from(assetDataBuf).toString('base64')}`
+                        })
+                    })())
+                }
             }
             return ''          
         })
@@ -1014,7 +1140,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         currentTokens += await tokenizer.tokenizeChat(chat)
     }
     
-    if((currentChat.supaMemory ?? nowChatroom.supaMemory) && DBState.db.hypaV3){
+    if(getActiveHypaV3Preset(DBState.db, nowChatroom, currentChat)){
         stageTimings.stage1Duration = Date.now() - stageTimings.stage1Start
         setGenerationStage(genKey, 2)
         stageTimings.stage2Start = Date.now()
@@ -1027,7 +1153,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                 DBState.db.characters[selectedChar].chats[selectedChat].hypaV3Data = currentChat.hypaV3Data
             }
             console.log(sp)
-            throwError(sp.error)
+            throwError(sp.error + "\n\nMax context source: " + maxContextSource)
             if (realChatId) clearPendingSend(realChatId)
             return false
         }
@@ -1045,7 +1171,10 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         stageTimings.stage1Duration = Date.now() - stageTimings.stage1Start
         while(currentTokens > maxContextTokens){
             if(chats.length <= 1){
-                throwError(language.errors.toomuchtoken + "\n\nRequired Tokens: " + currentTokens)
+                // Spell out the budget: most reports of this error are a stray
+                // max-response (e.g. 65535 from an imported prompt preset) or
+                // a max-context far below the prompt, which the user can fix.
+                throwError(language.errors.toomuchtoken + "\n\nRequired Tokens: " + currentTokens + " / Max Context: " + maxContextTokens + " / Reserved Output: " + maxResponseTokens + "\nMax context source: " + maxContextSource)
 
                 if (realChatId) clearPendingSend(realChatId)
                 return false
@@ -1128,7 +1257,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     }
 
     //continue chat model
-    if(arg.continue && (DBState.db.aiModel.startsWith('claude') || DBState.db.aiModel.startsWith('gpt') || DBState.db.aiModel.startsWith('openrouter') || DBState.db.aiModel.startsWith('reverse_proxy'))){
+    if(arg.continue && (mainModel.startsWith('claude') || mainModel.startsWith('gpt') || mainModel.startsWith('openrouter') || mainModel.startsWith('reverse_proxy'))){
         unformated.postEverything.push({
             role: 'system',
             content: '[Continue the last response]'
@@ -1140,7 +1269,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             if(!chat.content.trim() && !(chat.multimodals && chat.multimodals.length > 0)){
                 continue
             }
-            if(!(DBState.db.aiModel.startsWith('gpt') || DBState.db.aiModel.startsWith('claude') || DBState.db.aiModel === 'openrouter' || DBState.db.aiModel === 'reverse_proxy')){
+            if(!(mainModel.startsWith('gpt') || mainModel.startsWith('claude') || mainModel === 'openrouter' || mainModel === 'reverse_proxy')){
                 formated.push(chat)
                 continue
             }
@@ -1438,7 +1567,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         let pointer = 0
         while(inputTokens > maxContextTokens){
             if(pointer >= formated.length){
-                throwError(language.errors.toomuchtoken + "\n\nAt token rechecking. Required Tokens: " + inputTokens)
+                throwError(language.errors.toomuchtoken + "\n\nAt token rechecking. Required Tokens: " + inputTokens + " / Max Context: " + maxContextTokens + " / Reserved Output: " + maxResponseTokens + "\nMax context source: " + maxContextSource)
                 if (realChatId) clearPendingSend(realChatId)
                 return false
             }
@@ -1493,6 +1622,14 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         return true
     }
 
+    // Stopped while an earlier stage was still running (possibly force-released
+    // by stopGeneration): do not fire the main request for a dead send.
+    // (Cast keeps TS from narrowing the post-request check below to `false`.)
+    if((abortSignal as AbortSignal).aborted){
+        if (realChatId) clearPendingSend(realChatId)
+        return false
+    }
+
     const req = await requestChatData({
         formated: formated,
         biasString: biases,
@@ -1511,11 +1648,15 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             kind: 'main',
             label: arg.agentContext.node.name,
         } : undefined,
+        generationInfo,
     }, 'model', abortSignal)
 
     console.log(req)
     if(req.model){
-        generationInfo.model = getGenerationModelString(req.model)
+        // Preset requests carry a user-facing label; the wire model id then
+        // moves to generationInfo.modelId so both survive on the message.
+        generationInfo.model = req.modelLabel ?? getGenerationModelString(req.model)
+        if(req.modelLabel) generationInfo.modelId = req.model
         console.log(generationInfo.model, req.model)
     }
 
@@ -1543,7 +1684,8 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         let prefix = ''
         if(arg.continue){
             msgIndex -= 1
-            prefix = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data
+            const outputMessage = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]
+            prefix = outputMessage.data
         }
         else{
             DBState.db.characters[selectedChar].chats[selectedChat].message.push({
@@ -1556,6 +1698,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                 chatId: generationId,
             })
         }
+        const outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.chatId
         const performanceMode: StreamingDisplayOptimizationMode = DBState.db.streamingDisplayOptimizationMode ?? 'balanced'
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
         DBState.db.characters[selectedChar].chats[selectedChat].activeStreamingDisplayOptimizationMode = performanceMode
@@ -1685,16 +1828,22 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                 if(streamingFlushError !== null){
                     throw streamingFlushError
                 }
-                if(deferStreamingPostProcessing && receivedStreamingResult){
+                // A user Stop still post-processes the partial reply as before;
+                // only skip when the target message no longer exists (the
+                // character was deactivated elsewhere during a rebase).
+                if(deferStreamingPostProcessing && receivedStreamingResult && DBState.db.characters[selectedChar]?.chats?.[selectedChat]?.message?.[msgIndex]){
                     let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
                     DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
                     emoChanged = result2.emoChanged
                 }
             }
             finally {
-                DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = false
-                DBState.db.characters[selectedChar].chats[selectedChat].activeStreamingDisplayOptimizationMode = undefined
-                DBState.db.characters[selectedChar].reloadKeys += 1
+                const target = DBState.db.characters[selectedChar]
+                if(target?.chats?.[selectedChat]){
+                    target.chats[selectedChat].isStreaming = false
+                    target.chats[selectedChat].activeStreamingDisplayOptimizationMode = undefined
+                    target.reloadKeys += 1
+                }
                 void reader.cancel().catch(() => {})
             }
         }
@@ -1713,14 +1862,27 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true
         }
-        const inlayr = runInlayScreen(currentChar, currentChat.message[msgIndex].data)
-        currentChat.message[msgIndex].data = inlayr.text
         DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
-        if(inlayr.promise){
-            const t = await inlayr.promise
-            currentChat.message[msgIndex].data = t
+        currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
+        const inlayMessageIndex = findMessageIndexByChatId(currentChat, outputMessageId)
+        const outputMessage = currentChat.message[inlayMessageIndex]
+        if(outputMessage){
+            const inlayr = runInlayScreen(currentChar, outputMessage.data)
+            outputMessage.data = inlayr.text
             DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
+            if(inlayr.promise){
+                const t = await inlayr.promise
+                currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
+                const asyncInlayMessageIndex = findMessageIndexByChatId(currentChat, outputMessageId)
+                if(asyncInlayMessageIndex !== -1){
+                    currentChat.message[asyncInlayMessageIndex].data = t
+                    DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
+                }
+            }
         }
+        currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
+        const listenerMessageIndex = findMessageIndexByChatId(currentChat, outputMessageId)
+        await runChatOutputListeners(currentChar, currentChat, selectedChar, selectedChat, listenerMessageIndex)
         if(DBState.db.ttsAutoSpeech && !arg.agentContext){
             await sayTTS(currentChar, result)
         }
@@ -1730,6 +1892,8 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                     : (req.type === 'multiline') ? req.result
                     : []
         let mrerolls:string[] = []
+        let outputMessageIndex = -1
+        let outputMessageId: string | undefined
         for(let i=0;i<msgs.length;i++){
             let msg = msgs[i]
             let mess = msg[1]
@@ -1763,6 +1927,8 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                     const p = await inlayResult.promise
                     DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = p
                 }
+                outputMessageIndex = msgIndex
+                outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.chatId
             }
             else if(i===0){
                 DBState.db.characters[selectedChar].chats[selectedChat].message.push({
@@ -1780,6 +1946,8 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
                     DBState.db.characters[selectedChar].chats[selectedChat].message[ind].data = p
                 }
                 mrerolls.push(result)
+                outputMessageIndex = ind
+                outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[ind]?.chatId
             }
             else{
                 mrerolls.push(result)
@@ -1800,6 +1968,11 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true
         }
+        currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
+        if(outputMessageId){
+            outputMessageIndex = findMessageIndexByChatId(currentChat, outputMessageId)
+            await runChatOutputListeners(currentChar, currentChat, selectedChar, selectedChat, outputMessageIndex)
+        }
     }
 
     let needsAutoContinue = false
@@ -1814,8 +1987,10 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     }
 
     if(needsAutoContinue){
-        endGeneration(genKey, { keepPendingAbort: true })
+        endGeneration(genKey, { keepPendingAbort: true, generationId })
         return await sendChatCore(chatProcessIndex, {
+            responseStartedAt,
+            agentContext: arg.agentContext,
             chatAdditonalTokens: arg.chatAdditonalTokens,
             continue: true,
             signal: abortSignal,
@@ -1825,14 +2000,17 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
 
     const igp = risuChatParser(DBState.db.igpPrompt ?? "")
 
-    if(igp){
+    // Stop can land while the output triggers above were still running.
+    if(igp && !abortSignal.aborted){
         const igpFormated = parseChatML(igp)
         const rq = await requestChatData({
             formated: igpFormated,
             bias: {}
         },'emotion', abortSignal)
 
-        DBState.db.characters[selectedChar].chats[selectedChat].message[DBState.db.characters[selectedChar].chats[selectedChat].message.length - 1].data += rq
+        if(!abortSignal.aborted){
+            DBState.db.characters[selectedChar].chats[selectedChat].message[DBState.db.characters[selectedChar].chats[selectedChat].message.length - 1].data += rq
+        }
     }
 
     stageTimings.stage3Duration = Date.now() - stageTimings.stage3Start
@@ -1858,26 +2036,58 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             DBState.db.characters[selectedChar].chats[selectedChat].message[lastMessageIndex].generationInfo = generationInfo
         }
         
-        endGeneration(genKey, { keepPendingAbort: true })
+        endGeneration(genKey, { keepPendingAbort: true, generationId })
         return await sendChatCore(chatProcessIndex, {
+            responseStartedAt,
+            agentContext: arg.agentContext,
             signal: abortSignal
         })
     }
 
     if(DBState.db.notification && !arg.agentContext){
-        try {
-            const permission = await Notification.requestPermission()
-            if(permission === 'granted'){
-                const noti = new Notification('Risuai', {
-                    body: result
-                })
-                noti.onclick = () => {
-                    window.focus()
-                }
+        void (async () => {
+            let termuxNotified = false
+
+            if(!termuxNotifyUnavailable){
+                try {
+                    const elapsedMs = performance.now() - responseStartedAt
+                    const response = await fetch('/api/termux-notify', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'risu-auth': await forageStorage.createAuth()
+                        },
+                        body: JSON.stringify({
+                            elapsedMs,
+                            character: currentChar?.name ?? ''
+                        })
+                    })
+
+                    if(response.status === 403 || response.status === 503){
+                        termuxNotifyUnavailable = true
+                    }
+                    termuxNotified = response.ok
+                } catch {}
             }
-        } catch (error) {
-            
-        }
+
+            if(termuxNotified){
+                return
+            }
+
+            try {
+                const permission = await Notification.requestPermission()
+                if(permission === 'granted'){
+                    const noti = new Notification('Risuai', {
+                        body: result
+                    })
+                    noti.onclick = () => {
+                        window.focus()
+                    }
+                }
+            } catch (error) {
+
+            }
+        })()
     }
 
     if(req.special){

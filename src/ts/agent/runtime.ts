@@ -53,10 +53,12 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
     const characterId = initialCharacter?.chaId
     const chatId = initialChat?.id
     const resolveTarget = () => {
-        const character = DBState.db.characters.find((entry) => entry.chaId === characterId)
-            ?? DBState.db.characters[charIndex]
-        const chat = character?.chats?.find((entry) => entry.id === chatId)
-            ?? character?.chats?.[initialChatIndex]
+        const character = characterId
+            ? DBState.db.characters.find((entry) => entry.chaId === characterId)
+            : DBState.db.characters[charIndex]
+        const chat = chatId
+            ? character?.chats?.find((entry) => entry.id === chatId)
+            : character?.chats?.[initialChatIndex]
         return character && chat ? { character, chat } : null
     }
     const initialTarget = resolveTarget()
@@ -227,7 +229,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 })
                 restorePreviousMessage()
                 endStatus(generationId, outcome, { now: run.endedAt })
-                endGeneration(generationKey)
+                endGeneration(generationKey, { generationId })
                 return false
             }
             const target = resolveTarget()
@@ -237,7 +239,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 run.status = 'failed'
                 run.endedAt = Date.now()
                 endStatus(generationId, 'failed', { now: run.endedAt, error: record.error })
-                endGeneration(generationKey)
+                endGeneration(generationKey, { generationId })
                 return false
             }
             messageIndex = findLastCharacterMessageIndex(target.chat.message)
@@ -247,7 +249,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 run.status = 'failed'
                 run.endedAt = Date.now()
                 endStatus(generationId, 'failed', { now: run.endedAt, error: record.error })
-                endGeneration(generationKey)
+                endGeneration(generationKey, { generationId })
                 return false
             }
             const message = target.chat.message[messageIndex]
@@ -293,7 +295,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                     alertError(failed.map((record) => `${record.nodeName}: ${record.error || 'Agent request failed.'}`).join('\n'))
                 }
                 endStatus(generationId, outcome, { now: run.endedAt })
-                endGeneration(generationKey)
+                endGeneration(generationKey, { generationId })
                 return false
             }
             continue
@@ -319,7 +321,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
             run.status = 'failed'
             run.endedAt = Date.now()
             endStatus(generationId, 'failed', { now: run.endedAt, error: 'Agent chat is no longer available.' })
-            endGeneration(generationKey)
+            endGeneration(generationKey, { generationId })
             return false
         }
         const message = target.chat.message[messageIndex]
@@ -330,7 +332,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
     }
 
     if(!passedMain){
-        endGeneration(generationKey)
+        endGeneration(generationKey, { generationId })
         return false
     }
     const target = resolveTarget()
@@ -338,7 +340,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         run.status = 'failed'
         run.endedAt = Date.now()
         endStatus(generationId, 'failed', { now: run.endedAt, error: 'Agent chat is no longer available.' })
-        endGeneration(generationKey)
+        endGeneration(generationKey, { generationId })
         return false
     }
     const message = target.chat.message[messageIndex]

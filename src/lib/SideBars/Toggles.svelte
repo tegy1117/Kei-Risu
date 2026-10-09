@@ -6,8 +6,9 @@
     import { language } from "src/lang";
     import type { PromptItem } from "src/ts/process/prompt";
     import type { character } from "src/ts/storage/database.svelte";
-    import { getCurrentChat, snapshotToggleValues, saveTogglesToChat } from "src/ts/storage/database.svelte";
-    import { alertConfirm, alertTogglePresets, notifySuccess } from "src/ts/alert";
+    import { getCurrentChat, getToggleUnsetValues, snapshotToggleBinding, snapshotToggleValues, saveTogglesToChat } from "src/ts/storage/database.svelte";
+    import { alertConfirm, alertConfirmMulti, alertTogglePresets, notifySuccess } from "src/ts/alert";
+    import { requestImmediateSave } from "src/ts/globalApi.svelte";
     import { tooltip } from "src/ts/gui/tooltip";
     import { PinIcon, SaveIcon, FolderHeartIcon } from "@lucide/svelte";
     import ShAccordion from '../UI/GUI/ShAccordion.svelte'
@@ -28,16 +29,32 @@
 
     let currentChat = $derived(DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage])
     let isPinned = $derived(!DBState.db.disableToggleBinding && !!currentChat?.savedToggleValues)
+    let toggleTemplate = $derived.by(() => {
+        // Track chat/module changes so the toggle list re-derives on chat switch
+        const _char = DBState.db.characters[$selectedCharID]
+        void _char?.chats?.[_char?.chatPage]?.modules
+        void _char?.modules
+        void DBState.db.enabledModules
+        void DBState.db.moduleIntergration
+
+        return DBState.db.customPromptTemplateToggle + '\n' +
+            getModuleToggles() + '\n' +
+            getToolToggles() + '\n' +
+            ((DBState.db?.characters?.[$selectedCharID] as character)?.customModuleToggle ?? '')
+    })
+    // An unset select reads as its first option ('0'); see getToggleUnsetValues.
+    let unsetToggleValues = $derived(getToggleUnsetValues(toggleTemplate))
+    const normToggle = (key: string, v: string | undefined) => v ?? unsetToggleValues[key] ?? ''
+
     let dirtyCount = $derived.by(() => {
         if (DBState.db.disableToggleBinding) return 0
         const saved = currentChat?.savedToggleValues
         if (!saved) return 0
         const current = snapshotToggleValues()
         const allKeys = new Set([...Object.keys(saved), ...Object.keys(current)])
-        const norm = (v: string | undefined) => v ?? ''
         let count = 0
         for (const key of allKeys) {
-            if (norm(saved[key]) !== norm(current[key])) count++
+            if (normToggle(key, saved[key]) !== normToggle(key, current[key])) count++
         }
         return count
     })
@@ -50,6 +67,7 @@
             const confirmed = await alertConfirm(language.togglePinRemove)
             if (confirmed) {
                 chat.savedToggleValues = undefined
+                chat.savedToggleUnsetKeys = undefined
                 notifySuccess(language.togglePinUnbound)
             }
         } else {
@@ -61,6 +79,32 @@
     function updatePin() {
         saveTogglesToChat()
         notifySuccess(language.togglePinSaved)
+    }
+
+    // Same idea as the model binding's "save as default": new chats start
+    // pinned to this snapshot. Existing chats are not touched.
+    async function saveAsDefault() {
+        if (DBState.db.defaultToggleValues) {
+            const sel = await alertConfirmMulti(language.toggleDefaultManage, [
+                language.toggleDefaultOverwrite,
+                { label: language.toggleDefaultClear, variant: 'destructive' },
+            ])
+            if (sel === 1) {
+                DBState.db.defaultToggleValues = undefined
+                DBState.db.defaultToggleUnsetKeys = undefined
+                void requestImmediateSave()
+                notifySuccess(language.toggleDefaultCleared)
+                return
+            }
+            if (sel !== 0) return
+        } else if (!(await alertConfirm(language.toggleSetDefaultConfirm))) {
+            return
+        }
+        const { values, unsetKeys } = snapshotToggleBinding()
+        DBState.db.defaultToggleValues = values
+        DBState.db.defaultToggleUnsetKeys = unsetKeys
+        void requestImmediateSave()
+        notifySuccess(language.toggleDefaultSaved)
     }
 
     async function openPresetList() {
@@ -103,28 +147,12 @@
         const saved = currentChat?.savedToggleValues
         if (!saved) return false
         const fullKey = `toggle_${key}`
-        const current = DBState.db.globalChatVariables[fullKey] ?? undefined
-        const savedVal = saved[fullKey] ?? undefined
-        if (current === savedVal) return false
-        const norm = (v: string | undefined) => v ?? ''
-        return norm(current) !== norm(savedVal)
+        return normToggle(fullKey, DBState.db.globalChatVariables[fullKey]) !== normToggle(fullKey, saved[fullKey])
     }
 
 
     let groupedToggles = $derived.by(() => {
-        // Track chat/module changes so the toggle list re-derives on chat switch
-        const _char = DBState.db.characters[$selectedCharID]
-        void _char?.chats?.[_char?.chatPage]?.modules
-        void _char?.modules
-        void DBState.db.enabledModules
-        void DBState.db.moduleIntergration
-
-        const ungrouped = parseToggleSyntax(
-            DBState.db.customPromptTemplateToggle + '\n' +
-            getModuleToggles() + '\n' +
-            getToolToggles() + '\n' +
-            ((DBState.db?.characters?.[$selectedCharID] as character)?.customModuleToggle ?? '')
-        )
+        const ungrouped = parseToggleSyntax(toggleTemplate)
 
         let groupOpen = false
         // group toggles together between group ... groupEnd
@@ -201,7 +229,15 @@
                     className="shrink-0"
                     checked={DBState.db.globalChatVariables[`toggle_${toggle.key}`] === '1'}
                     onCheckedChange={(checked) => {
-                        DBState.db.globalChatVariables[`toggle_${toggle.key}`] = checked ? '1' : '0'
+                        const fullKey = `toggle_${toggle.key}`
+                        // Turning off a switch the pin holds unset returns it
+                        // to unset, not '0' (CBS reads them differently).
+                        const pin = isPinned ? currentChat?.savedToggleValues : undefined
+                        if (!checked && pin && pin[fullKey] === undefined) {
+                            delete DBState.db.globalChatVariables[fullKey]
+                        } else {
+                            DBState.db.globalChatVariables[fullKey] = checked ? '1' : '0'
+                        }
                     }}
                 />
             </div>
@@ -211,7 +247,11 @@
 
 {#if !DBState.db.disableToggleBinding}
 <div class="text-[11px] text-textcolor2 mt-4 px-1">{language.toggleBindingLabel}</div>
-<div class="flex gap-1 mt-1 items-stretch">
+{/if}
+<!-- The preset list stays available with binding disabled: applying a
+     preset does not depend on it. -->
+<div class="flex gap-1 mt-1 items-stretch" class:justify-end={DBState.db.disableToggleBinding}>
+    {#if !DBState.db.disableToggleBinding}
     {#if isPinned}
         <span use:tooltip={language.togglePinRemove}>
             <ShButton variant="primary" size="icon" onclick={pinToChat}>
@@ -237,13 +277,13 @@
             </ShButton>
         </span>
     {/if}
+    {/if}
     <span use:tooltip={language.togglePresetList}>
         <ShButton size="icon" onclick={openPresetList}>
             <FolderHeartIcon size={16} />
         </ShButton>
     </span>
 </div>
-{/if}
 
 {#if !noContainer && groupedToggles.length > 4}
     <div class="h-48 border-darkborderc p-2 border rounded-sm flex flex-col items-start mt-2 overflow-y-auto">
@@ -255,23 +295,6 @@
             {@render sep()}
         {/if}
         {@render toggles(groupedToggles, true)}
-        {#if chara && DBState.db.hypaV3}
-            <div class="w-full flex mt-2 items-center justify-between gap-2 min-h-10 rounded-md px-1">
-                <span class="flex items-center gap-1">
-                    <span>{language.ToggleHypaMemory}</span>
-                    <Help key="toggleHypaMemory" />
-                </span>
-                <ShSwitch
-                    checked={DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage]?.supaMemory ?? chara.supaMemory ?? false}
-                    onCheckedChange={() => {
-                        const char = DBState.db.characters[$selectedCharID]
-                        const chat = char?.chats?.[char.chatPage]
-                        if (!chat) return
-                        chat.supaMemory = !(chat.supaMemory ?? char.supaMemory ?? false)
-                    }}
-                />
-            </div>
-        {/if}
     </div>
 {:else}
     {#if hasJailbreakPrompt}
@@ -284,21 +307,10 @@
         {/if}
     {/if}
     {@render toggles(groupedToggles)}
-    {#if DBState.db.hypaV3}
-        <div class="w-full flex mt-2 items-center justify-between gap-2 min-h-10 rounded-md px-1">
-            <span class="flex items-center gap-1">
-                <span>{language.ToggleHypaMemory}</span>
-                <Help key="toggleHypaMemory" />
-            </span>
-            <ShSwitch
-                checked={DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage]?.supaMemory ?? chara.supaMemory ?? false}
-                onCheckedChange={() => {
-                    const char = DBState.db.characters[$selectedCharID]
-                    const chat = char?.chats?.[char.chatPage]
-                    if (!chat) return
-                    chat.supaMemory = !(chat.supaMemory ?? char.supaMemory ?? false)
-                }}
-            />
-        </div>
-    {/if}
+{/if}
+
+{#if !DBState.db.disableToggleBinding && currentChat}
+    <ShButton variant="ghost" size="xs" className="w-full text-textcolor2 mt-1" onclick={saveAsDefault}>
+        {DBState.db.defaultToggleValues ? language.toggleDefaultSavedButton : language.toggleSaveAsDefaultButton}
+    </ShButton>
 {/if}

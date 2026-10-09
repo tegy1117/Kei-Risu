@@ -254,6 +254,8 @@ export interface ResolvedModelProfileSnapshot {
 export interface ModelPreset {
     id: string
     name: string
+    /** Optional folder membership (see `db.modelPresetFolders`). Missing means uncategorized. */
+    folderId?: string
     notes?: string
     sourceProfile?: ModelPresetSourceProfile
     migrationSource?: {
@@ -333,6 +335,10 @@ export interface ModelPreset {
     // clamped to the profile's contextWindowTokens when known. NOT the output
     // limit (that is the profile's max_tokens param).
     maxContext?: number
+    // Use an explicitly set maxContext as-is even when it exceeds the
+    // profile's contextWindowTokens (a wrong cap in a custom registry). No
+    // effect while maxContext is empty.
+    ignoreContextWindowCap?: boolean
     // Gemini explicit context caching (google-gemini adapter + AI Studio key
     // auth, main chat only). The cache boundary comes from the native
     // message.cachePoint infra (cache prompt card / automaticCachePoint), not
@@ -396,6 +402,33 @@ export interface ModelBindingSet {
         translate?: string
         otherAx?: string
     }
+}
+
+/**
+ * A binding slot can also name a legacy (classic) model instead of a preset:
+ *  - `@legacy`          → the global legacy model for that slot (db.aiModel /
+ *                         db.subModel / db.seperateModels[task]) — the classic
+ *                         regime's behavior, per slot.
+ *  - `@legacy:<model>`  → that classic model id, pinned to this chat's slot.
+ * Builds without this support find no preset for these ids: a main/sub slot
+ * blocks ("unset") instead of calling another model, while an aux slot falls
+ * back to the sub slot there (their "use default sub model" rule).
+ */
+export const LEGACY_SLOT = '@legacy'
+const LEGACY_SLOT_PREFIX = '@legacy:'
+
+export function legacySlotValue(modelId?: string): string {
+    return modelId ? LEGACY_SLOT_PREFIX + modelId : LEGACY_SLOT
+}
+
+/** `{}` for the global legacy slot, `{ model }` for a pinned one, null otherwise. */
+export function parseLegacySlot(value: string | undefined): { model?: string } | null {
+    if (value === LEGACY_SLOT) return {}
+    if (value?.startsWith(LEGACY_SLOT_PREFIX)) {
+        const model = value.slice(LEGACY_SLOT_PREFIX.length)
+        return model ? { model } : {}
+    }
+    return null
 }
 
 /** A fully-normalized empty binding bundle (every slot a defined primitive, so

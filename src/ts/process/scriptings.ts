@@ -30,7 +30,7 @@ interface BasicScriptingEngineState {
     code?: string;
     mutex: Mutex;
     chat?: Chat;
-    setVar?: (key:string, value:string) => void,
+    setVar?: (key:string, value:string) => boolean|void,
     getVar?: (key:string) => string,
     /**
      * Module that owns the currently running script, for per-module model
@@ -42,6 +42,7 @@ interface BasicScriptingEngineState {
 }
 
 interface LuaScriptingEngineState extends BasicScriptingEngineState {
+    editListeners?: Set<string>;
     engine?: LuaEngine;
     type: 'lua';
 }
@@ -61,7 +62,7 @@ export async function runScripted(code:string, arg:{
     char?:character|simpleCharacterArgument,
     chat?:Chat
     data?: string|OpenAIChat[],
-    setVar?: (key:string, value:string) => void,
+    setVar?: (key:string, value:string) => boolean|void,
     getVar?: (key:string) => string,
     lowLevelAccess?: boolean,
     meta?: object,
@@ -100,6 +101,11 @@ export async function runScripted(code:string, arg:{
                 ScriptingEngineState.code = code
                 ScriptingEngineState.engine = await luaFactory.createEngine({injectObjects: true})
                 const luaEngine = ScriptingEngineState.engine
+                const editListeners = new Set<string>()
+                ScriptingEngineState.editListeners = editListeners
+                luaEngine.global.set('__registerEditListener', (eventType: string) => {
+                    editListeners.add(eventType)
+                })
                 declareAPI = (name:string, func:Function) => {
                     luaEngine.global.set(name, func)
                 }
@@ -120,6 +126,14 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 ScriptingEngineState.setVar(key, value)
+            })
+            declareAPI('setChatVarChanged', (id:string,key:string, value:string) => {
+                if(!ScriptingSafeIds.has(id) && !ScriptingEditDisplayIds.has(id)){
+                    return
+                }
+                if(ScriptingEngineState.setVar(key, value) === true){
+                    return true
+                }
             })
             declareAPI('getGlobalVar', (id:string, key:string) => {
                 return getGlobalChatVar(key)
@@ -172,6 +186,27 @@ export async function runScripted(code:string, arg:{
                     time: chat.time ?? 0
                 }
                 return JSON.stringify(data)
+            })
+
+            declareAPI('getChatData', (id:string, index:number) => {
+                const chat = ScriptingEngineState.chat.message.at(index)
+                return chat?.data ?? ''
+            })
+
+            declareAPI('getChatRole', (id:string, index:number) => {
+                const chat = ScriptingEngineState.chat.message.at(index)
+                return chat?.role ?? ''
+            })
+
+            declareAPI('getRecentChatsMain', (id:string, count:number) => {
+                const chats = ScriptingEngineState.chat.message
+                const safeCount = Math.max(0, Math.floor(count || 0))
+                const start = Math.max(0, chats.length - safeCount)
+                return JSON.stringify(chats.slice(start).map((v) => ({
+                    role: v.role,
+                    data: v.data,
+                    time: v.time ?? 0,
+                })))
             })
 
             declareAPI('setChat', (id:string, index:number, value:string) => {
@@ -261,9 +296,11 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const realValue = JSON.parse(value)
+                const previousMessages = ScriptingEngineState.chat.message
 
-                ScriptingEngineState.chat.message = realValue.map((v) => {
+                ScriptingEngineState.chat.message = realValue.map((v, index) => {
                     return {
+                        ...previousMessages[index],
                         role: v.role,
                         data: v.data
                     }
@@ -1086,10 +1123,21 @@ export async function runScripted(code:string, arg:{
                     case 'editDisplay':
                     case 'editInput':
                     case 'editOutput':{
+                        if (!ScriptingEngineState.editListeners?.has(mode)) {
+                            res = data
+                            break
+                        }
                         const func = luaEngine.global.get('callListenMain')
                         if(func){
-                            res = await func(mode, accessKey, JSON.stringify(data), JSON.stringify(meta))
-                            res = JSON.parse(res)
+                            // editDisplay receives and returns raw strings.
+                            const directString = mode === 'editDisplay'
+                            const value = directString ? data : JSON.stringify(data)
+                            const serializedMeta = JSON.stringify(meta)
+
+                            res = await func(mode, accessKey, value, serializedMeta)
+                            if (!directString) {
+                                res = JSON.parse(res)
+                            }
                         }
                         break
                     }
@@ -1233,6 +1281,10 @@ function getFullChat(id)
     return json.decode(getFullChatMain(id))
 end
 
+function getRecentChats(id, count)
+    return json.decode(getRecentChatsMain(id, count))
+end
+
 function setFullChat(id, value)
     setFullChatMain(id, json.encode(value))
 end
@@ -1278,21 +1330,25 @@ local editOutputFuncs = {}
 function listenEdit(type, func)
     if type == 'editRequest' then
         editRequestFuncs[#editRequestFuncs + 1] = func
+        __registerEditListener(type)
         return
     end
 
     if type == 'editDisplay' then
         editDisplayFuncs[#editDisplayFuncs + 1] = func
+        __registerEditListener(type)
         return
     end
 
     if type == 'editInput' then
         editInputFuncs[#editInputFuncs + 1] = func
+        __registerEditListener(type)
         return
     end
 
     if type == 'editOutput' then
         editOutputFuncs[#editOutputFuncs + 1] = func
+        __registerEditListener(type)
         return
     end
 
@@ -1307,6 +1363,11 @@ end
 function setState(id, name, value)
     local escapedName = "__"..name
     setChatVar(id, escapedName, json.encode(value))
+end
+
+function setStateChanged(id, name, value)
+    local escapedName = "__"..name
+    return setChatVarChanged(id, escapedName, json.encode(value))
 end
 
 function async(callback)
@@ -1339,29 +1400,39 @@ function async(callback)
     end
 end
 
-callListenMain = async(function(type, id, value, meta)
-    local realValue = json.decode(value)
+callListenMain = async(function(eventType, id, value, meta)
+    local realValue = value
     local realMeta = json.decode(meta)
 
-    if type == 'editRequest' then
+    if eventType == 'editDisplay' then
+        local realValue = value
+        for _, func in ipairs(editDisplayFuncs) do
+            local output = func(id, realValue, realMeta)
+            local outputType = type(output)
+            if outputType == 'string' then
+                realValue = output
+            else
+                print('Error: Lua editDisplay must return a string, received ' .. outputType)
+            end
+        end
+        return realValue
+    end
+
+    realValue = json.decode(value)
+
+    if eventType == 'editRequest' then
         for _, func in ipairs(editRequestFuncs) do
             realValue = func(id, realValue, realMeta)
         end
     end
 
-    if type == 'editDisplay' then
-        for _, func in ipairs(editDisplayFuncs) do
-            realValue = func(id, realValue, realMeta)
-        end
-    end
-
-    if type == 'editInput' then
+    if eventType == 'editInput' then
         for _, func in ipairs(editInputFuncs) do
             realValue = func(id, realValue, realMeta)
         end
     end
 
-    if type == 'editOutput' then
+    if eventType == 'editOutput' then
         for _, func in ipairs(editOutputFuncs) do
             realValue = func(id, realValue, realMeta)
         end
@@ -1484,7 +1555,7 @@ class PyodideContext{
         if(this.inited){
             return;
         }
-        const id = crypto.randomUUID();
+        const id = v4();
         return new Promise<void>((resolve, reject) => {
             this.worker.onmessage = (event:MessageEvent) => {
                 if(event.data.id !== id){
@@ -1507,7 +1578,7 @@ class PyodideContext{
         });
     }
     async python(call:string){
-        const id = crypto.randomUUID();
+        const id = v4();
         return new Promise<any>((resolve, reject) => {
             this.worker.onmessage = (event:MessageEvent) => {
                 if(event.data.id !== id){

@@ -2,11 +2,11 @@ import { globalFetch } from "src/ts/globalApi.svelte";
 import { runEmbedding } from "../transformers";
 import { appendLastPath } from "src/ts/util";
 import { getDatabase } from "src/ts/storage/database.svelte";
-import { makeHashedStorageKey, readPersistentJson, writePersistentJson } from "src/ts/storage/persistentKv";
+import { makeHashedStorageKey, readPersistentJson, readPersistentJsonMany, writePersistentJson } from "src/ts/storage/persistentKv";
 import { isContextModel, getContextProvider } from "./contextualEmbedding";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 
-export type HypaModel = 'custom'|'ada'|'openai3small'|'openai3large'|'MiniLM'|'MiniLMGPU'|'nomic'|'nomicGPU'|'bgeSmallEn'|'bgeSmallEnGPU'|'bgem3'|'bgem3GPU'|'multiMiniLM'|'multiMiniLMGPU'|'bgeM3Ko'|'bgeM3KoGPU'|'voyageContext3'
+export type HypaModel = 'custom'|'ada'|'openai3small'|'openai3large'|'MiniLM'|'MiniLMGPU'|'nomic'|'nomicGPU'|'bgeSmallEn'|'bgeSmallEnGPU'|'bgem3'|'bgem3GPU'|'multiMiniLM'|'multiMiniLMGPU'|'bgeM3Ko'|'bgeM3KoGPU'|'voyageContext3'|'voyageContext4'
 
 // In a typical environment, bge-m3 is a heavy model.
 // If your GPU can't handle this model, you'll see errror below.
@@ -40,6 +40,22 @@ export const localModels = {
 export const hypaVectorCache = new Map<string, memoryVector>();
 const hypaVectorCachePrefix = 'cache/hypa-vector/';
 
+const MAX_ERROR_BODY_LENGTH = 300
+
+// Embedding API error bodies are surfaced in the chat UI; keep them short.
+export function truncateErrorBody(data: unknown): string {
+    let text: string
+    try {
+        text = typeof data === 'string' ? data : JSON.stringify(data)
+    } catch {
+        text = String(data)
+    }
+    text = text ?? String(data)
+    return text.length > MAX_ERROR_BODY_LENGTH
+        ? `${text.slice(0, MAX_ERROR_BODY_LENGTH)}… (${text.length} chars)`
+        : text
+}
+
 export async function getPersistedHypaVector(cacheKey: string): Promise<memoryVector | undefined> {
     if (hypaVectorCache.has(cacheKey)) {
         return hypaVectorCache.get(cacheKey)
@@ -51,6 +67,32 @@ export async function getPersistedHypaVector(cacheKey: string): Promise<memoryVe
     }
     hypaVectorCache.set(cacheKey, payload.value)
     return payload.value
+}
+
+// getPersistedHypaVector for many keys: misses are read in bulk instead of
+// one server request each (thousands of asset names over a remote link).
+export async function getPersistedHypaVectors(cacheKeys: string[]): Promise<(memoryVector | undefined)[]> {
+    const result = cacheKeys.map((key) => hypaVectorCache.get(key))
+    const missing: number[] = []
+    for (let i = 0; i < cacheKeys.length; i++) {
+        if (result[i] === undefined) missing.push(i)
+    }
+    if (missing.length === 0) return result
+    const storageKeys = await Promise.all(missing.map((i) => makeHashedStorageKey(hypaVectorCachePrefix, cacheKeys[i])))
+    let rows: Map<string, { key: string, value: memoryVector }>
+    try {
+        rows = await readPersistentJsonMany<{ key: string, value: memoryVector }>(storageKeys)
+    } catch {
+        for (const i of missing) result[i] = await getPersistedHypaVector(cacheKeys[i])
+        return result
+    }
+    missing.forEach((i, j) => {
+        const payload = rows.get(storageKeys[j])
+        if (!payload || payload.key !== cacheKeys[i]) return
+        hypaVectorCache.set(cacheKeys[i], payload.value)
+        result[i] = payload.value
+    })
+    return result
 }
 
 export async function setPersistedHypaVector(cacheKey: string, value: memoryVector) {
@@ -163,7 +205,7 @@ export class HypaProcesser{
     
     
         if(!gf.ok){
-            throw JSON.stringify(gf.data)
+            throw new Error(truncateErrorBody(gf.data))
         }
     
         const result:number[][] = []
@@ -188,8 +230,8 @@ export class HypaProcesser{
         const db = getDatabase()
         const suffix = (this.model === 'custom' && db.hypaCustomSettings?.model?.trim()) ? `-${db.hypaCustomSettings.model.trim()}` : ""
 
-        for(let i=0;i<texts.length;i++){
-            const itm = await getPersistedHypaVector(texts[i] + '|' + this.model + suffix)
+        const persisted = await getPersistedHypaVectors(texts.map((text) => text + '|' + this.model + suffix))
+        for(const itm of persisted){
             if(itm){
                 itm.alreadySaved = true
                 this.vectors.push(itm)
