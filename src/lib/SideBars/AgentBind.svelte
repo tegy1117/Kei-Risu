@@ -6,6 +6,9 @@
     import { DBState, selectedCharID } from "src/ts/stores.svelte";
     import SelectInput from "../UI/GUI/SelectInput.svelte";
     import ShButton from "../UI/GUI/ShButton.svelte";
+    import { groupByFolder } from "src/ts/folders";
+
+    const groups = $derived(groupByFolder(DBState.db.agentPresets.map(p => p.folderId), DBState.db.agentPresetFolders ?? []));
 
     const currentChat = $derived(
         DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage]
@@ -30,8 +33,15 @@
         <div class="flex-1 min-w-0">
             <SelectInput value={boundId} onchange={(event) => bindAgentPreset(event.currentTarget.value)}>
                 <option value="">{language.none}</option>
-                {#each DBState.db.agentPresets as preset (preset.id)}
-                    <option value={preset.id}>{preset.name}</option>
+                {#each groups as group (group.folder?.id ?? '')}
+                    {#if group.indexes.length}
+                        <optgroup label={group.folder?.name ?? language.folderUncategorized}>
+                            {#each group.indexes as index (DBState.db.agentPresets[index].id)}
+                                {@const preset = DBState.db.agentPresets[index]}
+                                <option value={preset.id}>{preset.name}</option>
+                            {/each}
+                        </optgroup>
+                    {/if}
                 {/each}
                 {#if isDangling}<option value={boundId}>{language.agent.unbound}</option>{/if}
             </SelectInput>

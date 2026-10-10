@@ -6,6 +6,12 @@
 
 An Agent preset runs stages in order. Worker stages before **Main Output** are required pre-stages. Worker stages after Main Output are optional post-stages.
 
+## Organizing presets and the main prompt
+
+Agent settings use the same folder list as models, prompts, and modules. Drag folders or presets, or use the move up/down menus to reorder them. Moving between folders, search, and collapsing folders are supported. Deleting a folder keeps its presets uncategorized. Normal and side-chat selectors follow the same folders and order; existing chat bindings remain unchanged.
+
+The main output's prompt mapping selector is read-only. Its prompt follows the chat's prompt selection. Prior-response connections and worker prompt/model selections remain editable.
+
 ## Run status
 
 | Status | Meaning |

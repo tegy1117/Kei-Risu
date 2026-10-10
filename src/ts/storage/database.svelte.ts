@@ -209,6 +209,7 @@ export function setDatabase(data:Database){
     if(!Array.isArray(data.agentPresets)){
         data.agentPresets = []
     }
+    data.agentPresetFolders ??= []
     for(const preset of data.agentPresets){
         preset.id ||= uuidv4()
         preset.name ||= 'Agent Preset'
@@ -1603,6 +1604,7 @@ export interface Database{
     }[]
     modelPresets: ModelPreset[]
     agentPresets: AgentPreset[]
+    agentPresetFolders?: PromptPresetFolder[]
     defaultAgentPresetId?: string
     /** User-defined groups for organizing model presets. */
     modelPresetFolders?: PromptPresetFolder[]

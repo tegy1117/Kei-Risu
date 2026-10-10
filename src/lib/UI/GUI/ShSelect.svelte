@@ -37,7 +37,7 @@
 
     let selectEl: HTMLSelectElement | undefined = $state();
     let open = $state(false);
-    let extractedOptions: { value: string; label: string }[] = $state([]);
+    let extractedOptions: { value: string; label: string; group?: string; groupIndex: number }[] = $state([]);
     let highlightedIndex = $state(-1);
     let triggerEl: HTMLDivElement | undefined = $state();
     let dropdownEl: HTMLDivElement | undefined = $state();
@@ -50,9 +50,12 @@
 
     function extractOptions() {
         if (!selectEl) return;
+        const groups = Array.from(selectEl.querySelectorAll('optgroup'));
         extractedOptions = Array.from(selectEl.options).map(o => ({
             value: o.value,
             label: o.textContent?.trim() ?? o.value,
+            group: o.closest('optgroup')?.label,
+            groupIndex: groups.indexOf(o.closest('optgroup')),
         }));
     }
 
@@ -250,6 +253,9 @@
             style={dropdownStyle}
         >
             {#each extractedOptions as opt, i}
+                {#if opt.group !== undefined && opt.groupIndex !== extractedOptions[i - 1]?.groupIndex}
+                    <div class="px-2 pt-2 pb-1 text-xs font-medium text-textcolor2" role="presentation">{opt.group}</div>
+                {/if}
                 <button
                     id={getOptionId(i)}
                     role="option"

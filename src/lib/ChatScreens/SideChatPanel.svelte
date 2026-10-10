@@ -10,8 +10,10 @@
     import { selectedSideOrigin, snapshotSideOrigin, prepareSideProgram } from 'src/ts/sideChat/prepare.svelte'
     import { sideChatPanel, sideChatSessions, sideChatDetails, sideChatLimit, sideChatConnectionError, sideApi, acceptSideSession, refreshSideChats, openSideSession, isSideRunning, setSideChatLimit } from 'src/ts/sideChat/client'
     import type { SideChatSelection } from 'src/ts/sideChat/core'
+    import { groupByFolder } from 'src/ts/folders'
 
     const t = language.sideChat
+    const agentGroups = $derived(groupByFolder(DBState.db.agentPresets.map(p => p.folderId), DBState.db.agentPresetFolders ?? []))
     let text = $state(''), error = $state(''), busy = $state(false), limitInput = $state(3)
     let modelId = $state(''), promptId = $state(''), agentId = $state('')
     let formKey = ''
@@ -113,7 +115,19 @@
     <div class="configuration">
         <label>{t.model}<select bind:value={modelId} disabled={busy || generating} onchange={saveSelection}><option value="">{t.choose}</option>{#each DBState.db.modelPresets as preset}<option value={preset.id}>{preset.name}</option>{/each}</select></label>
         <label>{t.prompt}<select bind:value={promptId} disabled={busy || generating} onchange={saveSelection}><option value="">{t.choose}</option>{#each DBState.db.botPresets as preset}<option value={preset.id}>{preset.name}</option>{/each}</select></label>
-        <label>{t.agent}<select bind:value={agentId} disabled={busy || generating} onchange={saveSelection}><option value="">{t.noAgent}</option>{#each DBState.db.agentPresets as preset}<option value={preset.id}>{preset.name}</option>{/each}</select></label>
+        <label>{t.agent}<select bind:value={agentId} disabled={busy || generating} onchange={saveSelection}>
+            <option value="">{t.noAgent}</option>
+            {#each agentGroups as group (group.folder?.id ?? '')}
+                {#if group.indexes.length}
+                    <optgroup label={group.folder?.name ?? language.folderUncategorized}>
+                        {#each group.indexes as index (DBState.db.agentPresets[index].id)}
+                            {@const preset = DBState.db.agentPresets[index]}
+                            <option value={preset.id}>{preset.name}</option>
+                        {/each}
+                    </optgroup>
+                {/if}
+            {/each}
+        </select></label>
         <p class="hint">{t.scope}</p>
     </div>
     <div class="messages" bind:this={scrollElement} aria-live="polite">

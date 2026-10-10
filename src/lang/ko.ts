@@ -52,6 +52,7 @@ export const languageKorean = {
     defaultSaved: "기본 에이전트 프리셋을 저장했습니다.",
     currentPrompt: "현재 채팅 프롬프트",
     mappingPrompt: "프롬프트 연결 설정",
+    mainPromptInherited: "메인 출력은 채팅에서 선택한 프롬프트를 사용합니다. 프롬프트 변경은 채팅의 프롬프트 선택에서 할 수 있습니다.",
     sourceOutputs: "선행 응답 연결",
     addConnection: "연결 추가",
     connectedAgent: "선행 에이전트",

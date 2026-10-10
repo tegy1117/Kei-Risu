@@ -33,6 +33,8 @@ export interface AgentStage {
 export interface AgentPreset {
     id: string
     name: string
+    /** Optional membership in database.agentPresetFolders; array order controls display order. */
+    folderId?: string
     maxParallel: number
     stages: AgentStage[]
 }

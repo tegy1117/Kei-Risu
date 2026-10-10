@@ -1,9 +1,9 @@
 <script lang="ts">
     import { onMount } from 'svelte'
     import { v4 } from 'uuid'
-    import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, Trash2Icon } from '@lucide/svelte'
+    import { ArrowDownIcon, ArrowLeftIcon, ArrowUpIcon, PlusIcon, Trash2Icon } from '@lucide/svelte'
     import { language } from 'src/lang'
-    import { AgentPresetEditId, DBState } from 'src/ts/stores.svelte'
+    import { AgentPresetEditId, DBState, selectedCharID } from 'src/ts/stores.svelte'
     import SettingPage from 'src/lib/UI/GUI/SettingPage.svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import ShInput from 'src/lib/UI/GUI/ShInput.svelte'
@@ -12,8 +12,14 @@
     import { saveCurrentPreset } from 'src/ts/storage/database.svelte'
     import type { AgentPipelineNode, AgentPostPlacement, AgentPreset, AgentWorkerNode } from 'src/ts/agent/types'
     import { createAgentPreset, sanitizeAgentInfoBindings, validateAgentPreset } from 'src/ts/agent/pipeline'
+    import FolderedList, { type FolderedItemPlacement } from 'src/lib/UI/FolderedList.svelte'
+    import { requestImmediateSave } from 'src/ts/globalApi.svelte'
 
-    let mappingPromptId = $state(DBState.db.botPresets?.[DBState.db.botPresetsId]?.id ?? '')
+    let view = $state<'list' | 'edit'>('list')
+    const folders = $derived(DBState.db.agentPresetFolders ?? [])
+    const currentChat = $derived(DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage])
+    const mappingPrompt = $derived(DBState.db.botPresets.find(p => p.id === currentChat?.bindedBotPreset) ?? DBState.db.botPresets[DBState.db.botPresetsId])
+    const mappingPromptId = $derived(mappingPrompt?.id ?? '')
     let draggedNodeId = $state('')
 
     onMount(() => saveCurrentPreset())
@@ -36,6 +42,16 @@
         const created = createAgentPreset(language.agent.newPreset)
         DBState.db.agentPresets.push(created)
         $AgentPresetEditId = created.id
+        view = 'edit'
+        void requestImmediateSave()
+    }
+
+    function applyPlacements(placements: FolderedItemPlacement[]){
+        const presets = DBState.db.agentPresets
+        if(placements.length !== presets.length) return
+        DBState.db.agentPresets = placements.map(({ index, folderId }) => ({ ...presets[index], folderId }))
+        // Selection and chat bindings use stable IDs, so reordering cannot rebind them.
+        void requestImmediateSave()
     }
 
     function duplicatePreset(source: AgentPreset){
@@ -61,13 +77,18 @@
         }
         DBState.db.agentPresets.push(copy)
         $AgentPresetEditId = copy.id
+        view = 'edit'
+        void requestImmediateSave()
     }
 
     function removePreset(id: string){
         const index = DBState.db.agentPresets.findIndex((entry) => entry.id === id)
         if(index < 0) return
         DBState.db.agentPresets.splice(index, 1)
-        $AgentPresetEditId = DBState.db.agentPresets[Math.max(0, index - 1)]?.id ?? ''
+        if($AgentPresetEditId === id){
+            $AgentPresetEditId = DBState.db.agentPresets[Math.max(0, index - 1)]?.id ?? ''
+        }
+        void requestImmediateSave()
     }
 
     function addStage(){
@@ -223,19 +244,28 @@
 </script>
 
 <SettingPage title={language.agent.menu}>
-    <div class="flex gap-2 items-center mt-2">
-        <ShSelect className="flex-1" value={$AgentPresetEditId ?? ''} onchange={(event) => { $AgentPresetEditId = event.currentTarget.value }}>
-            <OptionInput value="">{language.none}</OptionInput>
-            {#each DBState.db.agentPresets as entry (entry.id)}
-                <OptionInput value={entry.id}>{entry.name}</OptionInput>
-            {/each}
-        </ShSelect>
-        <ShButton size="icon" onclick={addPreset} title={language.agent.newPreset}><PlusIcon size={18}/></ShButton>
-        {#if preset}
-            <ShButton size="icon" onclick={() => duplicatePreset(preset!)} title={language.agent.duplicate}><CopyIcon size={18}/></ShButton>
-            <ShButton size="icon" variant="destructive" onclick={() => removePreset(preset!.id)} title={language.agent.delete}><Trash2Icon size={18}/></ShButton>
-        {/if}
-    </div>
+    {#if view === 'list'}
+        <FolderedList
+            {folders}
+            itemFolderIds={DBState.db.agentPresets.map(p => p.folderId)}
+            itemSearchTexts={DBState.db.agentPresets.map(p => p.name)}
+            selectedIndex={DBState.db.agentPresets.findIndex(p => p.id === $AgentPresetEditId)}
+            storageKey="risu-agent-preset-folders-collapsed"
+            onSelect={(index) => { $AgentPresetEditId = DBState.db.agentPresets[index].id; view = 'edit' }}
+            onItemsChange={applyPlacements}
+            onFoldersChange={(next) => { DBState.db.agentPresetFolders = next; void requestImmediateSave() }}
+            onDuplicate={(index) => duplicatePreset(DBState.db.agentPresets[index])}
+            onDelete={(index) => removePreset(DBState.db.agentPresets[index].id)}
+        >
+            {#snippet actions()}
+                <ShButton size="sm" onclick={addPreset}><PlusIcon />{language.agent.newPreset}</ShButton>
+            {/snippet}
+            {#snippet itemContent(index)}
+                <span class="min-w-0 grow truncate">{DBState.db.agentPresets[index].name}</span>
+            {/snippet}
+        </FolderedList>
+    {:else}
+        <ShButton size="sm" variant="ghost" onclick={() => { view = 'list'; void requestImmediateSave() }}><ArrowLeftIcon />{language.backToList}</ShButton>
 
     {#if preset}
         <div class="mt-5 text-sm text-textcolor2">{language.name}</div>
@@ -312,9 +342,11 @@
                                 {/if}
                             {:else}
                                 <div class="text-xs text-textcolor2">{language.agent.mappingPrompt}</div>
-                                <ShSelect bind:value={mappingPromptId}>
-                                    {#each DBState.db.botPresets as prompt (prompt.id)}<OptionInput value={prompt.id}>{prompt.name}</OptionInput>{/each}
-                                </ShSelect>
+                                <select disabled value={mappingPromptId} aria-label={language.agent.mappingPrompt}
+                                    class="h-10 w-full rounded-md border border-darkborderc bg-transparent px-2.5 text-textcolor opacity-60 cursor-not-allowed">
+                                    <option value={mappingPromptId}>{mappingPrompt?.name ?? language.none}</option>
+                                </select>
+                                <div class="text-xs text-textcolor2">{language.agent.mainPromptInherited}</div>
                             {/if}
 
                             <div class="mt-2 border-t border-darkborderc pt-2">
@@ -369,5 +401,6 @@
         <ShButton className="mt-3" onclick={addStage}><PlusIcon size={16}/>{language.agent.addStage}</ShButton>
     {:else}
         <ShButton className="mt-5" onclick={addPreset}><PlusIcon size={16}/>{language.agent.newPreset}</ShButton>
+    {/if}
     {/if}
 </SettingPage>

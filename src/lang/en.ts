@@ -52,6 +52,7 @@ export const languageEnglish = {
         defaultSaved: "Default agent preset saved.",
         currentPrompt: "Current chat prompt",
         mappingPrompt: "Configure prompt mapping",
+        mainPromptInherited: "Main output uses the prompt selected for the chat. Change it using the chat's prompt selector.",
         sourceOutputs: "Prior response routing",
         addConnection: "Add connection",
         connectedAgent: "Prior agent",
