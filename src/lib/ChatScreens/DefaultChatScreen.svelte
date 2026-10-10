@@ -29,6 +29,8 @@ import { isMobile } from 'src/ts/platform'
     import CreatorQuote from "./CreatorQuote.svelte";
     import { stopTTS } from "src/ts/process/tts";
     import MainMenu from '../UI/MainMenu.svelte';
+    import { sideChatPanel } from 'src/ts/sideChat/client';
+    import { selectedSideOrigin } from 'src/ts/sideChat/prepare.svelte';
     import AssetInput from './AssetInput.svelte';
     import { scrollWithinContainer } from './scrollWithin';
     import { aiLawApplies, chatFoldedState, chatFoldedStateMessageIndex, downloadFile } from 'src/ts/globalApi.svelte';
@@ -1021,6 +1023,7 @@ import { isMobile } from 'src/ts/platform'
                      relied on the pre-redesign container class. Keep it so they can still find/anchor their UI,
                      and it scopes the timer re-flow rules in <style> below. -->
                 <div class="flex flex-wrap items-center gap-1 rounded-3xl border border-darkborderc bg-bgcolor px-2 py-1.5 transition-colors focus-within:border-textcolor plugin-compat-items-stretch">
+                <button class="shrink-0 px-2 py-1 text-sm rounded-full text-textcolor hover:bg-primary/20" aria-label={language.sideChat.title} onclick={() => sideChatPanel.set({ open: true, sessionId: null, origin: selectedSideOrigin() || undefined })}>{language.sideChat.title}</button>
                 {#if DBState.db.characters[$selectedCharID]?.chaId !== '§playground'}
                     <ShDropdownMenu bind:open={openMenu}>
                         <ShDropdownMenuTrigger>

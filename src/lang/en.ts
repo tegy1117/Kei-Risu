@@ -1,6 +1,15 @@
 import { helpEn } from "./help.en";
 
 export const languageEnglish = {
+    sideChat: {
+        title: 'Side Chat', card: 'Side Chat', newSession: 'New session', close: 'Close', sessions: 'Temporary sessions',
+        limit: 'Session limit', apply: 'Apply', model: 'Model', prompt: 'Prompt', agent: 'Agent', choose: 'Choose a preset', noAgent: 'No agent',
+        scope: 'Server-side conversation and agent stages. Tools, plugins and executable scripts are not run.',
+        explanation: 'Explore a separate conversation based on the source at your first send. It leaves the source unchanged. Sessions are temporary; branch one to keep it as a normal chat.',
+        missingOrigin: 'The source bot or conversation is unavailable.', answer: 'AI', agentProgress: 'Agent progress', input: 'Side-chat message (first send may be empty)',
+        branch: 'Branch as a chat', delete: 'Delete', stop: 'Stop', send: 'Send', preparing: 'Preparing…',
+        status: { idle: 'Ready', queued: 'Queued', running: 'Generating', done: 'Done', partial: 'Partial', failed: 'Failed', aborted: 'Stopped', interrupted: 'Interrupted' },
+    },
     formating: {
         main: "Main Prompt",
         jailbreak: "Jailbreak Prompt",

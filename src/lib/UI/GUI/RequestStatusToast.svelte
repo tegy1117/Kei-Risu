@@ -41,6 +41,7 @@
         aborted:    rs?.aborted ?? 'Cancelled',
     }
     const KIND_LABEL: Record<RequestKind, string> = {
+        side: language.sideChat?.title ?? 'Side Chat',
         main:      rs?.kindMain ?? 'Main',
         translate: rs?.kindTranslate ?? 'Translate',
         memory:    rs?.kindMemory ?? 'Memory',
@@ -106,6 +107,11 @@
     async function openOrigin(): Promise<void> {
         const target = origin
         if (!target) return
+        if (target.chatId.startsWith('side:')) {
+            const { openSideSession } = await import('src/ts/sideChat/client')
+            await openSideSession(target.chatId.slice(5))
+            return
+        }
         const { changeChar } = await import('src/ts/characters')
         const { changeChatTo } = await import('src/ts/globalApi.svelte')
         const { DBState, MobileGUIStack } = await import('src/ts/stores.svelte')

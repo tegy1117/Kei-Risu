@@ -2,6 +2,8 @@
     // A stable overlay keeps agents below their parent request. Only the
     // individual buttons capture touches; empty stack space passes through.
     import { onDestroy } from 'svelte'
+    import { startSideDiscovery } from 'src/ts/sideChat/client'
+    import { loadedStore } from 'src/ts/stores.svelte'
     import { isTouchDevice } from 'src/ts/stores.svelte'
     import { requestStatuses, isTerminalPhase, clearStatus } from 'src/ts/status/requestStatus'
     import RequestStatusStack from './RequestStatusStack.svelte'
@@ -9,6 +11,7 @@
     const RETENTION_MS = 4000
     const visible = $derived($requestStatuses.size > 0)
     const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    $effect(() => { if ($loadedStore) return startSideDiscovery() })
 
     function scheduleDismiss(id: string): void {
         if (dismissTimers.has(id)) return

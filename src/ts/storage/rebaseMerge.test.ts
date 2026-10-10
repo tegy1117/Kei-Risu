@@ -9,6 +9,18 @@ const toSave = (over: Partial<{ character: string[]; chat: [string, string][]; b
 })
 
 describe('mergeServerDbWithTrackedLocalChanges', () => {
+    test('retains new server branches alongside a local streaming chat and respects local deletions', () => {
+        const baseline = { characters: [chr('a', { chats: [{ id: 'current' }, { id: 'deleted' }] })] } as any
+        const server = { characters: [chr('a', { chats: [{ id: 'branch', _stub: true }, { id: 'current' }, { id: 'deleted' }] })] } as any
+        const local = { characters: [chr('a', { chatPage: 0, chats: [{ id: 'current', message: [{ data: 'streaming' }] }] })] } as any
+        const { mergedDb } = mergeServerDbWithTrackedLocalChanges(server, local, toSave({ chat: [['a', 'current']] }) as any, clone, chats => chats.map(c => ({ ...c, _placeholder: true })), new Set(), baseline)
+        const result = mergedDb.characters[0]
+        expect(result.chats.map(c => c.id)).toEqual(['branch', 'current'])
+        expect(result.chatPage).toBe(1)
+        expect(result.chats[0]).toMatchObject({ _placeholder: true })
+        expect(result.chats[1].message[0].data).toBe('streaming')
+        expect(local.characters[0].chatPage).toBe(0)
+    })
     test('root keys come from local, characters/presets/modules from the server unless tracked', () => {
         const server = { username: 'server', personaPrompt: 'server', botPresets: [{ id: 'sp' }], modules: [{ id: 'sm' }], characters: [chr('a', { desc: 'server' }), chr('b')] } as any
         const local = { username: 'local', personaPrompt: 'local', botPresets: [{ id: 'lp' }], modules: [{ id: 'lm' }], characters: [chr('a', { desc: 'local' }), chr('b')] } as any

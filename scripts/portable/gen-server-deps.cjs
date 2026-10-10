@@ -73,6 +73,9 @@ function collectExternals(entryFiles) {
             const spec = m[1] ?? m[2];
             if (spec.startsWith('.')) {
                 const resolved = path.resolve(path.dirname(file), spec);
+                // Built by build:side-chat and shipped inside dist/. The bundle
+                // contains its JS dependencies and only externalizes Node builtins.
+                if (resolved === path.resolve(appRoot, 'dist/side-chat-runtime.cjs')) continue;
                 if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
                     console.error(`Unresolvable relative require '${spec}' in ${file}`);
                     process.exit(1);

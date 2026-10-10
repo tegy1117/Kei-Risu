@@ -1,6 +1,15 @@
 import { helpKo } from "./help.ko";
 
 export const languageKorean = {
+  sideChat: {
+    title: '사이드채팅', card: '사이드 챗', newSession: '새 세션', close: '닫기', sessions: '임시 세션',
+    limit: '보관 개수', apply: '적용', model: '모델', prompt: '프롬프트', agent: '에이전트', choose: '프리셋 선택', noAgent: '사용 안 함',
+    scope: '서버에서 대화와 에이전트 단계를 실행합니다. 도구·플러그인·실행형 스크립트는 실행하지 않습니다.',
+    explanation: '첫 전송 시점의 원본을 기준으로 별도의 대화를 이어갑니다. 원본에는 영향을 주지 않습니다. 임시 세션을 계속 보관하려면 정식 채팅으로 분기하세요.',
+    missingOrigin: '원본 봇 또는 대화를 찾을 수 없습니다.', answer: 'AI', agentProgress: '에이전트 진행 상황', input: '사이드채팅 입력 (첫 전송은 비워도 됩니다)',
+    branch: '정식 채팅으로 분기', delete: '삭제', stop: '중지', send: '전송', preparing: '준비 중…',
+    status: { idle: '준비됨', queued: '대기 중', running: '생성중', done: '완료됨', partial: '부분 완료', failed: '실패', aborted: '중지됨', interrupted: '중단됨' },
+  },
   formating: {
     main: "메인 프롬프트",
     jailbreak: "탈옥 프롬프트",

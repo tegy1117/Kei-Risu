@@ -20,6 +20,10 @@ import {
 import { emptyModelBinding, legacySlotValue, parseLegacySlot } from 'src/ts/preset/types'
 
 const PRESET = { id: 'p-main', name: 'Main' } as any
+test('a promoted side chat retains its explicitly selected model under a legacy default', () => {
+    mockDb.nodeOnlyModelModeLock = 'legacy'
+    expect(resolveChatModelBinding({ sideChatBranch: true, useModelPreset: true, modelBinding: bindingWith('p-main') } as any, 'model')).toEqual({ kind: 'modelPreset', preset: PRESET })
+})
 
 function bindingWith(main?: string) {
     const b = emptyModelBinding()

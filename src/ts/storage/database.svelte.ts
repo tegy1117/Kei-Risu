@@ -1157,6 +1157,7 @@ export interface PromptPresetFolder {
 }
 
 export interface Database{
+    sideChatSessionLimit?: number
     characters: character[],
     apiType: string
     openAIKey: string
@@ -2359,6 +2360,8 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
 }
 
 export interface Chat{
+    sideChatBranch?: boolean
+    sideChatBranchRequestId?: string
     message: Message[]
     note:string
     name:string

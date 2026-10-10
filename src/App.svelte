@@ -40,6 +40,7 @@
     import LoadingOverlay from './lib/Others/LoadingOverlay.svelte';
     import Toaster from './lib/UI/GUI/Toaster.svelte';
     import RequestStatusToaster from './lib/UI/GUI/RequestStatusToaster.svelte';
+    import SideChatPanel from './lib/ChatScreens/SideChatPanel.svelte';
     import sendSound from './etc/send.mp3'
     import { RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes';
 
@@ -276,4 +277,5 @@
     {/if}
     <Toaster />
     <RequestStatusToaster />
+    {#if $loadedStore}<SideChatPanel />{/if}
 </main>

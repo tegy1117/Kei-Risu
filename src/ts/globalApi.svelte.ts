@@ -427,6 +427,8 @@ interface ImmediateSaveOptions {
 
 let requestImmediateSaveImpl: ((options?: ImmediateSaveOptions) => Promise<void> | void) = () => {}
 let flushSavesImpl: () => Promise<boolean> = async () => false
+let serverMutationImpl: (action: () => Promise<unknown>) => Promise<unknown> = async () => { throw new Error('Database saving is not ready.') }
+let serverMutationQueue: Promise<unknown> = Promise.resolve()
 let trackCharacterForSaveImpl: (chaId: string) => void = () => {}
 let patchSyncBaseline: Database | null = null
 let activeSavePatcher: RisuSavePatcher | null = null
@@ -544,6 +546,13 @@ export function flushSaves(): Promise<boolean> {
     return flushSavesImpl()
 }
 
+/** Serialize canonical server writes with autosave, then refresh its baseline. */
+export function withServerDatabaseMutation<T>(action: () => Promise<T>): Promise<T> {
+    const result = serverMutationQueue.catch(() => {}).then(() => serverMutationImpl(action)) as Promise<T>
+    serverMutationQueue = result
+    return result
+}
+
 /** Include this character in the next save even if nothing tracked it. */
 export function trackCharacterForSave(chaId: string) {
     trackCharacterForSaveImpl(chaId)
@@ -558,6 +567,7 @@ export async function saveDb() {
     let gotChannel = false
     const sessionID = v4()
     let saveInFlight: Promise<void> | null = null
+    let serverMutationDone: Promise<void> | null = null
     // Save attempts are numbered as they start; lastSavedSeq is the latest one
     // that ended 'saved'. flushSaves compares the two.
     let saveSeq = 0
@@ -1615,6 +1625,7 @@ export async function saveDb() {
         skipBroadcast?: boolean
         throwOnError?: boolean
     }) {
+        if (serverMutationDone) return serverMutationDone
         if (saveInFlight) {
             return saveInFlight
         }
@@ -1740,6 +1751,31 @@ export async function saveDb() {
 
     trackCharacterForSaveImpl = (chaId) => {
         if (chaId && !changeTracker.character.includes(chaId)) changeTracker.character.push(chaId)
+    }
+
+    serverMutationImpl = async (action) => {
+        if (!await flushSavesImpl()) throw new Error('Save current changes before changing the server database.')
+        let resume: () => void
+        serverMutationDone = new Promise<void>(resolve => { resume = resolve })
+        const baseline = patcher.baselineDb()
+        const archived = patcher.baselineArchivedCharacterIds()
+        try {
+            return await action()
+        } finally {
+            const pending = takeTrackedChanges()
+            try {
+                // Also reconcile an uncertain HTTP result: the server may have
+                // committed the mutation before the connection disappeared.
+                await rebaseTrackedLocalChangesOnLatestServerDb(null, getDatabase(), pending, archived, baseline)
+            } catch (error) {
+                requeueTrackedChanges(pending)
+                changed = true
+                throw error
+            } finally {
+                serverMutationDone = null
+                resume()
+            }
+        }
     }
 
     let savetrys = 0

@@ -3855,6 +3855,58 @@ const requestSlots = createRequestSlots({ getPool: async () => await loadDbCache
 requestSlots.registerRoutes(app, { auth: checkProxyAuth });
 const modelJobs = createModelJobs({ saveDir: savePath, logger, requestSlots });
 modelJobs.registerRoutes(app, { auth: checkProxyAuth });
+const { createSideChats } = require('./side-chats.cjs');
+const sideChats = createSideChats({
+    saveDir: savePath, requestSlots,
+    getDatabase: async () => {
+        if (!await loadDbCacheIfMissing()) throw new Error('Database not loaded.');
+        return dbCache[DB_HEX_KEY];
+    },
+    updateLimit: value => queueStorageOperation(async () => {
+        await loadDbCacheIfMissing();
+        const previous = dbCache[DB_HEX_KEY];
+        const next = { ...previous, sideChatSessionLimit: value };
+        databasePatchHashCache.update(previous, next, [{ op: 'add', path: '/sideChatSessionLimit', value }]);
+        dbCache[DB_HEX_KEY] = next;
+        try { await persistDbCacheWithChats(DB_HEX_KEY, 'database/database.bin'); }
+        catch (error) { dbCache[DB_HEX_KEY] = previous; throw error; }
+        dbEtag = computeDatabaseEtagFromObject(next);
+    }),
+    branch: (session, requestId) => queueStorageOperation(async () => {
+        await loadDbCacheIfMissing(); await ensureChatStore();
+        const database = dbCache[DB_HEX_KEY];
+        const characterIndex = database.characters.findIndex(c => c.chaId === session.characterId);
+        if (characterIndex < 0) throw Object.assign(new Error('Source bot no longer exists.'), { status: 404 });
+        const character = database.characters[characterIndex];
+        const chatId = 'side-branch-' + nodeCrypto.createHash('sha256').update(session.id + ':' + requestId).digest('hex').slice(0, 32);
+        const existing = character.chats.find(c => c.id === chatId);
+        if (existing) return { chatId, chat: structuredClone(fullChatStore.get(character.chaId)?.get(chatId) || existing) };
+        const chat = structuredClone(session.source.chat);
+        chat.id = chatId; chat.name = `${session.name} — Side Chat`; chat.lastDate = Date.now();
+        chat.message.push(...structuredClone(session.messages));
+        require('../../dist/side-chat-runtime.cjs').reissueMessageIds(chat, session.source.chat.message.map(m => m.chatId));
+        chat.sideChatBranch = true; chat.sideChatBranchRequestId = requestId;
+        chat.bindedBotPreset = session.selection.promptPresetId;
+        chat.boundAgentPresetId = session.selection.agentPresetId || undefined;
+        chat.useModelPreset = true;
+        chat.modelBinding = { main: session.selection.modelPresetId, sub: session.selection.modelPresetId, separateAux: false, aux: {} };
+        delete chat._placeholder; delete chat.isStreaming; delete chat.activeStreamingDisplayOptimizationMode;
+        const nextCharacter = { ...character, chats: [chatToStub(chat), ...character.chats], chatPage: character.chatPage + 1 };
+        const next = { ...database, characters: database.characters.map((c, i) => i === characterIndex ? nextCharacter : c) };
+        databasePatchHashCache.update(database, next, [{ op: 'replace', path: '/characters', value: next.characters }]);
+        dbCache[DB_HEX_KEY] = next;
+        if (!fullChatStore.has(character.chaId)) fullChatStore.set(character.chaId, new Map());
+        fullChatStore.get(character.chaId).set(chatId, chat);
+        try { await persistDbCacheWithChats(DB_HEX_KEY, 'database/database.bin'); }
+        catch (error) {
+            dbCache[DB_HEX_KEY] = database;
+            fullChatStore.get(character.chaId).delete(chatId); throw error;
+        }
+        dbEtag = computeDatabaseEtagFromObject(next);
+        return { chatId, chat };
+    }),
+});
+sideChats.registerRoutes(app, { auth: checkProxyAuth });
 
 // app.get('/api/password', async(req, res)=> {
 //     if(password === ''){
@@ -9178,6 +9230,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     process.on(sig, async () => {
         console.log(`[Server] Received ${sig}, flushing pending data...`);
         stopTunnel();
+        try { await sideChats.close(); } catch (e) { logger.error('[Server] Side-chat flush error:', e); }
         try { await flushPendingDb(); } catch (e) { logger.error('[Server] Flush error:', e); }
         try { checkpointWal('TRUNCATE'); } catch { /* non-fatal */ }
         process.exit(0);

@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { alertError, notifySuccess } from "../alert";
 import type { OobaChatCompletionRequestParams } from "../model/ooba";
 
-export type PromptItem = PromptItemPlain|PromptItemTyped|PromptItemChat|PromptItemAuthorNote|PromptItemChatML|PromptItemCache|PromptItemAgentInfo
+export type PromptItem = PromptItemPlain|PromptItemTyped|PromptItemChat|PromptItemSideChat|PromptItemAuthorNote|PromptItemChatML|PromptItemCache|PromptItemAgentInfo
 export type PromptType = PromptItem['type'];
 export type PromptSettings = {
     assistantPrefill: string
@@ -55,6 +55,10 @@ export interface PromptItemChat {
     rangeEnd: number|'end';
     chatAsOriginalOnSystem?: boolean;
     name?: string
+}
+
+export interface PromptItemSideChat extends Omit<PromptItemChat, 'type'> {
+    type: 'sideChat'
 }
 
 export interface PromptItemCache {

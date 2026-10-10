@@ -1,5 +1,6 @@
 import { createChatExecutionContext, getExecutionContext, withExecutionContext, bindExecutionContext, type ChatExecutionContext } from './executionContext.svelte'
 import { get } from "svelte/store";
+import { normalChatTemplate } from '../sideChat/core'
 import { type character, type MessageGenerationInfo, type Chat, type MessagePresetInfo, changeToPreset, setCurrentChat, type Message, normalizeChat, setPreset, type StreamingDisplayOptimizationMode } from "../storage/database.svelte";
 import { DBState } from '../stores.svelte';
 import { CharEmotion, selectedCharID } from "../stores.svelte";
@@ -513,7 +514,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
         'personaPrompt':([] as OpenAIChat[])
     }
 
-    let promptTemplate = safeStructuredClone(DBState.db.promptTemplate)
+    let promptTemplate = normalChatTemplate(safeStructuredClone(DBState.db.promptTemplate), !!currentChat.sideChatBranch)
     const usingPromptTemplate = !!promptTemplate
     if(promptTemplate){
         let hasPostEverything = false

@@ -129,6 +129,17 @@ export function mergeServerDbWithTrackedLocalChanges(
         }
         if (localChar) {
             const clonedLocalChar = clone(localChar)
+            // Keep conversations added on the server since our last sync,
+            // including side-chat branches created while this bot streams.
+            // Conversations present in the baseline but deleted locally stay deleted.
+            if (baselineDb && mergedIndex >= 0) {
+                const baselineIds = new Set(baselineDb.characters?.find(c => c?.chaId === charId)?.chats?.map(c => c.id) ?? [])
+                const localIds = new Set(clonedLocalChar.chats?.map(c => c.id) ?? [])
+                const added = mergedCharacters[mergedIndex].chats?.filter(c => c.id && !baselineIds.has(c.id) && !localIds.has(c.id)) ?? []
+                const selectedId = clonedLocalChar.chats?.[clonedLocalChar.chatPage]?.id
+                clonedLocalChar.chats = [...convertChats(clone(added)), ...(clonedLocalChar.chats ?? [])]
+                if (selectedId) clonedLocalChar.chatPage = clonedLocalChar.chats.findIndex(c => c.id === selectedId)
+            }
             overlaidFromLocal.add(clonedLocalChar)
             if (mergedIndex >= 0) {
                 mergedCharacters[mergedIndex] = clonedLocalChar

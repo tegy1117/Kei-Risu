@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { PromptItem, PromptItemChat, PromptRole } from "src/ts/process/prompt";
+    import type { PromptItem, PromptItemChat, PromptItemSideChat, PromptRole } from "src/ts/process/prompt";
     import OptionInput from "./GUI/OptionInput.svelte";
     import TextAreaInput from "./GUI/TextAreaInput.svelte";
     import SelectInput from "./GUI/SelectInput.svelte";
@@ -43,7 +43,7 @@
     }: Props = $props();
 
     const chatPromptChange = () => {
-        const currentprompt = promptItem as PromptItemChat
+        const currentprompt = promptItem as PromptItemChat | PromptItemSideChat
         if(currentprompt.rangeStart === -1000){
             currentprompt.rangeStart = 0
             currentprompt.rangeEnd = 'end'
@@ -77,6 +77,7 @@
         if(promptItem.type === 'chat'){
             return language.Chat
         }
+        if(promptItem.type === 'sideChat') return language.sideChat.card
         if(promptItem.type === 'persona'){
             return language.formating.personaPrompt
         }
@@ -262,7 +263,7 @@
                 promptItem.depth = 1
                 promptItem.role = 'all'
             }
-            if(promptItem.type === 'chat'){
+            if(promptItem.type === 'chat' || promptItem.type === 'sideChat'){
                 promptItem.rangeStart = -1000
                 promptItem.rangeEnd = 'end'
             }
@@ -278,6 +279,7 @@
             <OptionInput value="plain">{language.formating.plain}</OptionInput>
             <OptionInput value="jailbreak">{language.formating.jailbreak}</OptionInput>
             <OptionInput value="chat">{language.Chat}</OptionInput>
+            <OptionInput value="sideChat">{language.sideChat.card}</OptionInput>
             <OptionInput value="persona">{language.formating.personaPrompt}</OptionInput>
             <OptionInput value="description">{language.formating.description}</OptionInput>
             <OptionInput value="authornote">{language.formating.authorNote}</OptionInput>
@@ -328,7 +330,7 @@
                 <OptionInput value="system">{language.systemPrompt}</OptionInput>
             </SelectInput>
         {/if}
-        {#if promptItem.type === 'chat'}
+        {#if promptItem.type === 'chat' || promptItem.type === 'sideChat'}
             {#if promptItem.rangeStart !== -1000}
                 <span class="mt-2">{language.rangeStart}</span>
                 <NumberInput className="mt-2" bind:value={promptItem.rangeStart} />
@@ -336,14 +338,14 @@
                 {#if promptItem.rangeEnd === 'end'}
                     <NumberInput className="mt-2" value={0} marginBottom  disabled/>
                     <CheckInput name={language.untilChatEnd} check={true} onChange={() => {
-                        if(promptItem.type === 'chat'){
+                        if(promptItem.type === 'chat' || promptItem.type === 'sideChat'){
                             promptItem.rangeEnd = 0
                         }
                     }} />
                 {:else}
                     <NumberInput className="mt-2" bind:value={promptItem.rangeEnd} marginBottom />
                     <CheckInput name={language.untilChatEnd} check={false} onChange={() => {
-                        if(promptItem.type === 'chat'){
+                        if(promptItem.type === 'chat' || promptItem.type === 'sideChat'){
                             promptItem.rangeEnd = 'end'
                         }
                     }} />

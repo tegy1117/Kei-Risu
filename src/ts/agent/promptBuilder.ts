@@ -6,6 +6,7 @@ import { loadLoreBookV3Prompt as loadLoreBookV3PromptUnscoped } from '../process
 import type { AgentPipelineNode } from './types'
 import type { PromptItem, PromptRole } from '../process/prompt'
 import type { botPreset, character, Chat, customscript } from '../storage/database.svelte'
+import { normalChatTemplate } from '../sideChat/core'
 import { getPersonaPrompt as getPersonaPromptUnscoped } from '../util'
 const parseChatML = lazyFunction(() => parseChatMLUnscoped)
 const risuChatParser = lazyFunction(() => risuChatParserUnscoped)
@@ -95,7 +96,7 @@ export async function buildAgentPrompt(input: BuildAgentPromptInput): Promise<Bu
         .filter(Boolean)
         .join('\n\n')
     const persona = getPersonaPrompt()
-    const templates = promptPreset.promptTemplate ?? ([
+    const templates = normalChatTemplate(promptPreset.promptTemplate, !!chat.sideChatBranch) ?? ([
         { type: 'plain', type2: 'main', role: 'system', text: promptPreset.mainPrompt ?? '' },
         { type: 'description' },
         { type: 'persona' },

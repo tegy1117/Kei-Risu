@@ -52,7 +52,7 @@ export function resolveChatModelBinding(
     moduleId?: string,
 ): ResolvedBinding {
     const db = getDatabase()
-    const lock = db.nodeOnlyModelModeLock ?? 'none'
+    const lock = chat?.sideChatBranch ? 'none' : (db.nodeOnlyModelModeLock ?? 'none')
 
     // Per-module override. Wins over everything below — including mode 'model' —
     // because the user bound this specific module to this specific preset; a
