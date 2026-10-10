@@ -3,7 +3,7 @@
     import { getActiveHypaV3Preset } from "src/ts/process/memory/memoryPresets";
 
     import Suggestion from './Suggestion.svelte';
-    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, WrenchIcon } from "@lucide/svelte";
+    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MessageSquareIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, WrenchIcon } from "@lucide/svelte";
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
@@ -1023,7 +1023,6 @@ import { isMobile } from 'src/ts/platform'
                      relied on the pre-redesign container class. Keep it so they can still find/anchor their UI,
                      and it scopes the timer re-flow rules in <style> below. -->
                 <div class="flex flex-wrap items-center gap-1 rounded-3xl border border-darkborderc bg-bgcolor px-2 py-1.5 transition-colors focus-within:border-textcolor plugin-compat-items-stretch">
-                <button class="shrink-0 px-2 py-1 text-sm rounded-full text-textcolor hover:bg-primary/20" aria-label={language.sideChat.title} onclick={() => sideChatPanel.set({ open: true, sessionId: null, origin: selectedSideOrigin() || undefined })}>{language.sideChat.title}</button>
                 {#if DBState.db.characters[$selectedCharID]?.chaId !== '§playground'}
                     <ShDropdownMenu bind:open={openMenu}>
                         <ShDropdownMenuTrigger>
@@ -1036,6 +1035,9 @@ import { isMobile } from 'src/ts/platform'
                             {/snippet}
                         </ShDropdownMenuTrigger>
                         <ShDropdownMenuContent side="top" align="start" class="min-w-48 max-h-[70vh] overflow-y-auto">
+                            <ShDropdownMenuItem onSelect={() => sideChatPanel.set({ open: true, sessionId: null, origin: selectedSideOrigin() || undefined })}>
+                                <MessageSquareIcon /><span>{language.sideChat.title}</span>
+                            </ShDropdownMenuItem>
                             {#if DBState.db.characters[$selectedCharID].ttsMode === 'webspeech' || DBState.db.characters[$selectedCharID].ttsMode === 'elevenlab'}
                                 <ShDropdownMenuItem onSelect={() => stopTTS()}>
                                     <MicOffIcon /><span>{language.ttsStop}</span>
