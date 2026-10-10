@@ -1,16 +1,17 @@
+import { getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../process/executionScope'
 import { get } from 'svelte/store'
 import { v4 as uuidv4 } from 'uuid'
 import { alertError } from '../alert'
 import { selectedCharID } from '../stores.svelte'
-import { DBState } from '../stores.svelte'
-import { tokenize } from '../tokenizer'
+import { DBState as liveDBState } from '../stores.svelte'
+import { tokenize as tokenizeUnscoped } from '../tokenizer'
 import type { AgentMainNode, AgentNodeRunRecord, AgentPipelineNode, AgentPreset, AgentRunRecord, AgentWorkerNode } from './types'
 import { applyPostOutput, runWithConcurrency, validateAgentPreset } from './pipeline'
-import { applyAgentPresetRegex, buildAgentPrompt, type AgentOutputValue } from './promptBuilder'
-import { requestAgentModelPreset } from '../process/request/request'
+import { applyAgentPresetRegex, buildAgentPrompt as buildAgentPromptUnscoped, type AgentOutputValue } from './promptBuilder'
+import { requestAgentModelPreset as requestAgentModelPresetUnscoped } from '../process/request/request'
 import { applyExplicitPromptPresetParams } from '../process/request/modelPresetBinding'
 import { sayTTS } from '../process/tts'
-import { chatGenKey, endGeneration, isChatGenerating, startGeneration } from '../process/generationState'
+import { chatGenKey, endGeneration, generationStates, isChatGenerating, startGeneration } from '../process/generationState'
 import { addBadge, beginPostProcessingStatus, endStatus } from '../status/requestStatus'
 import { language } from 'src/lang'
 
@@ -23,6 +24,8 @@ export interface AgentMainPromptContext {
 }
 
 export interface RunAgentPipelineOptions {
+    generationId?: string
+    executionContext?: ChatExecutionContext
     signal?: AbortSignal
     continue?: boolean
     preview?: boolean
@@ -38,15 +41,22 @@ function findLastCharacterMessageIndex(messages: { role: string }[]): number {
 }
 
 async function countInputTokens(messages: { content: string }[]): Promise<number> {
+    const tokenize = bindExecutionContext(getExecutionContext(), () => tokenizeUnscoped, true)
     let total = 0
     for(const message of messages) total += await tokenize(message.content)
     return total
 }
 
 export async function runAgentPipeline(options: RunAgentPipelineOptions): Promise<boolean> {
+    const executionContext = options.executionContext ?? getExecutionContext()
+    const DBState = { db: executionContext?.db ?? liveDBState.db }
+    const requestAgentModelPreset = bindExecutionContext(executionContext, () => requestAgentModelPresetUnscoped, true)
+    const buildAgentPrompt = bindExecutionContext(executionContext, () => buildAgentPromptUnscoped, true)
+    const tokenize = bindExecutionContext(executionContext, () => tokenizeUnscoped, true)
+    const countTokens = bindExecutionContext(executionContext, countInputTokens)
     if(options.preview || options.previewPrompt) return options.runMain()
 
-    const charIndex = get(selectedCharID)
+    const charIndex = executionContext?.resolve()?.characterIndex ?? get(selectedCharID)
     const initialCharacter = DBState.db.characters[charIndex]
     const initialChatIndex = initialCharacter?.chatPage
     const initialChat = initialCharacter?.chats?.[initialChatIndex]
@@ -81,10 +91,11 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
         return false
     }
 
-    const generationId = uuidv4()
+    const generationId = options.generationId ?? uuidv4()
     const generationKey = chatGenKey(chat.id)
-    if(isChatGenerating(generationKey)) return false
-    startGeneration(generationKey, generationId)
+    const owner = get(generationStates).get(generationKey)
+    if(owner && owner.generationId !== options.generationId) return false
+    if (!isChatGenerating(generationKey)) startGeneration(generationKey, generationId)
     const startedAt = Date.now()
     const records = new Map<string, AgentNodeRunRecord>()
     preset.stages.forEach((stage, stageIndex) => {
@@ -155,7 +166,7 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
             const built = await buildAgentPrompt({ node, promptPreset, character: target.character, chat: target.chat, outputs, outputOrder })
             record.warnings = built.warnings
             run.warnings.push(...built.warnings.map((warning) => `${node.name}: ${warning}`))
-            record.inputTokens = await countInputTokens(built.messages)
+            record.inputTokens = await countTokens(built.messages)
             const effectivePreset = applyExplicitPromptPresetParams(storedModelPreset, promptPreset, node.usePromptPresetParams)
             const requestPreset = { ...effectivePreset, name: `${node.name} · ${storedModelPreset.name}` }
             const response = await requestAgentModelPreset({
@@ -163,6 +174,8 @@ export async function runAgentPipeline(options: RunAgentPipelineOptions): Promis
                 bias: {},
                 biasString: promptPreset.bias,
                 currentChar: target.character,
+                originChatId: chatId,
+                executionContext,
                 useStreaming: true,
                 chatId: `${generationId}:${node.id}`,
                 rememberToolUsage: DBState.db.rememberToolUsage,

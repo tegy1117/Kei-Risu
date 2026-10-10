@@ -1,4 +1,5 @@
-import { getDatabase } from "src/ts/storage/database.svelte";
+import { lazyFunction, getExecutionContext, withExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
+import { getDatabase as getDatabaseUnscoped } from "src/ts/storage/database.svelte";
 import { MCPClient, type JsonRPC, type MCPTool, type RPCToolCallContent } from "./mcplib";
 import { DBState } from "src/ts/stores.svelte";
 import { getModuleMcps } from "../modules";
@@ -8,7 +9,15 @@ import type { MCPClientLike } from "./internalmcp";
 import { sleep } from "src/ts/util";
 import { registeredCustomPluginMCPs } from "./pluginmcp";
 import { makeEncodedStorageKey, readPersistentJson, writePersistentJson } from "src/ts/storage/persistentKv";
-import { callManagedTool, callManagedToolDetailed, getManagedTools, type ManagedToolExecutionResult, type ToolExecutionContext } from "../tools/tools";
+import { callManagedTool, callManagedToolDetailed, getManagedTools as getManagedToolsUnscoped, type ManagedToolExecutionResult, type ToolExecutionContext } from "../tools/tools";
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const initializeMCPsUnscoped = initializeMCPs
+const callToolUnscoped = callTool
+const getManagedTools = lazyFunction(() => getManagedToolsUnscoped)
+const getMCPToolsUnscoped = getMCPTools
+const callMCPToolUnscoped = callMCPTool
+const getMCPMetaUnscoped = getMCPMeta
+
 
 export type MCPToolWithURL = MCPTool & {
     mcpURL: string;
@@ -17,6 +26,9 @@ export type MCPToolWithURL = MCPTool & {
 export const MCPs:Record<string,MCPClient|MCPClientLike> = {};
 
 export async function initializeMCPs(additionalMCPs?:string[]) {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const db = getDatabase()
     const mcpUrls = getModuleMcps()
     if(additionalMCPs && additionalMCPs.length > 0) {
@@ -136,6 +148,9 @@ export async function initializeMCPs(additionalMCPs?:string[]) {
 }
 
 export async function getMCPTools(additionalMCPs?:string[]) {
+    const executionContext = getExecutionContext()
+    const initializeMCPs = bindExecutionContext(executionContext, () => initializeMCPsUnscoped, true)
+
     await initializeMCPs(additionalMCPs);
     const tools:MCPToolWithURL[] = [];
     for(const key of Object.keys(MCPs)) {
@@ -152,6 +167,9 @@ export async function getMCPTools(additionalMCPs?:string[]) {
 }
 
 export async function getMCPMeta(additionalMCPs?:string[]) {
+    const executionContext = getExecutionContext()
+    const initializeMCPs = bindExecutionContext(executionContext, () => initializeMCPsUnscoped, true)
+
     await initializeMCPs(additionalMCPs);
     const meta:Record<string, typeof MCPClient.prototype.serverInfo> = {};
     for(const key of Object.keys(MCPs)) {
@@ -161,12 +179,16 @@ export async function getMCPMeta(additionalMCPs?:string[]) {
 }
 
 export async function callMCPTool(methodName:string, args:any):Promise<RPCToolCallContent[]> {
+    const executionContext = getExecutionContext()
+    const initializeMCPs = bindExecutionContext(executionContext, () => initializeMCPsUnscoped, true)
+    const callTool = bindExecutionContext(executionContext, () => callToolUnscoped, true)
+
     await initializeMCPs();
     for(const key of Object.keys(MCPs)) {
         const tools = await MCPs[key].getToolList();
         const tool = tools.find(t => t.name === methodName);
         if(tool) {
-            return await MCPs[key].callTool(methodName, args);
+            return await withExecutionContext(executionContext, () => MCPs[key].callTool(methodName, args));
         }
     }
     return  [{
@@ -177,6 +199,10 @@ export async function callMCPTool(methodName:string, args:any):Promise<RPCToolCa
 
 //Currently just a wrapper for getMCPTools, but can be extended later for more than MCPs
 export async function getTools(){
+    const executionContext = getExecutionContext()
+    const getManagedTools = bindExecutionContext(executionContext, () => getManagedToolsUnscoped, true)
+    const getMCPTools = bindExecutionContext(executionContext, () => getMCPToolsUnscoped, true)
+
     const [mcpTools, managedTools] = await Promise.all([getMCPTools(), getManagedTools()]);
     const counts = new Map<string, number>();
     for (const tool of [...mcpTools, ...managedTools]) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
@@ -188,6 +214,9 @@ export async function getTools(){
 
 //Currently just a wrapper for callMCPTool, but can be extended later for more than MCPs
 export async function callTool(methodName:string, args:any) {
+    const executionContext = getExecutionContext()
+    const callMCPTool = bindExecutionContext(executionContext, () => callMCPToolUnscoped, true)
+
     const managed = await callManagedTool(methodName, args);
     if (managed) return managed;
     return await callMCPTool(methodName, args);
@@ -207,12 +236,19 @@ export async function callToolDetailed(
     args: unknown,
     context?: ToolExecutionContext,
 ): Promise<ToolExecutionDetailed> {
+    const executionContext = getExecutionContext()
+    const callMCPTool = bindExecutionContext(executionContext, () => callMCPToolUnscoped, true)
+
     const managed = await callManagedToolDetailed(methodName, args, context)
     if (managed) return managed
     return { response: await callMCPTool(methodName, args), success: true }
 }
 
 export async function importMCPModule(){
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getMCPMeta = bindExecutionContext(executionContext, () => getMCPMetaUnscoped, true)
+
     const x = await alertInput('Please enter the URL of the MCP module to import:', [
         ['internal:aiaccess', 'LLM Call Client (internal:aiaccess)'],
         ['internal:risuai', 'Risu Access Client (internal:risuai)'],
@@ -314,6 +350,9 @@ export async function encodeToolExecution(
     executed: ToolExecutionDetailed,
     includeInModelHistory: boolean,
 ) {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const presentation = executed.presentation
     if (presentation?.showInChat === false && !includeInModelHistory) return ''
     return encodeToolCall({

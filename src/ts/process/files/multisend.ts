@@ -1,8 +1,5 @@
-import { getDatabase, setDatabase } from 'src/ts/storage/database.svelte';
-import { selectedCharID } from 'src/ts/stores.svelte';
-import { get } from 'svelte/store';
+import { createChatExecutionContext } from '../executionContext.svelte'
 import { sendChat } from '../index.svelte';
-import { endAllGenerations } from '../generationState';
 import { downloadFile } from 'src/ts/globalApi.svelte';
 import { HypaProcesser } from '../memory/hypamemory';
 import { BufferToText as BufferToText, selectMultipleFile } from 'src/ts/util';
@@ -20,9 +17,9 @@ async function sendPofile(arg:sendFileArg){
     let note = ''
     let speaker = ''
     let parseMode = 0
-    const db = getDatabase()
-    let currentChar = db.characters[get(selectedCharID)]
-    let currentChat = currentChar.chats[currentChar.chatPage]
+    const executionContext = createChatExecutionContext()
+    if (!executionContext) return
+    let currentChat = executionContext.resolve().chat
     const lines = arg.file.split('\n')
     for(let i=0;i<lines.length;i++){
         console.log(i)
@@ -43,12 +40,14 @@ async function sendPofile(arg:sendFileArg){
                 role: 'user',
                 data: text
             })
-            currentChar.chats[currentChar.chatPage] = currentChat
-            db.characters[get(selectedCharID)] = currentChar
-            endAllGenerations()
-            await sendChat(-1);
-            currentChar = db.characters[get(selectedCharID)]
-            currentChat = currentChar.chats[currentChar.chatPage]
+            const target = executionContext.resolve()
+            if (!target) return
+            target.chat.message = currentChat.message
+
+            await sendChat(-1, { executionContext });
+            const completed = executionContext.resolve()
+            if (!completed) return
+            currentChat = completed.chat
             const res = currentChat.message[currentChat.message.length-1]
             const msgStr = res.data.split('\n').filter((a) => {
                 return a !== ''

@@ -1,18 +1,31 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from './executionScope'
 import { get } from "svelte/store";
 import { CharEmotion, selectedCharID } from "../stores.svelte";
-import { type character, type customscript, getDatabase, getCurrentCharacter, getCurrentChat } from "../storage/database.svelte";
+import { type character, type customscript, getDatabase as getDatabaseUnscoped, getCurrentCharacter as getCurrentCharacterUnscoped, getCurrentChat as getCurrentChatUnscoped } from "../storage/database.svelte";
 import { downloadFile, loadAssetManifestItems } from "../globalApi.svelte";
 import { alertError, notifySuccess } from "../alert";
 import { language } from "src/lang";
 import { selectSingleFile } from "../util";
 import { assetRegex, type CbsConditions, risuChatParser as risuChatParserOrg, type simpleCharacterArgument } from "../parser/parser.svelte";
 import { hydrateAssetListsForCbs } from "../parser/assetListHydration";
-import { getModuleAssets, getModuleRegexScripts, getModules } from "./modules";
-import { getToolAssets, getToolRegexScripts } from './tools/features'
+import { getModuleAssets as getModuleAssetsUnscoped, getModuleRegexScripts as getModuleRegexScriptsUnscoped, getModules as getModulesUnscoped } from "./modules";
+import { getToolAssets as getToolAssetsUnscoped, getToolRegexScripts as getToolRegexScriptsUnscoped } from './tools/features'
 import { HypaProcesser } from "./memory/hypamemory";
-import { runLuaEditTrigger } from "./scriptings";
+import { runLuaEditTrigger as runLuaEditTriggerUnscoped } from "./scriptings";
 import { pluginV2 } from "../plugins/plugins.svelte";
-import { runTrigger } from "./triggers";
+import { runTrigger as runTriggerUnscoped } from "./triggers";
+const processScriptFullUnscoped = processScriptFull
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const getCurrentCharacter = lazyFunction(() => getCurrentCharacterUnscoped)
+const getCurrentChat = lazyFunction(() => getCurrentChatUnscoped)
+const getModuleAssets = lazyFunction(() => getModuleAssetsUnscoped)
+const getModuleRegexScripts = lazyFunction(() => getModuleRegexScriptsUnscoped)
+const getModules = lazyFunction(() => getModulesUnscoped)
+const getToolAssets = lazyFunction(() => getToolAssetsUnscoped)
+const getToolRegexScripts = lazyFunction(() => getToolRegexScriptsUnscoped)
+const runLuaEditTrigger = lazyFunction(() => runLuaEditTriggerUnscoped)
+const runTrigger = lazyFunction(() => runTriggerUnscoped)
+
 
 const dreg = /{{data}}/g
 const randomness = /\|\|\|/g
@@ -26,6 +39,9 @@ type pScript = {
 }
 
 export async function processScript(char:character, data:string, mode:ScriptMode, cbsConditions:CbsConditions = {}){
+    const executionContext = getExecutionContext()
+    const processScriptFull = bindExecutionContext(executionContext, () => processScriptFullUnscoped, true)
+
     return (await processScriptFull(char, data, mode, -1, cbsConditions)).data
 }
 
@@ -41,6 +57,9 @@ export function exportRegex(s?:customscript[]){
 }
 
 export async function importRegex(o?:customscript[]):Promise<customscript[]>{
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     o = o ?? []
     const filedata = (await selectSingleFile(['json']))?.data
     if(!filedata){
@@ -71,7 +90,7 @@ let bestMatchCache = new Map<string, string>()
 let processScriptCache = new Map<string, string>()
 
 function generateScriptCacheKey(scripts: customscript[], data: string, mode: ScriptMode, chatID = -1, cbsConditions: CbsConditions = {}) {
-    let hash = data + '|||' + mode + '|||';
+    let hash = (getExecutionContext()?.cacheKey ?? '') + '|||' + data + '|||' + mode + '|||';
     for (const script of scripts) {
         if(script.type !== mode){
             continue
@@ -99,6 +118,18 @@ export function resetScriptCache(){
 }
 
 export async function processScriptFull(char:character|simpleCharacterArgument, data:string, mode:ScriptMode, chatID = -1, cbsConditions:CbsConditions = {}){
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getModuleAssets = bindExecutionContext(executionContext, () => getModuleAssetsUnscoped, true)
+    const getModuleRegexScripts = bindExecutionContext(executionContext, () => getModuleRegexScriptsUnscoped, true)
+    const getModules = bindExecutionContext(executionContext, () => getModulesUnscoped, true)
+    const getToolAssets = bindExecutionContext(executionContext, () => getToolAssetsUnscoped, true)
+    const getToolRegexScripts = bindExecutionContext(executionContext, () => getToolRegexScriptsUnscoped, true)
+    const runLuaEditTrigger = bindExecutionContext(executionContext, () => runLuaEditTriggerUnscoped, true)
+    const runTrigger = bindExecutionContext(executionContext, () => runTriggerUnscoped, true)
+
     let db = getDatabase()
     let emoChanged = false
     data = await runLuaEditTrigger(char, mode, data, { index:chatID })

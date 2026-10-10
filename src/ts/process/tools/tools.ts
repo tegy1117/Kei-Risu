@@ -1,9 +1,10 @@
+import { lazyFunction, getExecutionContext, withExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
 import { alertConfirm, alertInput, alertSelect, notifyError, notifySuccess } from 'src/ts/alert'
 import { language } from 'src/lang'
 import { downloadFile, fetchNative, readImage, saveAsset, type FetchNativeArgs } from 'src/ts/globalApi.svelte'
 import { pluginCodeTranspiler } from 'src/ts/plugins/apiV3/transpiler'
 import { SandboxHost } from 'src/ts/plugins/apiV3/factory'
-import { getCurrentCharacter, getCurrentChat, getDatabase, setDatabase } from 'src/ts/storage/database.svelte'
+import { getCurrentCharacter as getCurrentCharacterUnscoped, getCurrentChat as getCurrentChatUnscoped, getDatabase as getDatabaseUnscoped, setDatabase } from 'src/ts/storage/database.svelte'
 import { safeStructuredClone } from 'src/ts/polyfill'
 import { selectSingleFile } from 'src/ts/util'
 import { v4 } from 'uuid'
@@ -40,6 +41,26 @@ import {
     toolAppGuestBootstrap,
 } from './toolApp'
 import { cancelToolInteractionsForOwner } from './interaction'
+const getActiveToolPackagesUnscoped = getActiveToolPackages
+const ensureRuntimeUnscoped = ensureRuntime
+const getCurrentChat = lazyFunction(() => getCurrentChatUnscoped)
+const getManualToolFunctionsUnscoped = getManualToolFunctions
+const callManagedToolDetailedUnscoped = callManagedToolDetailed
+const createToolInvocationUnscoped = createToolInvocation
+const executeAgentFunctionUnscoped = executeAgentFunction
+const makeToolApiUnscoped = makeToolApi
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const getCurrentCharacter = lazyFunction(() => getCurrentCharacterUnscoped)
+const requirePermissionUnscoped = requirePermission
+const sharedDatabaseFingerprintUnscoped = sharedDatabaseFingerprint
+const renderAgentPromptUnscoped = renderAgentPrompt
+const resolveAllowedToolsUnscoped = resolveAllowedTools
+const routeAgentOutputUnscoped = routeAgentOutput
+const applyAgentStateActionsUnscoped = applyAgentStateActions
+const readToolScopeStateUnscoped = readToolScopeState
+const writeToolScopeStateUnscoped = writeToolScopeState
+const getToolStatesUnscoped = getToolStates
+
 
 const namespacePattern = /^[A-Za-z0-9_-]+$/
 const functionPattern = /^[A-Za-z0-9_-]+$/
@@ -89,6 +110,9 @@ export interface ManagedToolExecutionResult {
     }
 }
 type ToolRuntime = {
+    key: string
+    toolId: string
+    chatContext?: ChatExecutionContext
     source: string
     host: SandboxHost
     handlers: Map<string, ToolHandler>
@@ -105,6 +129,7 @@ interface ToolInvocation {
     fn: RisuToolFunction
     runtime: ToolRuntime
     executionContext: ToolExecutionContext
+    chatContext?: ChatExecutionContext
     wireName: string
     cancel: (reason: string) => void
     cancelled: Promise<never>
@@ -402,6 +427,10 @@ function parameterSchema(fn: RisuToolFunction) {
 }
 
 export async function getManagedTools(): Promise<Array<MCPTool & { managedToolId: string }>> {
+    const executionContext = getExecutionContext()
+    const getActiveToolPackages = bindExecutionContext(executionContext, () => getActiveToolPackagesUnscoped, true)
+    const ensureRuntime = bindExecutionContext(executionContext, () => ensureRuntimeUnscoped, true)
+
     const output: Array<MCPTool & { managedToolId: string }> = []
     for (const { tool, functions } of getActiveToolPackages()) {
         try {
@@ -430,6 +459,11 @@ export function getManualToolFunctions() {
 }
 
 export async function callManualTool(toolId: string, functionId: string) {
+    const executionContext = getExecutionContext()
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getManualToolFunctions = bindExecutionContext(executionContext, () => getManualToolFunctionsUnscoped, true)
+    const callManagedToolDetailed = bindExecutionContext(executionContext, () => callManagedToolDetailedUnscoped, true)
+
     const candidate = getManualToolFunctions().find((item) => item.tool.id === toolId && item.fn.id === functionId)
     if (!candidate) throw new Error('This function is not available for manual launch.')
     if (candidate.fn.parameters.some((parameter) => parameter.required)) throw new Error('Manual functions cannot require arguments.')
@@ -450,6 +484,12 @@ export async function callManagedToolDetailed(
     args: unknown,
     context: ToolExecutionContext = { stack: [] },
 ): Promise<ManagedToolExecutionResult | null> {
+    const executionContext = getExecutionContext()
+    const getActiveToolPackages = bindExecutionContext(executionContext, () => getActiveToolPackagesUnscoped, true)
+    const createToolInvocation = bindExecutionContext(executionContext, () => createToolInvocationUnscoped, true)
+    const executeAgentFunction = bindExecutionContext(executionContext, () => executeAgentFunctionUnscoped, true)
+    const ensureRuntime = bindExecutionContext(executionContext, () => ensureRuntimeUnscoped, true)
+
     const active = getActiveToolPackages()
     for (const { tool, functions } of active) {
         const fn = functions.find((candidate) => toolWireName(tool.namespace, candidate.name) === wireName)
@@ -524,6 +564,9 @@ export async function callManagedTool(
     args: unknown,
     context?: ToolExecutionContext,
 ): Promise<RPCToolCallContent[] | null> {
+    const executionContext = getExecutionContext()
+    const callManagedToolDetailed = bindExecutionContext(executionContext, () => callManagedToolDetailedUnscoped, true)
+
     return (await callManagedToolDetailed(wireName, args, context))?.response ?? null
 }
 
@@ -578,8 +621,12 @@ function normalizeToolResult(value: unknown): RPCToolCallContent[] {
 }
 
 async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
+    const executionContext = getExecutionContext()
+    const makeToolApi = bindExecutionContext(executionContext, () => makeToolApiUnscoped, true)
+
     const source = tool.plugin?.source ?? ''
-    const previous = runtimes.get(tool.id)
+    const key = executionContext ? `${tool.id}:${executionContext.cacheKey}` : tool.id
+    const previous = runtimes.get(key)
     const runtimeMount = getToolAppRuntimeMount()
     if (previous?.source === source && (!runtimeMount || previous.iframe.parentElement === runtimeMount)) return previous
     if (previous) {
@@ -598,8 +645,8 @@ async function ensureRuntime(tool: RisuToolPackage): Promise<ToolRuntime> {
     ;(runtimeMount ?? document.body).appendChild(iframe)
     const bootstrap = (tool.plugin.apiVersion ?? 1) >= 2 ? `${toolAppGuestBootstrap}\n` : ''
     host.run(iframe, `${bootstrap}${compiled}\nawait risuai.__ready()`)
-    const runtime = { source, host, handlers, iframe }
-    runtimes.set(tool.id, runtime)
+    const runtime = { key, toolId: tool.id, chatContext: executionContext, source, host, handlers, iframe }
+    runtimes.set(key, runtime)
     await Promise.race([
         ready,
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Tool plugin initialization timed out.')), 3000)),
@@ -613,12 +660,12 @@ async function disposeInvocationView(invocation: ToolInvocation) {
     if (invocation.viewId) closeToolAppSession(invocation.viewId)
     invocation.viewOpen = false
     try {
-        if (runtimeOwnsView && runtimes.get(invocation.tool.id) === invocation.runtime) {
+        if (runtimeOwnsView && runtimes.get(invocation.runtime.key) === invocation.runtime) {
             await invocation.runtime.host.executeInIframe('document.body.replaceChildren()')
         }
     } catch {
         invocation.runtime.host.terminate()
-        if (runtimes.get(invocation.tool.id) === invocation.runtime) runtimes.delete(invocation.tool.id)
+        if (runtimes.get(invocation.runtime.key) === invocation.runtime) runtimes.delete(invocation.runtime.key)
     } finally {
         if (invocation.runtime.viewOwnerId === invocation.id) invocation.runtime.viewOwnerId = undefined
         invocation.viewId = undefined
@@ -648,6 +695,7 @@ function createToolInvocation(
         fn,
         runtime,
         executionContext,
+        chatContext: getExecutionContext(),
         wireName,
         cancelled: cancelledPromise,
         cancel: (reason: string) => {
@@ -656,7 +704,7 @@ function createToolInvocation(
             rejectCancellation(new Error(reason))
             cancelToolInteractionsForOwner(invocation.ownerId, reason)
             runtime.host.terminate()
-            if (runtimes.get(tool.id) === runtime) runtimes.delete(tool.id)
+            if (runtimes.get(runtime.key) === runtime) runtimes.delete(runtime.key)
         },
         characterFingerprint: snapshotFingerprint(getCurrentCharacter()),
         chatFingerprint: snapshotFingerprint(getCurrentChat()),
@@ -687,7 +735,7 @@ export class ToolInvocationApi {
 
     async openView(options: ToolAppViewOptions) {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'interactiveUi')
+        await this.inScope(() => requirePermission(this.invocation.tool, 'interactiveUi'))
         if (this.invocation.viewOpen) throw new Error('This invocation already has an open Tool App view.')
         const runtime = this.invocation.runtime
         if (runtime.viewOwnerId && runtime.viewOwnerId !== this.invocation.id) throw new Error('interaction_busy')
@@ -734,7 +782,7 @@ export class ToolInvocationApi {
 
     async requestChoice(request: unknown) {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'askUser')
+        await this.inScope(() => requirePermission(this.invocation.tool, 'askUser'))
         if (!isObject(request)) throw new Error('Choice request must be an object.')
         const { requestChoice } = await import('./choice')
         return requestChoice(request as never, this.invocation.ownerId)
@@ -742,7 +790,7 @@ export class ToolInvocationApi {
 
     async requestDiceRoll(request: unknown) {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'askUser')
+        await this.inScope(() => requirePermission(this.invocation.tool, 'askUser'))
         if (!isObject(request)) throw new Error('Dice roll request must be an object.')
         const { requestDiceRoll } = await import('./dice')
         return requestDiceRoll(request as never, this.invocation.ownerId)
@@ -750,26 +798,26 @@ export class ToolInvocationApi {
 
     async callTool(ref: ToolCallableRef, args: unknown = {}) {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'invokeTools')
+        await this.inScope(() => requirePermission(this.invocation.tool, 'invokeTools'))
         if (!isObject(ref) || (ref.kind !== 'managed' && ref.kind !== 'external')) throw new Error('Invalid callable tool reference.')
         const execution = this.invocation.fn.execution
         const allowed = execution?.kind === 'script' ? execution.allowedTools ?? [] : []
         if (!allowed.some((candidate) => callableRefEquals(candidate, ref))) throw new Error('Tool call was not declared in execution.allowedTools.')
         if (this.invocation.executionContext.stack.length >= 32) throw new Error('Nested tool call limit reached.')
-        const name = callableRefName(ref)
+        const name = this.inScope(() => callableRefName(ref))
         const { callToolDetailed } = await import('../mcp/mcp')
-        return callToolDetailed(name, args, {
+        return this.inScope(() => callToolDetailed(name, args, {
             stack: this.invocation.executionContext.stack,
             requestStatusId: this.invocation.executionContext.requestStatusId,
             interactionOwnerId: this.invocation.ownerId,
             abortSignal: this.invocation.executionContext.abortSignal,
-        })
+        }))
     }
 
     async getCurrentCharacter() {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'character.read')
-        const character = getCurrentCharacter()
+        await this.inScope(() => requirePermission(this.invocation.tool, 'character.read'))
+        const character = this.inScope(() => getCurrentCharacter())
         if (!character) return null
         const snapshot = safeStructuredClone(character) as unknown as Record<string, unknown>
         delete snapshot.chats
@@ -778,27 +826,31 @@ export class ToolInvocationApi {
 
     async getCurrentChat() {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'chat.read')
-        const chat = getCurrentChat()
+        await this.inScope(() => requirePermission(this.invocation.tool, 'chat.read'))
+        const chat = this.inScope(() => getCurrentChat())
         return chat ? safeStructuredClone(chat) : null
     }
 
     async listLorebooks() {
         this.requireV2()
-        await requirePermission(this.invocation.tool, 'lorebook.read')
-        const character = getCurrentCharacter()
-        const chat = getCurrentChat()
+        await this.inScope(() => requirePermission(this.invocation.tool, 'lorebook.read'))
+        const character = this.inScope(() => getCurrentCharacter())
+        const chat = this.inScope(() => getCurrentChat())
         const { getModuleLorebooks } = await import('src/ts/process/modules')
         return [
             ...(character?.globalLore ?? []).map((entry) => ({ source: 'character', entry: safeStructuredClone(entry) })),
             ...(chat?.localLore ?? []).map((entry) => ({ source: 'chat', entry: safeStructuredClone(entry) })),
-            ...getModuleLorebooks().map((entry) => ({ source: 'module', entry: safeStructuredClone(entry) })),
+            ...this.inScope(() => getModuleLorebooks()).map((entry) => ({ source: 'module', entry: safeStructuredClone(entry) })),
         ]
     }
 
     async commitChanges(changes: ToolSharedChange[]) {
         this.requireV2()
-        return commitToolSharedChanges(this.invocation, changes)
+        return this.inScope(() => commitToolSharedChanges(this.invocation, changes))
+    }
+
+    private inScope<T>(fn: () => T): T {
+        return withExecutionContext(this.invocation.chatContext, fn)
     }
 
     private requireV2() {
@@ -806,7 +858,31 @@ export class ToolInvocationApi {
     }
 }
 
+const getVariableForRuntime = getVariable
+const setVariableForRuntime = setVariable
+const resetVariableForRuntime = resetVariable
+const getListForRuntime = getList
+const setListForRuntime = setList
+const memoryListForRuntime = memoryList
+const memorySearchForRuntime = memorySearch
+const memoryReadForRuntime = memoryRead
+const memoryUpsertForRuntime = memoryUpsert
+const memoryDeleteForRuntime = memoryDelete
 function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, ready: () => void) {
+    const chatContext = getExecutionContext()
+    const requirePermission = bindExecutionContext(chatContext, () => requirePermissionUnscoped, true)
+    const getDatabase = bindExecutionContext(chatContext, () => getDatabaseUnscoped, true)
+    const getVariable = bindExecutionContext(chatContext, getVariableForRuntime)
+    const setVariable = bindExecutionContext(chatContext, setVariableForRuntime)
+    const resetVariable = bindExecutionContext(chatContext, resetVariableForRuntime)
+    const getList = bindExecutionContext(chatContext, getListForRuntime)
+    const setList = bindExecutionContext(chatContext, setListForRuntime)
+    const memoryList = bindExecutionContext(chatContext, memoryListForRuntime)
+    const memorySearch = bindExecutionContext(chatContext, memorySearchForRuntime)
+    const memoryRead = bindExecutionContext(chatContext, memoryReadForRuntime)
+    const memoryUpsert = bindExecutionContext(chatContext, memoryUpsertForRuntime)
+    const memoryDelete = bindExecutionContext(chatContext, memoryDeleteForRuntime)
+
     return {
         _getPropertiesForInitialization: () => ({ apiVersion: 'tool-2.0', apiVersionCompatibleWith: ['tool-1.0', 'tool-2.0'], list: ['apiVersion', 'apiVersionCompatibleWith'] }),
         _getAliases: () => ({}),
@@ -888,6 +964,9 @@ function makeToolApi(tool: RisuToolPackage, handlers: Map<string, ToolHandler>, 
 }
 
 async function requirePermission(tool: RisuToolPackage, permission: ToolPermission) {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     if (!(tool.plugin.permissions ?? []).includes(permission)) throw new Error(`Permission ${permission} was not declared.`)
     if (tool.builtinId && tool.readonly) return
     const db = getDatabase()
@@ -951,6 +1030,13 @@ function sharedDatabaseFingerprint() {
 }
 
 async function commitToolSharedChanges(invocation: ToolInvocation, changes: ToolSharedChange[]) {
+    const executionContext = getExecutionContext()
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const requirePermission = bindExecutionContext(executionContext, () => requirePermissionUnscoped, true)
+    const sharedDatabaseFingerprint = bindExecutionContext(executionContext, () => sharedDatabaseFingerprintUnscoped, true)
+
     if (!Array.isArray(changes) || changes.length === 0 || changes.length > 100) throw new Error('Changes must contain 1 to 100 operations.')
     if (changes.some((change) => change.kind === 'replaceDatabase') && changes.length !== 1) throw new Error('replaceDatabase cannot be combined with other changes.')
 
@@ -1142,6 +1228,9 @@ function renderAgentPrompt(template: string, tool: RisuToolPackage, args: Record
 }
 
 async function resolveAllowedTools(refs: ToolCallableRef[]) {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const { getTools } = await import('../mcp/mcp')
     const available = await getTools()
     const db = getDatabase()
@@ -1165,6 +1254,13 @@ async function executeAgentFunction(
     args: Record<string, unknown>,
     context: ToolExecutionContext,
 ): Promise<ManagedToolExecutionResult> {
+    const executionContext = getExecutionContext()
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const renderAgentPrompt = bindExecutionContext(executionContext, () => renderAgentPromptUnscoped, true)
+    const resolveAllowedTools = bindExecutionContext(executionContext, () => resolveAllowedToolsUnscoped, true)
+    const routeAgentOutput = bindExecutionContext(executionContext, () => routeAgentOutputUnscoped, true)
+
     const db = getDatabase()
     const preset = db.modelPresets.find((item) => item.id === execution.modelPresetId)
     if (!preset) return managedError(tool, fn, 'The configured model preset was not found.', args)
@@ -1212,6 +1308,9 @@ export async function routeAgentOutput(
     args: Record<string, unknown>,
     raw: string,
 ): Promise<ManagedToolExecutionResult | null> {
+    const executionContext = getExecutionContext()
+    const applyAgentStateActions = bindExecutionContext(executionContext, () => applyAgentStateActionsUnscoped, true)
+
     for (const route of routes ?? []) {
         const match = new RegExp(route.pattern, normalizeRegexFlags(route.flags)).exec(raw)
         if (!match) continue
@@ -1287,6 +1386,12 @@ async function applyAgentStateActions(
     captures: Record<string, string>,
     result: unknown,
 ) {
+    const executionContext = getExecutionContext()
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const readToolScopeState = bindExecutionContext(executionContext, () => readToolScopeStateUnscoped, true)
+    const writeToolScopeState = bindExecutionContext(executionContext, () => writeToolScopeStateUnscoped, true)
+
     if (actions.length === 0) return []
     const character = getCurrentCharacter()
     const chat = getCurrentChat()
@@ -1665,19 +1770,27 @@ function memoryDelete(tool: RisuToolPackage, args: Record<string, unknown>) {
     return { deleted: true, scope, id: deleted.id }
 }
 
-export function unloadToolRuntime(toolId?: string) {
-    if (toolId) {
-        cancelToolAppForTool(toolId)
-        runtimes.get(toolId)?.host.terminate()
-        runtimes.delete(toolId)
-        return
+export function unloadChatToolRuntimes(cacheKey: number) {
+    for (const [key, runtime] of runtimes) {
+        if (runtime.chatContext?.cacheKey !== cacheKey) continue
+        runtime.host.terminate()
+        runtimes.delete(key)
     }
-    for (const id of runtimes.keys()) cancelToolAppForTool(id)
-    for (const runtime of runtimes.values()) runtime.host.terminate()
-    runtimes.clear()
+}
+
+export function unloadToolRuntime(toolId?: string) {
+    for (const [key, runtime] of runtimes) {
+        if (toolId && runtime.toolId !== toolId) continue
+        cancelToolAppForTool(runtime.toolId)
+        runtime.host.terminate()
+        runtimes.delete(key)
+    }
 }
 
 export async function exportTool(tool: RisuToolPackage, includeState = false) {
+    const executionContext = getExecutionContext()
+    const getToolStates = bindExecutionContext(executionContext, () => getToolStatesUnscoped, true)
+
     const payload = await createToolExportPayloadV2(tool, includeState ? getToolStates()[tool.id] : undefined)
     await downloadFile(`${tool.namespace}.risutool`, Buffer.from(JSON.stringify(payload, null, 2)))
     notifySuccess(language.toolExported)
@@ -1750,6 +1863,9 @@ export function parseToolExport(text: string): RisuToolExportV1 | RisuToolExport
 }
 
 export async function importTool() {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const file = await selectSingleFile(['risutool', 'json'])
     if (!file) return
     try {

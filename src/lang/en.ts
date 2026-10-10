@@ -1416,6 +1416,8 @@ export const languageEnglish = {
     registryNoticeDismiss: "Don't show this update again",
     registryNoticeConfirm: "OK",
     apiKeyManagerMenu: "Manage API keys",
+    apiKeyMaxConcurrent: "Maximum concurrent requests",
+    apiKeyMaxConcurrentDesc: "Shared across this server. Additional requests wait in arrival order.",
     apiKeyManagerDesc: "Save API keys to reuse across multiple presets.",
     apiKeyAdd: "Add key",
     apiKeyName: "Name",
@@ -2632,6 +2634,9 @@ export const languageEnglish = {
 
     showRequestStatus: "Show request status",
     requestStatus: {
+        queued: "Queued…",
+        generating: "Generating",
+        openChat: "Open originating chat",
         connecting: "Connecting…",
         thinking: "Thinking…",
         responding: "Responding…",

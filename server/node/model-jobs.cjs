@@ -237,10 +237,11 @@ function createModelJobs(opts = {}) {
 
     const stmtInsert = db.prepare(`
         INSERT INTO model_jobs (id, chat_id, generation_id, adapter_kind, model, model_label, target_origin, kind, streaming, input_tokens, output_tokens, max_context, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
     `);
     const stmtGet = db.prepare(`SELECT * FROM model_jobs WHERE id = ?`);
-    const stmtRunningForChat = db.prepare(`SELECT id, generation_id FROM model_jobs WHERE chat_id = ? AND status = 'running' AND kind = 'main' LIMIT 1`);
+    const stmtRunningForChat = db.prepare(`SELECT id, generation_id FROM model_jobs WHERE chat_id = ? AND status IN ('queued', 'running') AND kind = 'main' LIMIT 1`);
+    const stmtStart = db.prepare("UPDATE model_jobs SET status = 'running' WHERE id = ?");
     const stmtSetUpstream = db.prepare(`UPDATE model_jobs SET upstream_status = ?, content_type = ? WHERE id = ?`);
     const stmtFinalize = db.prepare(`UPDATE model_jobs SET status = ?, error = ?, ended_at = ?, bytes = ? WHERE id = ?`);
     const stmtClaim = db.prepare(`UPDATE model_jobs SET claimed = 1 WHERE id = ?`);
@@ -248,7 +249,7 @@ function createModelJobs(opts = {}) {
     // Recovery views are MAIN-only: an aux journal is not a chat message, so
     // recovering it would insert garbage into a chat (the failure mode the
     // Gemini-cache fetch split fixed — see the design note §8-2).
-    const stmtListActive = db.prepare(`SELECT * FROM model_jobs WHERE status = 'running' AND kind = 'main' ORDER BY created_at DESC`);
+    const stmtListActive = db.prepare(`SELECT * FROM model_jobs WHERE status IN ('queued', 'running') AND kind = 'main' ORDER BY created_at DESC`);
     // Oldest first: recovery appends each job's message to the chat in the order
     // returned, so newest-first would insert a later reply above an earlier one
     // when more than one unclaimed job piled up for the same chat.
@@ -256,7 +257,7 @@ function createModelJobs(opts = {}) {
         SELECT * FROM model_jobs WHERE status IN ('done', 'failed') AND claimed = 0 AND kind = 'main' ORDER BY created_at ASC
     `);
     const stmtMarkRunningFailed = db.prepare(`
-        UPDATE model_jobs SET status = 'failed', error = ?, ended_at = ? WHERE status = 'running'
+        UPDATE model_jobs SET status = 'failed', error = ?, ended_at = ? WHERE status IN ('queued', 'running')
     `);
     // Rotation candidates: terminal jobs beyond the retention cap. Keep order
     // is unclaimed-MAIN-first then newest, so OFFSET skips the keepers and
@@ -433,7 +434,10 @@ function createModelJobs(opts = {}) {
         let writeError = null;
         ws.on('error', (err) => { writeError = writeError || err; });
         let error = null;
+        let releaseSlot = () => {};
         try {
+            if (opts.requestSlots) releaseSlot = await opts.requestSlots.acquire({ apiKeyRef: arg.apiKeyRef, headers: arg.headers, url: arg.targetUrl, signal: job.controller.signal, abort: () => job.controller.abort() });
+            stmtStart.run(job.id);
             const upstream = await requestUpstreamStream(arg.targetUrl, {
                 method: arg.method,
                 headers: arg.headers,
@@ -461,6 +465,7 @@ function createModelJobs(opts = {}) {
         } catch (err) {
             error = err;
         } finally {
+            releaseSlot();
             // Flush + close before flipping status terminal; resolve even if
             // the stream already errored/destroyed (end() still calls back).
             await new Promise((resolve) => ws.end(resolve));
@@ -551,6 +556,7 @@ function createModelJobs(opts = {}) {
         const runPromise = runJob(job, {
             targetUrl,
             method,
+            apiKeyRef: arg.apiKeyRef,
             headers: normalizeUpstreamHeaders(arg.headers),
             bodyBuffer,
             timeoutMs: normalizeTimeoutMs(Number(arg.timeoutMs))
@@ -564,7 +570,7 @@ function createModelJobs(opts = {}) {
     function claimJob(jobId) {
         const row = stmtGet.get(jobId);
         if (!row) return { error: 'Job not found', httpStatus: 404 };
-        if (row.status === 'running') return { error: 'Job is still running', httpStatus: 409 };
+        if (row.status === 'running' || row.status === 'queued') return { error: 'Job is still running', httpStatus: 409 };
         stmtClaim.run(jobId);
         return { success: true };
     }
@@ -602,7 +608,7 @@ function createModelJobs(opts = {}) {
         // Wait for the upstream response headers before sending ours, so the
         // client can mirror status/content-type — same as a fetch awaiting
         // headers. Bounded: the job goes terminal on upstream failure/timeout.
-        while (!clientGone && row.status === 'running' && row.upstream_status == null && activeJobs.has(jobId)) {
+        while (!clientGone && (row.status === 'running' || row.status === 'queued') && row.upstream_status == null && activeJobs.has(jobId)) {
             await sleep(25);
             row = stmtGet.get(jobId);
         }
@@ -675,6 +681,7 @@ function createModelJobs(opts = {}) {
                 targetUrl: req.body?.targetUrl,
                 method: req.body?.method,
                 headers: req.body?.headers,
+                apiKeyRef: req.body?.apiKeyRef,
                 body: req.body?.body,
                 chatId: req.body?.chatId,
                 generationId: req.body?.generationId,

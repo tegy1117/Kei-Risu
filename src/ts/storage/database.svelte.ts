@@ -1,3 +1,4 @@
+import { getExecutionContext } from '../process/executionScope'
 import { get } from 'svelte/store';
 import { checkNullish, decryptBuffer, encryptBuffer, parseToggleSyntax, selectSingleFile } from '../util';
 import { changeLanguage, language } from '../../lang';
@@ -884,6 +885,8 @@ interface getDatabaseOptions{
 }
 
 export function getDatabase(options:getDatabaseOptions = {}):Database{
+    const context = getExecutionContext()
+    if (context) return options.snapshot ? { ...$state.snapshot(context.db), characters: $state.snapshot(context.db.characters) } as Database : context.db
     if(options.snapshot){
         return $state.snapshot(DBState.db) as Database
     }
@@ -891,6 +894,8 @@ export function getDatabase(options:getDatabaseOptions = {}):Database{
 }
 
 export function getCurrentCharacter(options:getDatabaseOptions = {}):character{
+    const context = getExecutionContext()
+    if (context) { const char = context.db.characters.find(c => c.chaId === context.characterId); return options.snapshot ? $state.snapshot(char) as character : char }
     const db = getDatabase(options)
     if(!db.characters){
         db.characters = []
@@ -900,6 +905,12 @@ export function getCurrentCharacter(options:getDatabaseOptions = {}):character{
 }
 
 export function setCurrentCharacter(char:character){
+    const context = getExecutionContext()
+    if (context) {
+        const target = context.resolve()
+        if (target) context.db.characters[target.characterIndex] = char
+        return
+    }
     if(!DBState.db.characters){
         DBState.db.characters = []
     }
@@ -923,11 +934,15 @@ export function setCharacterByIndex(index:number,char:character){
 }
 
 export function getCurrentChat(){
+    const context = getExecutionContext()
+    if (context) return context.resolve()?.chat
     const char = getCurrentCharacter()
     return char?.chats[char.chatPage]
 }
 
 export function setCurrentChat(chat:Chat){
+    const context = getExecutionContext()
+    if (context) { const target = context.resolve(); if (target) target.character.chats[target.chatIndex] = normalizeChat(chat); return }
     const char = getCurrentCharacter()
     char.chats[char.chatPage] = normalizeChat(chat)
     setCurrentCharacter(char)

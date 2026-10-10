@@ -1,38 +1,40 @@
+import { createChatExecutionContext, getExecutionContext, withExecutionContext, bindExecutionContext, type ChatExecutionContext } from './executionContext.svelte'
 import { get } from "svelte/store";
-import { type character, type MessageGenerationInfo, type Chat, type MessagePresetInfo, changeToPreset, setCurrentChat, type Message, normalizeChat, type StreamingDisplayOptimizationMode } from "../storage/database.svelte";
+import { type character, type MessageGenerationInfo, type Chat, type MessagePresetInfo, changeToPreset, setCurrentChat, type Message, normalizeChat, setPreset, type StreamingDisplayOptimizationMode } from "../storage/database.svelte";
 import { DBState } from '../stores.svelte';
 import { CharEmotion, selectedCharID } from "../stores.svelte";
-import { ChatTokenizer, tokenize, tokenizeNum } from "../tokenizer";
+import { ChatTokenizer, tokenize as tokenizeUnscoped, tokenizeNum as tokenizeNumUnscoped } from "../tokenizer";
 import { language } from "../../lang";
 import { alertError, notifyError } from "../alert";
-import { parseChatML } from "../parser/chatML";
-import { loadLoreBookV3Prompt } from "./lorebook.svelte";
-import { findCharacterbyId, getAuthorNoteDefaultText, getPersonaPrompt, getUserName, isLastCharPunctuation, trimUntilPunctuation, parseToggleSyntax, prebuiltAssetCommand } from "../util";
-import { requestChatData } from "./request/request";
+import { parseChatML as parseChatMLUnscoped } from "../parser/chatML";
+import { loadLoreBookV3Prompt as loadLoreBookV3PromptUnscoped } from "./lorebook.svelte";
+import { findCharacterbyId, getAuthorNoteDefaultText as getAuthorNoteDefaultTextUnscoped, getPersonaPrompt as getPersonaPromptUnscoped, getUserName as getUserNameUnscoped, isLastCharPunctuation, trimUntilPunctuation, parseToggleSyntax, prebuiltAssetCommand } from "../util";
+import { requestChatData as requestChatDataUnscoped } from "./request/request";
 import { stableDiff } from "./stableDiff";
-import { processScript, processScriptFull, risuChatParser } from "./scripts";
-import { exampleMessage } from "./exampleMessages";
+import { processScript as processScriptUnscoped, processScriptFull as processScriptFullUnscoped, risuChatParser as risuChatParserUnscoped } from "./scripts";
+import { exampleMessage as exampleMessageUnscoped } from "./exampleMessages";
 import { sayTTS } from "./tts";
 import { v4 } from "uuid";
-import { runTrigger } from "./triggers";
+import { runTrigger as runTriggerUnscoped } from "./triggers";
 import { HypaProcesser } from "./memory/hypamemory";
-import { additionalInformations } from "./embedding/addinfo";
+import { additionalInformations as additionalInformationsUnscoped } from "./embedding/addinfo";
 import { getInlayAsset } from "./files/inlays";
-import { getGenerationModelString } from "./models/modelString";
-import { runInlayScreen } from "./inlayScreen";
+import { getGenerationModelString as getGenerationModelStringUnscoped } from "./models/modelString";
+import { runInlayScreen as runInlayScreenUnscoped } from "./inlayScreen";
 import { runImageEmbedding } from "./transformers";
-import { runLuaEditTrigger } from "./scriptings";
-import { getModelInfo, LLMFlags } from "../model/modellist";
-import { resolveChatModelBinding, resolveClassicModelId, resolvePresetMaxOutputTokens, presetSupportsVision } from "./request/modelPresetBinding";
-import { hypaMemoryV3 } from "./memory/hypav3";
-import { getActiveHypaV3Preset } from "./memory/memoryPresets"
+import { runLuaEditTrigger as runLuaEditTriggerUnscoped } from "./scriptings";
+import { getModelInfo as getModelInfoUnscoped, LLMFlags } from "../model/modellist";
+import { resolveChatModelBinding as resolveChatModelBindingUnscoped, resolveClassicModelId as resolveClassicModelIdUnscoped, resolvePresetMaxOutputTokens as resolvePresetMaxOutputTokensUnscoped, presetSupportsVision as presetSupportsVisionUnscoped } from "./request/modelPresetBinding";
+import { hypaMemoryV3 as hypaMemoryV3Unscoped } from "./memory/hypav3";
+import { getActiveHypaV3Preset as getActiveHypaV3PresetUnscoped } from "./memory/memoryPresets"
 import { resolveModelPresetContextBudget } from "./request/contextBudget"
-import { getModuleAssets, getModuleLorebooks, getModules, getModuleToggles, getModuleTriggers } from "./modules";
-import { hydrateAssetListsForCbs, serializeForCbsScan } from "../parser/assetListHydration";
-import { forageStorage, readImage, resolvePrioritizedAssetManifestNames } from "../globalApi.svelte";
+import { getModuleAssets as getModuleAssetsUnscoped, getModuleLorebooks as getModuleLorebooksUnscoped, getModules as getModulesUnscoped, getModuleToggles as getModuleTogglesUnscoped, getModuleTriggers as getModuleTriggersUnscoped } from "./modules";
+import { hydrateAssetListsForCbs as hydrateAssetListsForCbsUnscoped, serializeForCbsScan } from "../parser/assetListHydration";
+import { forageStorage, readImage, requestImmediateSave, resolvePrioritizedAssetManifestNames } from "../globalApi.svelte";
 import { pluginV2 } from "../plugins/plugins.svelte";
-import { abortGeneration, chatGenKey, chatProcessStage, endGeneration, isChatGenerating, onDatabaseRebased, registerAbort, setGenerationStage, startGeneration } from "./generationState";
-import { getToolAssets, getToolToggles } from './tools/features'
+import { abortGeneration, chatGenKey, chatProcessStage, endGeneration, isChatGenerating, generationStates, onDatabaseRebased, registerAbort, setGenerationStage, startGeneration } from "./generationState";
+import { getToolAssets as getToolAssetsUnscoped, getToolToggles as getToolTogglesUnscoped } from './tools/features'
+import { unloadChatToolRuntimes } from './tools/tools'
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
 import { runAgentPipeline, type AgentMainPromptContext } from "../agent/runtime";
 
@@ -104,7 +106,8 @@ export let previewBody:string = ''
 // Text that sendChat feeds to the synchronous parser, serialized so one scan
 // covers all of it.
 function promptCbsSources(char:character, chat:Chat):string[] {
-    const db = DBState.db
+    const context = getExecutionContext()
+    const db = context?.db ?? DBState.db
     return [serializeForCbsScan([
         db.mainPrompt, db.jailbreak, db.globalNote, db.descriptionPrefix, db.additionalPrompt, db.promptTemplate,
         char.systemPrompt, char.replaceGlobalNote, char.desc, char.personality, char.scenario,
@@ -113,7 +116,7 @@ function promptCbsSources(char:character, chat:Chat):string[] {
         // Injected into the prompt when the character opts in (see the
         // customimageinstruction handling below); it carries {{chardisplayasset}}.
         char.prebuiltAssetCommand ? prebuiltAssetCommand : '',
-        getPersonaPrompt(), getModuleLorebooks(), getModuleTriggers(),
+        getPersonaPromptUnscoped(), getModuleLorebooksUnscoped(), getModuleTriggersUnscoped(),
     ])]
 }
 
@@ -125,20 +128,93 @@ export interface SendChatArgs {
     preview?:boolean
     previewPrompt?:boolean
     responseStartedAt?:number
+    generationId?: string
+    executionContext?: ChatExecutionContext
     agentContext?: AgentMainPromptContext
 }
 
 export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): Promise<boolean> {
-    return runAgentPipeline({
-        signal: arg.signal,
-        continue: arg.continue,
-        preview: arg.preview,
-        previewPrompt: arg.previewPrompt,
-        runMain: (agentContext) => sendChatCore(chatProcessIndex, { ...arg, agentContext }),
-    })
+    const executionContext = arg.executionContext ?? getExecutionContext() ?? createChatExecutionContext()
+    if (!executionContext?.resolve()) return false
+    const key = executionContext.chatId
+    const owner = get(generationStates).get(key)
+    if (owner && owner.generationId !== arg.generationId) return false
+    const generationId = arg.generationId ?? v4()
+    const controller = arg.signal ? undefined : new AbortController()
+    if (controller) registerAbort(key, controller)
+    if (!owner) startGeneration(key, generationId)
+    arg = { ...arg, executionContext, generationId, signal: arg.signal ?? controller.signal }
+    try {
+        const boundPromptId = executionContext.resolve().chat.bindedBotPreset
+        const boundPrompt = executionContext.db.botPresets.find(p => p.id === boundPromptId)
+        if (boundPrompt) withExecutionContext(executionContext, () => setPreset(executionContext.db, boundPrompt))
+        return await withExecutionContext(executionContext, () => runAgentPipeline({
+            signal: arg.signal,
+            continue: arg.continue,
+            preview: arg.preview,
+            previewPrompt: arg.previewPrompt,
+            executionContext,
+            generationId: arg.generationId,
+            runMain: (agentContext) => withExecutionContext(executionContext, () => sendChatCore(chatProcessIndex, { ...arg, agentContext })),
+        }))
+    } finally {
+        try {
+            // A final write can coincide with removing the generation entry,
+            // before reactive dirty tracking runs. Persist its original chat
+            // explicitly, including partial/error replies, before releasing it.
+            if (executionContext.resolve() && !arg.preview && !arg.previewPrompt) {
+                await requestImmediateSave({ changes: { character: [executionContext.characterId], chat: [[executionContext.characterId, key]] } })
+            }
+        } finally {
+            unloadChatToolRuntimes(executionContext.cacheKey)
+            if (endGeneration(key, { generationId })) clearPendingSend(key)
+        }
+    }
 }
 
 async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise<boolean> {
+    const executionContext = arg.executionContext ?? getExecutionContext()
+    if (!executionContext?.resolve()) return false
+    const getModelInfo = bindExecutionContext(executionContext, () => getModelInfoUnscoped, true)
+    const tokenize = bindExecutionContext(executionContext, () => tokenizeUnscoped, true)
+    const tokenizeNum = bindExecutionContext(executionContext, () => tokenizeNumUnscoped, true)
+    const resolveChatModelBinding = bindExecutionContext(executionContext, () => resolveChatModelBindingUnscoped, true)
+    const resolveClassicModelId = bindExecutionContext(executionContext, () => resolveClassicModelIdUnscoped, true)
+    const resolvePresetMaxOutputTokens = bindExecutionContext(executionContext, () => resolvePresetMaxOutputTokensUnscoped, true)
+    const presetSupportsVision = bindExecutionContext(executionContext, () => presetSupportsVisionUnscoped, true)
+    const getGenerationModelString = bindExecutionContext(executionContext, () => getGenerationModelStringUnscoped, true)
+    const exampleMessage = bindExecutionContext(executionContext, () => exampleMessageUnscoped, true)
+    const runInlayScreen = bindExecutionContext(executionContext, () => runInlayScreenUnscoped, true)
+    const DBState = { get db() {
+        const target = executionContext.resolve()
+        if (!target) throw new Error('The originating chat is no longer available.')
+        selectedChar = target.characterIndex
+        selectedChat = target.chatIndex
+        return executionContext.db
+    } }
+    const getActiveHypaV3Preset = bindExecutionContext(executionContext, () => getActiveHypaV3PresetUnscoped, true)
+    const parseChatML = bindExecutionContext(executionContext, () => parseChatMLUnscoped, true)
+    const hydrateAssetListsForCbs = bindExecutionContext(executionContext, () => hydrateAssetListsForCbsUnscoped, true)
+    const runLuaEditTrigger = bindExecutionContext(executionContext, () => runLuaEditTriggerUnscoped, true)
+    const additionalInformations = bindExecutionContext(executionContext, () => additionalInformationsUnscoped, true)
+    const hypaMemoryV3 = bindExecutionContext(executionContext, () => hypaMemoryV3Unscoped, true)
+    const risuChatParser = (text: string, options: Parameters<typeof risuChatParserUnscoped>[1] = {}) => withExecutionContext(executionContext, () => risuChatParserUnscoped(text, { ...options, db: executionContext.db, chara: options.chara ?? executionContext.resolve()?.character }))
+    const processScript = bindExecutionContext(executionContext, () => processScriptUnscoped, true)
+    const processScriptFull = bindExecutionContext(executionContext, () => processScriptFullUnscoped, true)
+    const runTrigger = bindExecutionContext(executionContext, () => runTriggerUnscoped, true)
+    const requestChatData = bindExecutionContext(executionContext, () => requestChatDataUnscoped, true)
+    const loadLoreBookV3Prompt = bindExecutionContext(executionContext, () => loadLoreBookV3PromptUnscoped, true)
+    const getPersonaPrompt = bindExecutionContext(executionContext, () => getPersonaPromptUnscoped, true)
+    const getUserName = bindExecutionContext(executionContext, () => getUserNameUnscoped, true)
+    const getAuthorNoteDefaultText = bindExecutionContext(executionContext, () => getAuthorNoteDefaultTextUnscoped, true)
+    const getModules = bindExecutionContext(executionContext, () => getModulesUnscoped, true)
+    const getModuleAssets = bindExecutionContext(executionContext, () => getModuleAssetsUnscoped, true)
+    const getModuleLorebooks = bindExecutionContext(executionContext, () => getModuleLorebooksUnscoped, true)
+    const getModuleToggles = bindExecutionContext(executionContext, () => getModuleTogglesUnscoped, true)
+    const getModuleTriggers = bindExecutionContext(executionContext, () => getModuleTriggersUnscoped, true)
+    const getToolAssets = bindExecutionContext(executionContext, () => getToolAssetsUnscoped, true)
+    const getToolToggles = bindExecutionContext(executionContext, () => getToolTogglesUnscoped, true)
+
 
     chatProcessStage.set(0)
     // Callers without a signal (multisend, commands, dev tools) get an
@@ -252,18 +328,18 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     // Concurrency guard, per chat: block a new send only when THIS chat is
     // already generating. Keyed by the real chat id (chat.id); legacy chats
     // without an id share one fallback key. See generationState.ts.
-    const guardChar = DBState.db.characters[get(selectedCharID)]
+    const guardChar = DBState.db.characters.find(c => c.chaId === executionContext.characterId)
     const realChatId = guardChar?.chats?.[guardChar.chatPage]?.id
     const genKey = chatGenKey(realChatId)
 
-    if(isChatGenerating(genKey) && !arg.agentContext){
+    if(isChatGenerating(genKey) && !arg.agentContext && (!arg.generationId || get(generationStates).get(genKey)?.generationId !== arg.generationId)){
         if(chatProcessIndex === -1){
             return false
         }
     }
-    const generationId = arg.agentContext?.generationId ?? v4()
+    const generationId = arg.agentContext?.generationId ?? arg.generationId ?? v4()
     if (internalAbort) registerAbort(genKey, internalAbort)
-    if(!arg.agentContext || !isChatGenerating(genKey)){
+    if(!isChatGenerating(genKey)){
         startGeneration(genKey, generationId)
     }
     // Resumable-send tombstone (pendingSends.ts): registered BEFORE the
@@ -293,12 +369,12 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             notifyError(`Cannot find preset: ${ele}`, { source: 'preset' })
         }
         else{
-            changeToPreset(findId, true)
+            withExecutionContext(executionContext, () => changeToPreset(findId, false))
         }
     }
 
     DBState.db.statics.messages += 1
-    selectedChar = get(selectedCharID)
+    selectedChar = executionContext.resolve().characterIndex
     const nowChatroom = DBState.db.characters[selectedChar]
     nowChatroom.lastInteraction = Date.now()
     selectedChat = nowChatroom.chatPage
@@ -382,10 +458,10 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     // Everything below runs the synchronous parser (messages, prompt, lorebook,
     // triggers). Asset-list CBS in any of those sources needs its manifests
     // loaded first — same rule as the display path (#82).
-    await hydrateAssetListsForCbs(currentChar, promptCbsSources(currentChar, nowChatroom.chats[selectedChat]))
+    await hydrateAssetListsForCbs(currentChar, withExecutionContext(executionContext, () => promptCbsSources(currentChar, nowChatroom.chats[selectedChat])))
 
     let chatAdditonalTokens = arg.chatAdditonalTokens ?? caculatedChatTokens
-    const tokenizer = new ChatTokenizer(chatAdditonalTokens, mainModel.startsWith('gpt') ? 'noName' : 'name', mainModel)
+    const tokenizer = withExecutionContext(executionContext, () => new ChatTokenizer(chatAdditonalTokens, mainModel.startsWith('gpt') ? 'noName' : 'name', mainModel))
     let currentChat = runCurrentChatFunction(nowChatroom.chats[selectedChat])
     nowChatroom.chats[selectedChat] = currentChat
     let maxContextTokens = DBState.db.maxContext
@@ -960,7 +1036,8 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     const triggerResult = await runTrigger(currentChar, 'start', {chat: currentChat})
     if(triggerResult){
         currentChat = triggerResult.chat
-        setCurrentChat(currentChat)
+        const target = executionContext.resolve()
+        if (target) target.character.chats[target.chatIndex] = currentChat
         ms = makeMs(currentChat)
         currentTokens += triggerResult.tokens
         if(triggerResult.stopSending){
@@ -1987,15 +2064,15 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
     }
 
     if(needsAutoContinue){
-        endGeneration(genKey, { keepPendingAbort: true, generationId })
-        return await sendChatCore(chatProcessIndex, {
+        return await withExecutionContext(executionContext, () => sendChatCore(chatProcessIndex, {
+            ...arg,
             responseStartedAt,
             agentContext: arg.agentContext,
             chatAdditonalTokens: arg.chatAdditonalTokens,
             continue: true,
             signal: abortSignal,
             usedContinueTokens: resultTokens
-        })
+        }))
     }
 
     const igp = risuChatParser(DBState.db.igpPrompt ?? "")
@@ -2036,12 +2113,12 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             DBState.db.characters[selectedChar].chats[selectedChat].message[lastMessageIndex].generationInfo = generationInfo
         }
         
-        endGeneration(genKey, { keepPendingAbort: true, generationId })
-        return await sendChatCore(chatProcessIndex, {
+        return await withExecutionContext(executionContext, () => sendChatCore(chatProcessIndex, {
+            ...arg,
             responseStartedAt,
             agentContext: arg.agentContext,
             signal: abortSignal
-        })
+        }))
     }
 
     if(DBState.db.notification && !arg.agentContext){
@@ -2134,7 +2211,7 @@ async function sendChatCore(chatProcessIndex = -1,arg:SendChatArgs = {}):Promise
             }
 
             if(DBState.db.emotionProcesser === 'embedding'){
-                const hypaProcesser = new HypaProcesser()
+                const hypaProcesser = withExecutionContext(executionContext, () => new HypaProcesser())
                 await hypaProcesser.addText(emotionList.map((v) => 'emotion:' + v))
                 let searched = (await hypaProcesser.similaritySearchScored(result)).map((v) => {
                     v[0] = v[0].replace("emotion:",'')

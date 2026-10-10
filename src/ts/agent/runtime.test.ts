@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { writable } from 'svelte/store'
 
 const mocks = vi.hoisted(() => ({
     db: {} as any,
@@ -25,11 +26,13 @@ vi.mock('../process/tts', () => ({ sayTTS: mocks.sayTTS }))
 vi.mock('../process/generationState', () => ({
     chatGenKey: (id: string) => id,
     isChatGenerating: vi.fn(() => false),
+    generationStates: writable(new Map()),
     startGeneration: mocks.startGeneration,
     endGeneration: mocks.endGeneration,
 }))
 
 import { runAgentPipeline } from './runtime'
+import { generationStates } from '../process/generationState'
 
 function mainNode() {
     return { kind: 'main' as const, id: 'main', name: 'Main Output', agentInfoBindings: {} }
@@ -62,6 +65,7 @@ function appendMainMessage(data = 'main output') {
 describe('agent pipeline runtime', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+        generationStates.set(new Map())
         mocks.requestAgentModelPreset.mockResolvedValue({ ok: true, text: 'agent output', model: 'worker-model' })
         mocks.db = {
             agentPresets: [{
@@ -82,6 +86,14 @@ describe('agent pipeline runtime', () => {
             ttsAutoSpeech: false,
             notification: false,
         }
+    })
+
+    test('rejects a supplied generation ID belonging to another send', async () => {
+        generationStates.set(new Map([['chat', { generationId: 'owner' } as any]]))
+        const runMain = vi.fn()
+        expect(await runAgentPipeline({ generationId: 'other', runMain })).toBe(false)
+        expect(runMain).not.toHaveBeenCalled()
+        expect(mocks.requestAgentModelPreset).not.toHaveBeenCalled()
     })
 
     test('continues on the current chat when the main send replaces the chat object', async () => {

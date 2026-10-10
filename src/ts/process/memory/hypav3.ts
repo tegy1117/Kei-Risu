@@ -1,3 +1,4 @@
+import { lazyFunction, getExecutionContext, withExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
 import { type memoryVector, HypaProcesser, similarity, contextHash, getPersistedHypaVector, setPersistedHypaVector } from "./hypamemory";
 import { isContextModel, getContextProvider } from "./contextualEmbedding";
 import { TaskRateLimiter } from "./taskRateLimiter";
@@ -7,17 +8,17 @@ import {
     HypaProcessorV2,
 } from "./hypamemoryv2";
 import { type DisplayMode as ModalDisplayMode } from "src/lib/Others/HypaV3Modal/types";
-import { parseChatML } from "src/ts/parser/chatML";
+import { parseChatML as parseChatMLUnscoped } from "src/ts/parser/chatML";
 import {
     type Chat,
     type character,
-    getDatabase,
+    getDatabase as getDatabaseUnscoped,
     getCurrentCharacter,
-    getCurrentChat,
+    getCurrentChat as getCurrentChatUnscoped,
 } from "src/ts/storage/database.svelte";
 import { type OpenAIChat } from "../index.svelte";
-import { requestChatData } from "../request/request";
-import { resolveChatMaxResponseTokens, resolveClassicModelId } from "../request/modelPresetBinding";
+import { requestChatData as requestChatDataUnscoped } from "../request/request";
+import { resolveChatMaxResponseTokens, resolveClassicModelId as resolveClassicModelIdUnscoped } from "../request/modelPresetBinding";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { chatCompletion, unloadEngine } from "../webllm";
 import { hypaV3ProgressStore } from "src/ts/stores.svelte";
@@ -27,6 +28,16 @@ import { inlayTokenRegex } from "src/ts/util/inlayTokens";
 export { createHypaV3Preset, type HypaV3Preset, type HypaV3Settings } from "./hypav3Preset";
 import { type HypaV3Preset, type HypaV3Settings } from "./hypav3Preset";
 import { getActiveHypaV3Preset } from "./memoryPresets";
+const hypaMemoryV3MainExpUnscoped = hypaMemoryV3MainExp
+const hypaMemoryV3MainUnscoped = hypaMemoryV3Main
+const getCurrentHypaV3PresetUnscoped = getCurrentHypaV3Preset
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const summarizeUnscoped = summarize
+const parseChatML = lazyFunction(() => parseChatMLUnscoped)
+const getCurrentChat = lazyFunction(() => getCurrentChatUnscoped)
+const requestChatData = lazyFunction(() => requestChatDataUnscoped)
+const resolveClassicModelId = lazyFunction(() => resolveClassicModelIdUnscoped)
+
 
 interface HypaV3Data {
     summaries: Summary[];
@@ -101,6 +112,11 @@ export async function hypaMemoryV3(
     char: character,
     tokenizer: ChatTokenizer
 ): Promise<HypaV3Result> {
+    const executionContext = getExecutionContext()
+    const hypaMemoryV3MainExp = bindExecutionContext(executionContext, () => hypaMemoryV3MainExpUnscoped, true)
+    const hypaMemoryV3Main = bindExecutionContext(executionContext, () => hypaMemoryV3MainUnscoped, true)
+    const getCurrentHypaV3Preset = bindExecutionContext(executionContext, () => getCurrentHypaV3PresetUnscoped, true)
+
     const settings = getCurrentHypaV3Preset().settings;
 
     try {
@@ -159,6 +175,11 @@ async function hypaMemoryV3MainExp(
     char: character,
     tokenizer: ChatTokenizer
 ): Promise<HypaV3Result> {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const summarize = bindExecutionContext(executionContext, () => summarizeUnscoped, true)
+    const getCurrentHypaV3Preset = bindExecutionContext(executionContext, () => getCurrentHypaV3PresetUnscoped, true)
+
     const db = getDatabase();
     const settings = getCurrentHypaV3Preset().settings;
 
@@ -605,12 +626,12 @@ async function hypaMemoryV3MainExp(
         );
 
         // Initialize embedding processor
-        const processor = new HypaProcessorV2<Summary>({
+        const processor = withExecutionContext(executionContext, () => new HypaProcessorV2<Summary>({
             rateLimiter: new TaskRateLimiter({
                 tasksPerMinute: settings.embeddingRequestsPerMinute,
                 maxConcurrentTasks: settings.embeddingMaxConcurrent,
             }),
-        });
+        }));
 
         processor.progressCallback = (queuedCount) => {
             hypaV3ProgressStore.set({
@@ -939,6 +960,11 @@ async function hypaMemoryV3Main(
     char: character,
     tokenizer: ChatTokenizer
 ): Promise<HypaV3Result> {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const summarize = bindExecutionContext(executionContext, () => summarizeUnscoped, true)
+    const getCurrentHypaV3Preset = bindExecutionContext(executionContext, () => getCurrentHypaV3PresetUnscoped, true)
+
     const db = getDatabase();
     const settings = getCurrentHypaV3Preset().settings;
 
@@ -1325,7 +1351,7 @@ async function hypaMemoryV3Main(
         });
 
         // Initialize embedding processor
-        const processor = new HypaProcesserEx(db.hypaModel);
+        const processor = withExecutionContext(executionContext, () => new HypaProcesserEx(db.hypaModel));
         processor.oaikey = db.supaMemoryKey;
 
         // Add summaryChunks to processor for similarity search
@@ -1659,6 +1685,14 @@ function sanitizeSummaryContent(content: string): string {
 }
 
 export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolean = false): Promise<string> {
+    const executionContext = getExecutionContext()
+    const parseChatML = bindExecutionContext(executionContext, () => parseChatMLUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const requestChatData = bindExecutionContext(executionContext, () => requestChatDataUnscoped, true)
+    const resolveClassicModelId = bindExecutionContext(executionContext, () => resolveClassicModelIdUnscoped, true)
+    const getCurrentHypaV3Preset = bindExecutionContext(executionContext, () => getCurrentHypaV3PresetUnscoped, true)
+
     const db = getDatabase();
     const settings = getCurrentHypaV3Preset().settings;
 

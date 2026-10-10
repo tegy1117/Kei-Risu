@@ -78,4 +78,13 @@ describe('apiKeyPool', () => {
         expect(getApiKey(entry.id)).toBeUndefined()
         expect(Object.keys(mockDb.db.apiKeyPool)).toHaveLength(0)
     })
+
+    it('defaults to one request and persists a changed concurrency limit', () => {
+        const entry = addApiKey({ name: 'limited', key: 'k' })
+        expect(entry.maxConcurrentRequests).toBe(1)
+        updateApiKey(entry.id, { maxConcurrentRequests: 3 })
+        expect(getApiKey(entry.id)?.maxConcurrentRequests).toBe(3)
+        updateApiKey(entry.id, { maxConcurrentRequests: 0 })
+        expect(getApiKey(entry.id)?.maxConcurrentRequests).toBe(1)
+    })
 })

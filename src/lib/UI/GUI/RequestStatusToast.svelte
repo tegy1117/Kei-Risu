@@ -1,8 +1,6 @@
 <script lang="ts">
-    // Body of a single request-status toast. Rendered as a sonner custom toast
-    // (one per generationId). Subscribes to the shared store and reads its own
-    // entry by id, so it re-renders live on each timer tick without the driver
-    // re-issuing the toast. Final left-bar design — see
+    // One request-status card per generation. Its body collapses independently;
+    // the separate navigation button opens the originating conversation. See
     // .agent/notes/request-status-toast-infra.md and the workspace mockup.
     //
     // Layout (left color bar = phase):
@@ -10,13 +8,13 @@
     //   row2: model · think N · tok/s   (dim detail; 0/empty hidden)
     //   row3+: cache/search/tool badges (future)
     import { onMount } from 'svelte'
-    import { toast } from 'svelte-sonner'
-    import { requestStatuses, clearStatus, isTerminalPhase, type RequestPhase, type RequestKind } from 'src/ts/status/requestStatus'
+    import { requestStatuses, isTerminalPhase, type RequestPhase, type RequestKind } from 'src/ts/status/requestStatus'
     import { language } from 'src/lang'
-    import { RotateCwIcon, XIcon } from '@lucide/svelte'
+    import { RotateCwIcon, ArrowUpRightIcon } from '@lucide/svelte'
 
     let { id }: { id: string } = $props()
 
+    let collapsed = $state(false)
     const entry = $derived($requestStatuses.get(id))
     const rs = language.requestStatus
 
@@ -28,6 +26,7 @@
     })
 
     const PHASE_LABEL: Record<RequestPhase, string> = {
+        queued: rs?.queued ?? 'Queued…',
         connecting: rs?.connecting ?? 'Connecting…',
         thinking:   rs?.thinking ?? 'Thinking…',
         responding: rs?.responding ?? 'Responding…',
@@ -100,20 +99,30 @@
 
     const spinning = $derived(entry ? !isTerminalPhase(entry.phase) && entry.phase !== 'stalled' : false)
 
-    // Manual dismiss: clear the store entry and the sonner toast. Late phase
-    // updates for a cleared entry are no-ops in the store, so the toast is not
-    // re-issued after closing.
-    function dismiss(): void {
-        clearStatus(id)
-        toast.dismiss(`req:${id}`)
+    const compactLabel = $derived(entry
+        ? (isTerminalPhase(entry.phase) ? PHASE_LABEL[entry.phase] : (rs?.generating ?? 'Generating'))
+        : '')
+    const origin = $derived(entry?.chatId ? { chatId: entry.chatId } : null)
+    async function openOrigin(): Promise<void> {
+        const target = origin
+        if (!target) return
+        const { changeChar } = await import('src/ts/characters')
+        const { changeChatTo } = await import('src/ts/globalApi.svelte')
+        const { DBState, MobileGUIStack } = await import('src/ts/stores.svelte')
+        const index = DBState.db.characters.findIndex(c => c.chats.some(chat => chat.id === target.chatId))
+        if (index < 0) return
+        changeChar(index)
+        changeChatTo(target.chatId)
+        MobileGUIStack.set(1)
     }
 </script>
 
 {#if entry}
-    <!-- sonner skips its default chrome for custom-component toasts
-         (data-styled=false), so apply the app toast look + left accent bar. -->
+    {#if collapsed}
+        <button type="button" class="rs-compact {accentClass(entry.phase)}" onclick={() => { collapsed = false }} aria-expanded="false">{compactLabel}</button>
+    {:else}
     <div class="rs-card {accentClass(entry.phase)}">
-        <div class="rs-body">
+        <button type="button" class="rs-body" onclick={() => { collapsed = true }} aria-expanded="true">
             <div class="rs-row1">
                 <span class="rs-dot" class:rs-dot-success={entry.phase === 'done'}
                       class:rs-dot-warning={entry.phase === 'partial'}
@@ -134,7 +143,7 @@
                 {/if}
                 <span class="rs-actions">
                     {#if right}<span class="rs-right">{right.label} <b>{right.value}</b></span>{/if}
-                    <button class="rs-close" type="button" aria-label={language.close ?? 'Close'} onclick={dismiss}><XIcon size={14} /></button>
+
                 </span>
             </div>
 
@@ -151,13 +160,22 @@
                     {badge.text}
                 </div>
             {/each}
-        </div>
+        </button>
+        <button type="button" class="rs-open" disabled={!origin} aria-label={rs?.openChat ?? 'Open originating chat'} title={rs?.openChat ?? 'Open originating chat'} onclick={openOrigin}>
+            <ArrowUpRightIcon size={20} />
+        </button>
     </div>
+    {/if}
 {/if}
 
 <style>
+    .rs-compact { width: fit-content; padding: 6px 12px; background: var(--risu-theme-darkbg); color: var(--risu-theme-textcolor); border: 1px solid var(--risu-theme-darkborderc); border-left-width: 4px; border-radius: 0.5rem; pointer-events: auto; font-size: 0.875rem; }
+    .rs-open { display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; margin: 6px; border-radius: 6px; background: var(--risu-theme-selected); color: var(--risu-theme-textcolor); }
+    .rs-open:disabled { opacity: .35; }
+    .rs-open:focus-visible, .rs-body:focus-visible, .rs-compact:focus-visible { outline: 2px solid var(--risu-theme-primary); outline-offset: -2px; }
     .rs-card {
         display: flex;
+        pointer-events: auto;
         width: 100%;
         background: var(--risu-theme-darkbg);
         color: var(--risu-theme-textcolor);
@@ -174,7 +192,7 @@
     .rs-accent-danger  { border-left-color: var(--risu-theme-draculared); }
     .rs-accent-muted   { border-left-color: var(--risu-theme-textcolor2); }
 
-    .rs-body { flex: 1; min-width: 0; padding: 10px 13px; }
+    .rs-body { flex: 1; min-width: 0; padding: 10px 13px; text-align: left; }
     .rs-row1 { display: flex; align-items: center; gap: 8px; }
 
     .rs-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -201,10 +219,6 @@
     .rs-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
     .rs-right { font-size: 12px; color: var(--risu-theme-textcolor2); white-space: nowrap; }
     .rs-right b { color: var(--risu-theme-textcolor); font-weight: 600; font-variant-numeric: tabular-nums; }
-    .rs-close { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px;
-        color: var(--risu-theme-textcolor2); transition: color .15s ease, background .15s ease; }
-    .rs-close:hover { color: var(--risu-theme-textcolor); background: var(--risu-theme-selected); }
-    .rs-close:focus-visible { outline: 2px solid var(--risu-theme-primary); outline-offset: 1px; }
 
     .rs-detail { font-size: 12px; color: var(--risu-theme-textcolor2); margin-top: 3px; }
     .rs-error { color: var(--risu-theme-draculared); }

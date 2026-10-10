@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { createChatExecutionContext, withExecutionContext, type ChatExecutionContext } from "src/ts/process/executionContext.svelte";
     import { getActiveHypaV3Preset } from "src/ts/process/memory/memoryPresets";
 
     import Suggestion from './Suggestion.svelte';
@@ -14,8 +15,8 @@
     import { type Chat as ChatData, type Message, loadTogglesFromChat } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
-    import { chatProcessStage, doingChat, sendChat } from "../../ts/process/index.svelte";
-    import { chatGenKey, endGeneration, generationStates, registerAbort, stopGeneration } from "../../ts/process/generationState";
+    import { sendChat } from "../../ts/process/index.svelte";
+    import { chatGenKey, endGeneration, generationStates, startGeneration, registerAbort, stopGeneration } from "../../ts/process/generationState";
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { chatLoadFailures, ensureCurrentChatReady } from "../../ts/storage/chatStorage";
     import { sleep } from "../../ts/util";
@@ -71,8 +72,6 @@ import { isMobile } from 'src/ts/platform'
     let openMenu = $state(false)
     let loadPages = $state(getInitialChatLoadPages(DBState.db))
     let doingChatInputTranslate = false
-    let lastBlockedSendToastAt = 0
-    const BLOCKED_SEND_STOP_OFFER_MS = 180_000
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
     let showNewMessageButton = $state(false)
@@ -344,105 +343,61 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function sendMain(continueResponse:boolean) {
-        let selectedChar = $selectedCharID
-        // Global guard on purpose: sendChat reads getCurrentChat() at request
-        // time (triggers, model binding), so a second live send from another
-        // chat would cross-contaminate the first. A blocked send must say so
-        // though — a silent return reads as a dead Send button and hides a
-        // stuck entry in some other chat.
-        if($doingChat){
-            // Throttled (Enter auto-repeat re-enters here every keydown) and
-            // skipped while a modal is up: notifyInfo clears transitional
-            // alerts, which would dismiss an unrelated alertWait.
-            const now = Date.now()
-            if($alertStore.type !== 'none' || now - lastBlockedSendToastAt <= 1000){
-                return
-            }
-            lastBlockedSendToastAt = now
-            if($generationStates.has(currentChatGenKey())){
-                notifyInfo(language.errors.chatStillGenerating)
-                return
-            }
-            // The lock is held by another chat, whose Stop button is not on
-            // screen. Once it has run for a while it may be stuck (#85):
-            // offer to stop it from here instead of forcing a reload.
-            const holder = [...$generationStates.entries()].find(([, entry]) => entry.kind === 'live')
-            if(holder && now - holder[1].startedAt > BLOCKED_SEND_STOP_OFFER_MS){
-                if(await alertConfirm(language.errors.otherChatGenerationStopConfirm)){
-                    stopGeneration(holder[0], { onForceReleased: onGenerationForceReleased })
-                }
-                return
-            }
-            notifyInfo(language.errors.otherChatGenerating)
+        const selectedChar = $selectedCharID
+        const executionContext = createChatExecutionContext()
+        if (!executionContext) return
+        const genKey = executionContext.chatId
+        if ($generationStates.has(genKey)) {
+            notifyInfo(language.errors.chatStillGenerating)
             return
         }
-
-        const activeChat = await ensureActiveChatReady(selectedChar)
-        if(!activeChat) return
-
-        let cha = activeChat.message
-
-        if(messageInput.startsWith('/')){
-            const commandProcessed = await processMultiCommand(messageInput)
-            if(commandProcessed !== false){
-                messageInput = ''
-                messageInputTranslate = ''
-                removeChatDraft(draftChaId, draftChatId)
-                return
-            }
-        }
-
-        if(fileInput.length > 0){
-            for(const file of fileInput){
-                messageInput += `{{inlayed::${file}}}`
-            }
-            fileInput = []
-        }
-
-        if(messageInput === ''){
-            if(cha.length === 0 || cha[cha.length - 1].role !== 'user'){
-                if(DBState.db.useSayNothing){
-                    cha.push({
-                        role: 'user',
-                        data: '*says nothing*',
-                        name: null
-                    })
-                }
-            }
-        }
-        else{
-            const char = DBState.db.characters[selectedChar]
-            if(char.type === 'character'){
-                let triggerResult = await runTrigger(char,'input', {chat: activeChat})
-                if(triggerResult){
-                    cha = triggerResult.chat.message
-                }
-
-                cha.push({
-                    role: 'user',
-                    data: await processScript(char,messageInput,'editinput'),
-                    time: Date.now(),
-                    name: null
-                })
-            }
-            else{
-                cha.push({
-                    role: 'user',
-                    data: messageInput,
-                    time: Date.now(),
-                    name: null
-                })
-            }
-        }
+        const controller = new AbortController()
+        const generationId = v4()
+        registerAbort(genKey, controller)
+        startGeneration(genKey, generationId)
+        let outgoing = messageInput
+        const attachments = [...fileInput]
         messageInput = ''
         messageInputTranslate = ''
+        fileInput = []
         removeChatDraft(draftChaId, draftChatId)
-        DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].message = cha
-
-        await sleep(10)
-        updateInputSizeAll()
-        await sendChatMain(continueResponse)
-
+        try {
+            const hydrated = await ensureActiveChatReady(selectedChar)
+            const initialTarget = executionContext.resolve()
+            if (!hydrated || !initialTarget || controller.signal.aborted) return
+            const activeChat = initialTarget.chat
+            const char = initialTarget.character
+            let cha = activeChat.message
+            if (outgoing.startsWith('/')) {
+                const commandProcessed = await withExecutionContext(executionContext, () => processMultiCommand(outgoing))
+                if (commandProcessed !== false) return
+            }
+            for (const file of attachments) outgoing += `{{inlayed::${file}}}`
+            if (outgoing === '') {
+                if ((cha.length === 0 || cha[cha.length - 1].role !== 'user') && executionContext.db.useSayNothing) {
+                    cha.push({ role: 'user', data: '*says nothing*', name: null })
+                }
+            } else {
+                if (char.type === 'character') {
+                    const triggerResult = await withExecutionContext(executionContext, () => runTrigger(char, 'input', { chat: activeChat }))
+                    if (triggerResult) cha = triggerResult.chat.message
+                    outgoing = await withExecutionContext(executionContext, () => processScript(char, outgoing, 'editinput'))
+                }
+                if (controller.signal.aborted) return
+                cha.push({ role: 'user', data: outgoing, time: Date.now(), name: null })
+            }
+            const target = executionContext.resolve()
+            if (!target || controller.signal.aborted) return
+            target.chat.message = cha
+            await sleep(10)
+            updateInputSizeAll()
+            await sendChatMain(continueResponse, executionContext, controller, generationId)
+        } catch (error) {
+            console.error(error)
+            alertError(error)
+        } finally {
+            if (endGeneration(genKey, { generationId })) clearPendingSend(genKey)
+        }
     }
 
     // Fullscreen compose mode: the same messageInput, just shown in a full-screen
@@ -492,7 +447,11 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function reroll() {
-        if($doingChat) return
+        if(currentChatGenerating) return
+        const executionContext = createChatExecutionContext()
+        if (!executionContext) return
+        let target = executionContext.resolve()
+        const getLastCharMsg = () => [...(executionContext.resolve()?.chat.message ?? [])].reverse().find(m => m.role === 'char' && !m.isComment && !m.disabled)
         const lastMsg = getLastCharMsg()
         if (!lastMsg) return
 
@@ -506,7 +465,7 @@ import { isMobile } from 'src/ts/platform'
 
         // Generate new response
         // Preserve trailing comment/disabled messages (e.g. branch comments)
-        let cha = safeStructuredClone(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message)
+        let cha = safeStructuredClone(target.chat.message)
         const originalMessages = safeStructuredClone(cha)
         if(cha.length === 0) return
         openMenu = false
@@ -527,21 +486,22 @@ import { isMobile } from 'src/ts/platform'
             let msg = cha.pop()
             if(!msg) return
         }
-        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = cha
-        const generated = await sendChatMain()
-
-        const currentMsgs = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message
+        target.chat.message = cha
+        const generated = await sendChatMain(false, executionContext)
+        target = executionContext.resolve()
+        if (!target) return
+        const currentMsgs = target.chat.message
 
         // If generation failed, restore original messages
         if (!generated) {
-            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = originalMessages
+            target.chat.message = originalMessages
             return
         }
 
         // Restore trailing comments after the new message
         if (trailingComments.length > 0) {
             currentMsgs.push(...trailingComments)
-            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = currentMsgs
+            target.chat.message = currentMsgs
         }
 
         // Save new response to swipes
@@ -568,7 +528,7 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function unReroll() {
-        if($doingChat) return
+        if(currentChatGenerating) return
         const lastMsg = getLastCharMsg()
         if (!lastMsg || !lastMsg.swipes || lastMsg.swipeId === undefined) return
 
@@ -624,25 +584,28 @@ import { isMobile } from 'src/ts/platform'
     // Send while A (revisited) still shows a working Stop. Recomputes on chat
     // switch because currentChatGenKey reads the selected char/chatPage.
     let currentChatGenerating = $derived($generationStates.has(currentChatGenKey()))
+    const currentChatStage = $derived($generationStates.get(currentChatGenKey())?.stage ?? 0)
 
-    async function sendChatMain(continued:boolean = false) {
+    async function sendChatMain(continued:boolean = false, executionContext = createChatExecutionContext(), reservedController?: AbortController, generationId?: string) {
 
-        messageInput = ''
-        const genKey = currentChatGenKey()
+        if (!executionContext) return false
+        const genKey = executionContext.chatId
         // Mirror sendChat's per-chat guard BEFORE any side effects: a blocked
         // send must not run the unconditional conclude below, which would tear
         // down the RUNNING generation's guard entry and tombstone (e.g. Enter
         // pressed while an auto-resume is streaming).
-        if ($generationStates.has(genKey)) {
+        if ($generationStates.has(genKey) && (!generationId || $generationStates.get(genKey)?.generationId !== generationId)) {
             return false
         }
-        const abortController = new AbortController()
+        const abortController = reservedController ?? new AbortController()
         registerAbort(genKey, abortController)
         let generated = false
         try {
             generated = await sendChat(-1, {
                 signal:abortController.signal,
-                continue:continued
+                continue:continued,
+                executionContext,
+                generationId,
             })
         } catch (error) {
             console.error(error)
@@ -1243,7 +1206,7 @@ import { isMobile } from 'src/ts/platform'
                             aria-labelledby="cancel"
                             class="order-2 shrink-0 flex justify-center items-center w-9 h-9 rounded-full text-textcolor hover:bg-primary/20 transition-colors" onclick={abortChat}
                     >
-                        <div class="loadmove chat-process-stage-{$chatProcessStage}"></div>
+                        <div class="loadmove chat-process-stage-{currentChatStage}"></div>
                     </button>
                 {:else}
                     <button

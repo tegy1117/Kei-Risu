@@ -1,6 +1,7 @@
 import { get, writable, type Writable } from "svelte/store"
 import type { Database, Message } from "./storage/database.svelte"
 import { getDatabase } from "./storage/database.svelte"
+import { getExecutionContext } from './process/executionScope'
 import { selectedCharID } from "./stores.svelte"
 import { createBlankChar, getCharImage } from "./characters"
 import { isIOS } from "src/ts/platform"
@@ -74,9 +75,9 @@ export const replacePlaceholders = (msg:string, name:string) => {
 export function checkPersonaBinded(){
     try {
         let db = getDatabase()
-        const selectedChar = get(selectedCharID)
-        const character = db.characters[selectedChar]
-        const chat = character.chats[character.chatPage]
+        const context = getExecutionContext()
+        const character = db.characters[context?.resolve()?.characterIndex ?? get(selectedCharID)]
+        const chat = context ? context.resolve()?.chat : character.chats[character.chatPage]
         if(!chat.bindedPersona){
             return null
         }

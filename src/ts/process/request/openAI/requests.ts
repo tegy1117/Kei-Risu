@@ -1,10 +1,11 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../../executionScope'
 import { language } from "src/lang"
 import { notifyError } from "src/ts/alert";
-import { getDatabase } from "src/ts/storage/database.svelte"
+import { getDatabase as getDatabaseUnscoped } from "src/ts/storage/database.svelte"
 import { LLMFlags, LLMFormat } from "src/ts/model/modellist"
 import { strongBan, tokenizeNum } from "src/ts/tokenizer"
 import { getFreeOpenRouterModels } from "src/ts/model/openrouter"
-import { fetchNative, globalFetch, textifyReadableStream } from "src/ts/globalApi.svelte"
+import { fetchNative as fetchNativeUnscoped, globalFetch as globalFetchUnscoped, textifyReadableStream } from "src/ts/globalApi.svelte"
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork"
 import { simplifySchema } from "src/ts/util"
 
@@ -29,11 +30,33 @@ import { supportsInlayImage } from "../../files/inlays"
 import { callToolDetailed, decodeToolCall, encodeToolExecution } from "../../mcp/mcp"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from '../request'
 import { toLogSource } from '../logSource'
-import { applyAdditionalParameters, applyParameters, getAdditionalParameters } from '../shared'
+import { applyAdditionalParameters, applyParameters as applyParametersUnscoped, getAdditionalParameters as getAdditionalParametersUnscoped } from '../shared'
 
 import type { Contents, OpenAIChatExtra, OpenAIChatFull, ResponseInputItem, ResponseItem, ResponseOutputItem, ToolCall } from './types'
+const fetchNative = lazyFunction(() => fetchNativeUnscoped)
+const globalFetch = lazyFunction(() => globalFetchUnscoped)
+const getAdditionalParameters = lazyFunction(() => getAdditionalParametersUnscoped)
+
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const applyParameters = lazyFunction(() => applyParametersUnscoped)
+const getLocalNetworkRequestOptionsUnscoped = getLocalNetworkRequestOptions
+const requestHTTPOpenAIUnscoped = requestHTTPOpenAI
+const getTranStreamUnscoped = getTranStream
+const wrapToolStreamUnscoped = wrapToolStream
+
 
 export async function requestOpenAI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const fetchNative = bindExecutionContext(executionContext, () => fetchNativeUnscoped, true)
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getAdditionalParameters = bindExecutionContext(executionContext, () => getAdditionalParametersUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+    const getLocalNetworkRequestOptions = bindExecutionContext(executionContext, () => getLocalNetworkRequestOptionsUnscoped, true)
+    const requestHTTPOpenAI = bindExecutionContext(executionContext, () => requestHTTPOpenAIUnscoped, true)
+    const getTranStream = bindExecutionContext(executionContext, () => getTranStreamUnscoped, true)
+    const wrapToolStream = bindExecutionContext(executionContext, () => wrapToolStreamUnscoped, true)
+
     let formatedChat:OpenAIChatExtra[] = []
     const formated = arg.formated
     const db = getDatabase()
@@ -623,6 +646,11 @@ export async function requestOpenAI(arg:RequestDataArgumentExtended):Promise<req
 }
 
 async function requestHTTPOpenAI(replacerURL:string,body:any, headers:Record<string,string>, arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getLocalNetworkRequestOptions = bindExecutionContext(executionContext, () => getLocalNetworkRequestOptionsUnscoped, true)
+
     
     const db = getDatabase()
     const res = await globalFetch(replacerURL, {
@@ -847,6 +875,11 @@ async function requestHTTPOpenAI(replacerURL:string,body:any, headers:Record<str
 }
 
 export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getLocalNetworkRequestOptions = bindExecutionContext(executionContext, () => getLocalNetworkRequestOptionsUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const maxTokens = arg.maxTokens
@@ -918,6 +951,12 @@ export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtende
 }
 
 export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+    const getLocalNetworkRequestOptions = bindExecutionContext(executionContext, () => getLocalNetworkRequestOptionsUnscoped, true)
+
 
     const formated = arg.formated
     const db = getDatabase()

@@ -61,7 +61,7 @@ export interface ModelJobRecord {
     createdAt?: number
     endedAt?: number
     streaming?: boolean
-    status: 'running' | 'done' | 'failed' | 'aborted'
+    status: 'queued' | 'running' | 'done' | 'failed' | 'aborted'
     upstreamStatus?: number | null
     error?: string
 }
@@ -629,7 +629,7 @@ async function pollRunningJob(
         } catch {
             continue
         }
-        if (current.status === 'running') continue
+        if ((current.status === 'running' || current.status === 'queued')) continue
         diag(`poll ${job.id.slice(0, 8)}: terminal status=${current.status}`)
         if (current.status !== 'aborted') {
             try {

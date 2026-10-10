@@ -1,3 +1,4 @@
+import { getExecutionContext, withExecutionContext, bindExecutionContext } from '../executionScope';
 import { type HypaModel, localModels, getPersistedHypaVector, setPersistedHypaVector, contextHash, truncateErrorBody } from "./hypamemory";
 import { isContextModel, getContextProvider } from "./contextualEmbedding";
 import { TaskRateLimiter, TaskCanceledError } from "./taskRateLimiter";
@@ -27,13 +28,16 @@ export interface EmbeddingResult<TMetadata> extends EmbeddingText<TMetadata> {
 export type EmbeddingVector = number[] | Float32Array;
 
 export class HypaProcessorV2<TMetadata> {
+  private readonly executionContext = getExecutionContext();
+  private readonly readDatabase = bindExecutionContext(this.executionContext, getDatabase);
+  private readonly fetch = bindExecutionContext(this.executionContext, globalFetch);
   private static readonly LOG_PREFIX = "[HypaProcessorV2]";
   public readonly options: HypaProcessorV2Options;
   public progressCallback: (queuedCount: number) => void = null;
   public vectors: Map<string, EmbeddingResult<TMetadata>> = new Map();
 
   public constructor(options?: HypaProcessorV2Options) {
-    const db = getDatabase();
+    const db = this.readDatabase();
 
     this.options = {
       model: db.hypaModel || "MiniLM",
@@ -364,7 +368,7 @@ export class HypaProcessorV2<TMetadata> {
   }
 
   private getCacheKey(content: string, contextTexts?: string[]): string {
-    const db = getDatabase();
+    const db = this.readDatabase();
     const suffix =
       this.options.model === "custom" && db.hypaCustomSettings?.model?.trim()
         ? `-${db.hypaCustomSettings.model.trim()}`
@@ -424,7 +428,7 @@ export class HypaProcessorV2<TMetadata> {
     contents: string[],
     inputType: "query" | "document" = "query"
   ): Promise<EmbeddingVector[]> {
-    const db = getDatabase();
+    const db = this.readDatabase();
     let response = null;
 
     if (this.options.model === "custom") {
@@ -450,7 +454,7 @@ export class HypaProcessorV2<TMetadata> {
         },
       };
 
-      response = await globalFetch(replaceUrl, { ...fetchArgs, logCategory: 'embedding', logSource: 'memory' });
+      response = await this.fetch(replaceUrl, { ...fetchArgs, logCategory: 'embedding', logSource: 'memory' });
     } else if (
       ["ada", "openai3small", "openai3large"].includes(this.options.model)
     ) {
@@ -472,7 +476,7 @@ export class HypaProcessorV2<TMetadata> {
         },
       };
 
-      response = await globalFetch(
+      response = await this.fetch(
         "https://api.openai.com/v1/embeddings",
         { ...fetchArgs, logCategory: 'embedding', logSource: 'memory' }
       );

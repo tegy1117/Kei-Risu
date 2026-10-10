@@ -1,4 +1,5 @@
-import { forageStorage } from 'src/ts/globalApi.svelte'
+import { markPhase } from '../../status/requestStatus'
+import { forageStorage, flushSaves } from 'src/ts/globalApi.svelte'
 import { language } from 'src/lang'
 
 // Server-side model-preset requests — job-based fetchImpl (Stage 3 of
@@ -43,6 +44,7 @@ export class ModelJobConnectionLostError extends Error {
 }
 
 export interface JobFetchOptions {
+    apiKeyRef?: string
     /** Job key: the real chat.id for main generations (server enforces one
      *  running main job per chat on it). Aux side requests pass their unique
      *  per-request genId here instead — the guard never applies to them. */
@@ -95,12 +97,14 @@ export function makeJobFetch(opts: JobFetchOptions): typeof fetch {
         // 1. Create the job. Infra failures fall back to the direct path;
         //    409 (chat already generating) must surface, never fall back.
         let created: Response
+        if (opts.apiKeyRef) await flushSaves()
         try {
             created = await fetch('/api/model-jobs', {
                 method: 'POST',
                 headers: { 'content-type': 'application/json', ...await authHeader() },
                 body: JSON.stringify({
                     targetUrl: url,
+                    apiKeyRef: opts.apiKeyRef,
                     method: init?.method ?? 'POST',
                     headers: (init?.headers as Record<string, string>) ?? {},
                     body: typeof init?.body === 'string' ? init.body : undefined,
@@ -205,6 +209,25 @@ export function makeJobFetch(opts: JobFetchOptions): typeof fetch {
             signal?.addEventListener('abort', onAbort)
         })
 
+        // A queued durable job exists already; poll its state rather than
+        // leaving an HTTP header wait open through an intermediary timeout.
+        if (opts.apiKeyRef) {
+            try {
+            while (!signal?.aborted) {
+                const response = await fetch(`/api/model-jobs/${jobId}`, { headers: await authHeader(), signal })
+                if (!response.ok) throw new ModelJobConnectionLostError()
+                const state = await response.json() as { status: string }
+                if (state.status !== 'queued') break
+                markPhase(opts.generationId, 'queued', Date.now())
+                await sleepAbortable(250)
+            }
+            if (signal?.aborted) { detach(); throw abortError() }
+            markPhase(opts.generationId, 'connecting', Date.now())
+            } catch (error) {
+                detach()
+                throw error
+            }
+        }
         let streamRes: Response | null = null
         for (let attempt = 0; attempt < RECONNECT_MAX_ATTEMPTS; attempt++) {
             try {

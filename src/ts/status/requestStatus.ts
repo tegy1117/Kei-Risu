@@ -8,6 +8,7 @@ import { writable, get } from "svelte/store"
 // Non-persistent, memory only: never touches db/localStorage/.bin.
 
 export type RequestPhase =
+    | 'queued'
     | 'connecting'   // request sent, awaiting first byte
     | 'thinking'     // receiving reasoning
     | 'responding'   // receiving answer body

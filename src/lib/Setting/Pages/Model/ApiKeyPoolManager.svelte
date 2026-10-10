@@ -35,12 +35,14 @@
     let fName = $state('');
     let fProvider = $state('');
     let fKey = $state('');
+    let fMaxConcurrent = $state(1);
 
     function openAdd() {
         editId = null;
         fName = '';
         fProvider = '';
         fKey = '';
+        fMaxConcurrent = 1;
         formOpen = true;
     }
 
@@ -51,16 +53,17 @@
         fName = e.name;
         fProvider = e.provider ?? '';
         fKey = e.key;
+        fMaxConcurrent = e.maxConcurrentRequests ?? 1;
         formOpen = true;
     }
 
     function save() {
-        if (!fName.trim() || !fKey.trim()) return;
+        if (!fName.trim() || !fKey.trim() || !Number.isSafeInteger(fMaxConcurrent) || fMaxConcurrent < 1) return;
         const provider = fProvider || undefined;
         if (editId) {
-            updateApiKey(editId, { name: fName.trim(), key: fKey, provider });
+            updateApiKey(editId, { name: fName.trim(), key: fKey, provider, maxConcurrentRequests: fMaxConcurrent });
         } else {
-            addApiKey({ name: fName.trim(), key: fKey, provider });
+            addApiKey({ name: fName.trim(), key: fKey, provider, maxConcurrentRequests: fMaxConcurrent });
         }
         formOpen = false;
     }
@@ -97,6 +100,11 @@
                 <span class="text-sm text-textcolor">{language.apiKeyValue}</span>
                 <SecretInput bind:value={fKey} fullwidth />
             </div>
+            <label class="flex flex-col gap-1 text-sm text-textcolor">
+                {language.apiKeyMaxConcurrent}
+                <input type="number" min="1" step="1" bind:value={fMaxConcurrent} class="bg-darkbg border border-darkborderc rounded-md p-2" />
+                <span class="text-xs text-textcolor2">{language.apiKeyMaxConcurrentDesc}</span>
+            </label>
             <div class="flex justify-end gap-2">
                 <ShButton variant="ghost" size="sm" onclick={() => { formOpen = false }}>{language.cancel}</ShButton>
                 <ShButton variant="default" size="sm" onclick={save}>{language.apiKeyFormSave}</ShButton>
@@ -120,6 +128,7 @@
                         <span class="text-xs text-textcolor2 truncate">
                             {#if entry.provider}{providerLabel(entry.provider)} · {/if}••••{entry.key.slice(-4)}
                         </span>
+                        <span class="text-xs text-textcolor2">{language.apiKeyMaxConcurrent}: {entry.maxConcurrentRequests ?? 1}</span>
                     </div>
                     <div class="flex gap-2 shrink-0">
                         <button class="text-textcolor2 hover:text-primary" title={language.edit} onclick={() => openEdit(entry.id)}>

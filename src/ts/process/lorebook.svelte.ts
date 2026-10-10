@@ -1,17 +1,24 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from './executionScope'
 import { get } from "svelte/store";
-import { getChatVar, setChatVar } from '../parser/chatVar.svelte';
+import { getChatVar as getChatVarUnscoped, setChatVar as setChatVarUnscoped } from '../parser/chatVar.svelte';
 import {selectedCharID} from '../stores.svelte'
 import { type Message, type loreBook } from "../storage/database.svelte";
-import { DBState } from '../stores.svelte';
+import { DBState as liveDBState } from '../stores.svelte';
+const DBState = liveDBState;
 import { tokenize } from "../tokenizer";
-import { risuChatParser } from "../parser/parser.svelte";
+import { risuChatParser as risuChatParserUnscoped } from "../parser/parser.svelte";
 import { findCharacterbyId, pickHashRand, selectSingleFile } from "../util";
 import { alertError, notifySuccess } from "../alert";
 import { language } from "../../lang";
 import { downloadFile } from "../globalApi.svelte";
-import { getModuleLorebooks } from "./modules";
+import { getModuleLorebooks as getModuleLorebooksUnscoped } from "./modules";
 import { CCardLib } from "@risuai/ccardlib";
 import { v4 } from "uuid";
+const getChatVar = lazyFunction(() => getChatVarUnscoped)
+const setChatVar = lazyFunction(() => setChatVarUnscoped)
+const risuChatParser = lazyFunction(() => risuChatParserUnscoped)
+const getModuleLorebooks = lazyFunction(() => getModuleLorebooksUnscoped)
+
 
 export function addLorebook(type:number) {
     const selectedID = get(selectedCharID)
@@ -103,7 +110,15 @@ export function addLorebookFolder(type:number) {
 }
 
 export async function loadLoreBookV3Prompt(){
-    const selectedID = get(selectedCharID)
+    const executionContext = getExecutionContext()
+    const getChatVar = bindExecutionContext(executionContext, () => getChatVarUnscoped, true)
+    const setChatVar = bindExecutionContext(executionContext, () => setChatVarUnscoped, true)
+    const risuChatParser = bindExecutionContext(executionContext, () => risuChatParserUnscoped, true)
+    const getModuleLorebooks = bindExecutionContext(executionContext, () => getModuleLorebooksUnscoped, true)
+
+    const context = getExecutionContext()
+    const DBState = { db: context?.db ?? liveDBState.db }
+    const selectedID = context?.resolve()?.characterIndex ?? get(selectedCharID)
     const char = DBState.db.characters[selectedID]
     const page = char.chatPage
     const characterLore = char.globalLore ?? []

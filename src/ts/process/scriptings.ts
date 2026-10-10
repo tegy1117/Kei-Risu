@@ -1,8 +1,9 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, withExecutionContext, type ChatExecutionContext } from './executionScope'
 import { asBuffer } from 'src/ts/util';
-import { getChatVar, getGlobalChatVar, setChatVar } from "../parser/chatVar.svelte";
-import { hasher, type simpleCharacterArgument, risuChatParser } from "../parser/parser.svelte";
+import { getChatVar as getChatVarUnscoped, getGlobalChatVar as getGlobalChatVarUnscoped, setChatVar as setChatVarUnscoped } from "../parser/chatVar.svelte";
+import { hasher, type simpleCharacterArgument, risuChatParser as risuChatParserUnscoped } from "../parser/parser.svelte";
 import { LuaEngine, LuaFactory } from "wasmoon";
-import { getCurrentCharacter, getCurrentChat, getDatabase, setDatabase, type Chat, type character, type triggerscript } from "../storage/database.svelte";
+import { getCurrentCharacter as getCurrentCharacterUnscoped, getCurrentChat as getCurrentChatUnscoped, getDatabase as getDatabaseUnscoped, setDatabase, type Chat, type character, type triggerscript } from "../storage/database.svelte";
 import { get } from "svelte/store";
 import { ReloadChatPointer, ReloadGUIPointer, selectedCharID } from "../stores.svelte";
 import { alertSelect, alertError, alertInput, alertNormal, alertConfirm } from "../alert";
@@ -10,15 +11,32 @@ import { HypaProcesser } from "./memory/hypamemory";
 import { generateAIImage } from "./stableDiff";
 import { writeInlayImage, getInlayAsset } from "./files/inlays";
 import type { OpenAIChat, MultiModal } from "./index.svelte";
-import { requestChatData, type StreamResponseChunk } from "./request/request";
+import { requestChatData as requestChatDataUnscoped, type StreamResponseChunk } from "./request/request";
 import { v4 } from "uuid";
-import { getModuleLorebooks, getModuleTriggers } from "./modules";
-import { getToolTriggers } from './tools/features'
+import { getModuleLorebooks as getModuleLorebooksUnscoped, getModuleTriggers as getModuleTriggersUnscoped } from "./modules";
+import { getToolTriggers as getToolTriggersUnscoped } from './tools/features'
 import { Mutex } from "../mutex";
 import { tokenize } from "../tokenizer";
 import { fetchNative, readImage } from "../globalApi.svelte";
-import { loadLoreBookV3Prompt } from './lorebook.svelte';
-import { getPersonaPrompt, getUserName, getUserIcon } from '../util';
+import { loadLoreBookV3Prompt as loadLoreBookV3PromptUnscoped } from './lorebook.svelte';
+import { getPersonaPrompt as getPersonaPromptUnscoped, getUserName as getUserNameUnscoped, getUserIcon as getUserIconUnscoped } from '../util';
+const getChatVar = lazyFunction(() => getChatVarUnscoped)
+const getGlobalChatVar = lazyFunction(() => getGlobalChatVarUnscoped)
+const setChatVar = lazyFunction(() => setChatVarUnscoped)
+const risuChatParser = lazyFunction(() => risuChatParserUnscoped)
+const getCurrentCharacter = lazyFunction(() => getCurrentCharacterUnscoped)
+const getCurrentChat = lazyFunction(() => getCurrentChatUnscoped)
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const requestChatData = lazyFunction(() => requestChatDataUnscoped)
+const getModuleLorebooks = lazyFunction(() => getModuleLorebooksUnscoped)
+const loadLoreBookV3Prompt = lazyFunction(() => loadLoreBookV3PromptUnscoped)
+const getPersonaPrompt = lazyFunction(() => getPersonaPromptUnscoped)
+const getUserName = lazyFunction(() => getUserNameUnscoped)
+const getUserIcon = lazyFunction(() => getUserIconUnscoped)
+const getModuleTriggers = lazyFunction(() => getModuleTriggersUnscoped)
+const getToolTriggers = lazyFunction(() => getToolTriggersUnscoped)
+const runScriptedUnscoped = runScripted
+
 let luaFactory:LuaFactory
 let ScriptingSafeIds = new Set<string>()
 let ScriptingEditDisplayIds = new Set<string>()
@@ -27,6 +45,8 @@ let lastRequestResetTime = 0
 let lastRequestsCount = 0
 
 interface BasicScriptingEngineState {
+    executionContext?: ChatExecutionContext
+    character?: character | simpleCharacterArgument
     code?: string;
     mutex: Mutex;
     chat?: Chat;
@@ -70,6 +90,22 @@ export async function runScripted(code:string, arg:{
     type?: 'lua'|'py',
     moduleId?: string
 }){
+    let ScriptingEngineState: ScriptingEngineState | undefined
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getChatVar: typeof getChatVarUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getChatVarUnscoped(...args))
+    const getGlobalChatVar: typeof getGlobalChatVarUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getGlobalChatVarUnscoped(...args))
+    const setChatVar: typeof setChatVarUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => setChatVarUnscoped(...args))
+    const risuChatParser: typeof risuChatParserUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => risuChatParserUnscoped(...args))
+    const getCurrentCharacter: typeof getCurrentCharacterUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getCurrentCharacterUnscoped(...args))
+    const getCurrentChat: typeof getCurrentChatUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getCurrentChatUnscoped(...args))
+    const getDatabase: typeof getDatabaseUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getDatabaseUnscoped(...args))
+    const requestChatData: typeof requestChatDataUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => requestChatDataUnscoped(...args))
+    const getModuleLorebooks: typeof getModuleLorebooksUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getModuleLorebooksUnscoped(...args))
+    const loadLoreBookV3Prompt: typeof loadLoreBookV3PromptUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => loadLoreBookV3PromptUnscoped(...args))
+    const getPersonaPrompt: typeof getPersonaPromptUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getPersonaPromptUnscoped(...args))
+    const getUserName: typeof getUserNameUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getUserNameUnscoped(...args))
+    const getUserIcon: typeof getUserIconUnscoped = (...args) => withExecutionContext(ScriptingEngineState?.executionContext ?? executionContext, () => getUserIconUnscoped(...args))
+
     const type: 'lua'|'py' = arg.type ?? 'lua'
     const char = arg.char ?? getCurrentCharacter()
     const data = arg.data ?? ''
@@ -85,9 +121,11 @@ export async function runScripted(code:string, arg:{
     if(type === 'lua'){
         await ensureLuaFactory()
     }
-    let ScriptingEngineState = await getOrCreateEngineState(mode, type);
+    ScriptingEngineState = await getOrCreateEngineState(mode, type);
     
     return await ScriptingEngineState.mutex.runExclusive(async () => {
+        ScriptingEngineState.executionContext = executionContext
+        ScriptingEngineState.character = char
         ScriptingEngineState.moduleId = arg.moduleId
         ScriptingEngineState.chat = chat
         ScriptingEngineState.setVar = setVar
@@ -424,7 +462,7 @@ export async function runScripted(code:string, arg:{
             declareAPI('getCharacterImageMain', async (id:string) => {
                 try {
                     const db = getDatabase()
-                    const selectedChar = get(selectedCharID)
+                    const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
 
                     if (selectedChar < 0 || selectedChar >= db.characters.length) {
                         return ''
@@ -665,7 +703,7 @@ export async function runScripted(code:string, arg:{
             
             declareAPI('getName', (id:string) => {
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char = db.characters[selectedChar]
                 return char.name
             })
@@ -675,7 +713,7 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 if(typeof name !== 'string'){
                     throw('Invalid data type')
                 }
@@ -687,7 +725,7 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char = db.characters[selectedChar]
                 return char.desc
             })
@@ -697,7 +735,7 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char =db.characters[selectedChar]
                 if(typeof data !== 'string'){
                     throw('Invalid data type')
@@ -708,7 +746,7 @@ export async function runScripted(code:string, arg:{
 
             declareAPI('getCharacterFirstMessage', (id:string) => {
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char = db.characters[selectedChar]
                 return char.firstMessage
             })
@@ -718,7 +756,7 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char = db.characters[selectedChar]
                 if(typeof data !== 'string'){
                     return false
@@ -734,7 +772,7 @@ export async function runScripted(code:string, arg:{
 
             declareAPI('getPersonaDescription', (id:string) => {
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char = db.characters[selectedChar]
 
                 return risuChatParser(getPersonaPrompt(), { chara: char })
@@ -749,7 +787,7 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 const char = db.characters[selectedChar]
                 return char.backgroundHTML
             })
@@ -759,7 +797,7 @@ export async function runScripted(code:string, arg:{
                     return
                 }
                 const db = getDatabase()
-                const selectedChar = get(selectedCharID)
+                const selectedChar = (ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                 if(typeof data !== 'string'){
                     return false
                 }
@@ -770,7 +808,7 @@ export async function runScripted(code:string, arg:{
             // Lore books
             declareAPI('getLoreBooksMain', (id:string, search:string) => {
                 const db = getDatabase()
-                const selectedChar = db.characters[get(selectedCharID)]
+                const selectedChar = db.characters[(ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))]
                 if (selectedChar.type !== 'character') {
                     return
                 }
@@ -806,7 +844,8 @@ export async function runScripted(code:string, arg:{
                     return
                 }
 
-                if (char.type !== 'character') {
+                const char = ScriptingEngineState.character
+                if (char?.type !== 'character') {
                     return
                 }
 
@@ -842,7 +881,7 @@ export async function runScripted(code:string, arg:{
 
                 const db = getDatabase()
 
-                const selectedChar = db.characters[get(selectedCharID)]
+                const selectedChar = db.characters[(ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))]
 
                 if (selectedChar.type !== 'character') {
                     return
@@ -997,7 +1036,7 @@ export async function runScripted(code:string, arg:{
                 }
 
                 const db = getDatabase()
-                const selchar = db.characters[get(selectedCharID)]
+                const selchar = db.characters[(ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))]
 
                 let pointer = chat.message.length - 1
                 while (pointer >= 0) {
@@ -1036,7 +1075,7 @@ export async function runScripted(code:string, arg:{
                 }
 
                 const db = getDatabase()
-                const selchar = db.characters[get(selectedCharID)]
+                const selchar = db.characters[(ScriptingEngineState?.executionContext?.resolve()?.characterIndex ?? get(selectedCharID))]
 
                 let pointer = chat.message.length - 1
                 while (pointer >= 0) {
@@ -1446,6 +1485,11 @@ ${code}
 }
 
 export async function runLuaEditTrigger<T extends string|OpenAIChat[]>(char:character|simpleCharacterArgument, mode:string, content:T, meta?:object):Promise<T>{
+    const executionContext = getExecutionContext()
+    const getModuleTriggers = bindExecutionContext(executionContext, () => getModuleTriggersUnscoped, true)
+    const getToolTriggers = bindExecutionContext(executionContext, () => getToolTriggersUnscoped, true)
+    const runScripted = bindExecutionContext(executionContext, () => runScriptedUnscoped, true)
+
     switch(mode){
         case 'editinput':
             mode = 'editInput'
@@ -1489,6 +1533,11 @@ export async function runLuaEditTrigger<T extends string|OpenAIChat[]>(char:char
 }
 
 export async function runLuaButtonTrigger(char:character|simpleCharacterArgument, data:string):Promise<any>{
+    const executionContext = getExecutionContext()
+    const getModuleTriggers = bindExecutionContext(executionContext, () => getModuleTriggersUnscoped, true)
+    const getToolTriggers = bindExecutionContext(executionContext, () => getToolTriggersUnscoped, true)
+    const runScripted = bindExecutionContext(executionContext, () => runScriptedUnscoped, true)
+
     let runResult
     try {
         const triggers = char.triggerscript.map<triggerscript>((v) => ({

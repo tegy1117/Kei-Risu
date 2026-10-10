@@ -1,3 +1,4 @@
+import { getExecutionContext } from '../process/executionScope'
 import DOMPurify from 'dompurify';
 import markdownit from 'markdown-it'
 import { appVer, getCurrentCharacter, getDatabase, type Database, type character, type customscript, type triggerscript } from '../storage/database.svelte';
@@ -1447,7 +1448,7 @@ function initMatcher(){
         getModuleLorebooks: getModuleLorebooks,
         pickHashRand: pickHashRand,
         getSelectedCharID: () => {
-            return get(selectedCharID)
+            return getExecutionContext()?.resolve()?.characterIndex ?? get(selectedCharID)
         },
         getModelInfo: getModelInfo,
         callInternalFunction: function (args: string[]): string {
@@ -1980,7 +1981,7 @@ export function risuChatParser(da:string, arg:{
 } = {}):string{
     if (da == null) return ''
     const chatID = arg.chatID ?? -1
-    const db = arg.db ?? DBState.db
+    const db = arg.db ?? getExecutionContext()?.db ?? DBState.db
     const aChara = arg.chara
     let chara:character|string = null
 

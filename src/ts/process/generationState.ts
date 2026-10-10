@@ -23,13 +23,12 @@ export interface GenState {
     kind: 'live' | 'background'
     abortController?: AbortController
     startedAt: number
+    stage?: number
 }
 
 export const generationStates = writable<Map<string, GenState>>(new Map())
 
-// Compat stores. Kept writable: Suggestion.svelte pulses doingChat true→false
-// to retrigger its subscriber (only while nothing is generating, so the pulse
-// cannot diverge from the map).
+// Compat stores remain available to extensions that monitor aggregate activity.
 export const doingChat = writable(false)
 export const chatProcessStage = writable(0)
 
@@ -80,9 +79,15 @@ export function startGeneration(chatKey: string, generationId: string, kind: 'li
     syncDoingChat()
 }
 
-// Thin wrapper over the global compat store (the per-key stage field had no
-// consumers; last writer wins, same as the previous global-only behavior).
-export function setGenerationStage(_chatKey: string, stage: number): void {
+// The selected chat reads its own stage; extensions retain the aggregate store.
+export function setGenerationStage(chatKey: string, stage: number): void {
+    generationStates.update(m => {
+        const entry = m.get(chatKey)
+        if (!entry) return m
+        const next = new Map(m)
+        next.set(chatKey, { ...entry, stage })
+        return next
+    })
     chatProcessStage.set(stage)
 }
 

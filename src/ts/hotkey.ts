@@ -1,3 +1,4 @@
+import { isChatGenerating } from './process/generationState'
 import { get } from "svelte/store"
 import { alertClear, alertMd, alertSelect, alertWait, doingAlert } from "./alert"
 import { getDatabase, getCurrentCharacter, getCurrentChat } from "./storage/database.svelte"
@@ -6,8 +7,7 @@ import { alertStore, DBState, MobileGUIStack, MobileSideBar, openPersonaList, pe
 import { language } from "src/lang"
 import { updateTextThemeAndCSS } from "./gui/colorscheme"
 import { defaultHotkeys } from "./defaulthotkeys"
-import { doingChat, previewBody, sendChat } from "./process/index.svelte"
-import { endAllGenerations } from "./process/generationState"
+import { previewBody, sendChat } from "./process/index.svelte"
 import { RISU_SIDEBAR_DRAG_TYPE } from "./dragTypes"
 import { openSettings, SettingsRoute, SystemTab } from "./routing"
 import { deselectCharacter } from "./characters"
@@ -143,7 +143,7 @@ export function initHotkey(){
                     break
                 }
                 case 'previewRequest':{
-                    if(get(doingChat) && get(selectedCharID) !== -1){
+                    if(isChatGenerating(getCurrentChat()?.id) && get(selectedCharID) !== -1){
                         // Consumed (break → preventDefault below) so the key
                         // does not leak to the browser's default action.
                         break
@@ -174,10 +174,6 @@ export function initHotkey(){
                         // user trapped in it until a reload.
                         alertClear()
                         throw error
-                    } finally {
-                        // Without this a throw from sendChat/JSON.parse left the
-                        // generation state locked.
-                        endAllGenerations()
                     }
                     return
                 }

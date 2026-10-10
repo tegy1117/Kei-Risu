@@ -138,6 +138,7 @@ function buildV4Fixture(): V4Fixture {
                 name: 'OpenAI Personal',
                 provider: 'openai:standard',
                 key: 'sk-pool-1',
+                maxConcurrentRequests: 3,
                 createdAt: 1_700_000_000_000,
                 updatedAt: 1_700_000_000_000,
             },

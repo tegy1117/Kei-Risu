@@ -1,23 +1,41 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../process/executionScope'
 import { get } from "svelte/store"
-import { parseChatML } from "../parser/chatML";
-import { getDatabase, type character, type customscript } from "../storage/database.svelte"
+import { parseChatML as parseChatMLUnscoped } from "../parser/chatML";
+import { getDatabase as getDatabaseUnscoped, type character, type customscript } from "../storage/database.svelte"
 import {
     defaultTranslatorPrompt,
     getCurrentTranslatorPresetFromState,
     type TranslatorPreset,
 } from "./presets";
-import { globalFetch } from "../globalApi.svelte"
+import { globalFetch as globalFetchUnscoped } from "../globalApi.svelte"
 import { notifyError } from "../alert"
-import { requestChatData } from "../process/request/request"
-import { doingChat, type OpenAIChat } from "../process/index.svelte"
+import { requestChatData as requestChatDataUnscoped } from "../process/request/request"
+import { type OpenAIChat } from "../process/index.svelte"
+import { isChatGenerating } from '../process/generationState'
 import { applyMarkdownToNode, risuChatParser, type simpleCharacterArgument } from "../parser/parser.svelte"
 import { selectedCharID } from "../stores.svelte"
 import { clearPersistentPrefix, listPersistentKeys, makeHashedStorageKey, readPersistentJson, writePersistentJson } from "../storage/persistentKv"
 import { getModuleRegexScripts } from "../process/modules"
 import { getToolRegexScripts } from '../process/tools/features'
 import { getNodetextToSentence, sleep } from "../util"
-import { processScriptFull } from "../process/scripts"
+import { processScriptFull as processScriptFullUnscoped } from "../process/scripts"
 import { playNotificationSound } from '../notificationSound'
+const globalFetch = lazyFunction(() => globalFetchUnscoped)
+
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const runTranslatorUnscoped = runTranslator
+const translateMainUnscoped = translateMain
+const translateLLMUnscoped = translateLLM
+const jaTransUnscoped = jaTrans
+const processScriptFull = lazyFunction(() => processScriptFullUnscoped)
+const translateUnscoped = translate
+const isExpTranslatorUnscoped = isExpTranslator
+const needSuperChunkedTranslateUnscoped = needSuperChunkedTranslate
+const applyEdittransRegexUnscoped = applyEdittransRegex
+const parseChatML = lazyFunction(() => parseChatMLUnscoped)
+const requestChatData = lazyFunction(() => requestChatDataUnscoped)
+const getCurrentTranslatorPresetUnscoped = getCurrentTranslatorPreset
+
 
 let cache={
     origin: [''],
@@ -54,6 +72,10 @@ export function getCurrentTranslatorPreset(): TranslatorPreset {
 }
 
 export async function translate(text:string, reverse:boolean) {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const runTranslator = bindExecutionContext(executionContext, () => runTranslatorUnscoped, true)
+
     let db = getDatabase()
     if(!reverse){
         const ind = cache.origin.indexOf(text)
@@ -72,6 +94,9 @@ export async function translate(text:string, reverse:boolean) {
 }
 
 export async function runTranslator(text:string, reverse:boolean, from:string,target:string, exarg?:{translatorNote?:string}) {
+    const executionContext = getExecutionContext()
+    const translateMain = bindExecutionContext(executionContext, () => translateMainUnscoped, true)
+
     const arg = {
 
         from: reverse ? from : target,
@@ -136,6 +161,11 @@ export async function runTranslator(text:string, reverse:boolean, from:string,ta
 }
 
 async function translateMain(text:string, arg:{from:string, to:string, host:string, translatorNote?:string}){
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const translateLLM = bindExecutionContext(executionContext, () => translateLLMUnscoped, true)
+
     let db = getDatabase()
     if(db.translatorType === 'llm'){
         const tr = arg.to || 'en'
@@ -186,7 +216,7 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
 
         const body = {text: text, target_lang: arg.to.toLocaleUpperCase(), source_lang: arg.from.toLocaleUpperCase()}
 
-    
+
         if(db.deeplXOptions.token.trim() !== '') { headers["Authorization"] = "Bearer " + db.deeplXOptions.token}
         
         //Since the DeepLX API is non-CORS restricted, we can use the plain fetch function
@@ -261,12 +291,18 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
     return result
 }
 
-export async function translateVox(text:string) {    
+export async function translateVox(text:string) {
+    const executionContext = getExecutionContext()
+    const jaTrans = bindExecutionContext(executionContext, () => jaTransUnscoped, true)
+
     return jaTrans(text)
 }
 
 
 async function jaTrans(text:string) {
+    const executionContext = getExecutionContext()
+    const runTranslator = bindExecutionContext(executionContext, () => runTranslatorUnscoped, true)
+
     return await runTranslator(text, true, 'en','ja')
 }
 
@@ -276,6 +312,15 @@ export function isExpTranslator(){
 }
 
 export async function translateHTML(html: string, reverse:boolean, charArg:simpleCharacterArgument|string = '', chatID:number, regenerate = false): Promise<string> {
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const processScriptFull = bindExecutionContext(executionContext, () => processScriptFullUnscoped, true)
+    const translate = bindExecutionContext(executionContext, () => translateUnscoped, true)
+    const isExpTranslator = bindExecutionContext(executionContext, () => isExpTranslatorUnscoped, true)
+    const needSuperChunkedTranslate = bindExecutionContext(executionContext, () => needSuperChunkedTranslateUnscoped, true)
+    const translateLLM = bindExecutionContext(executionContext, () => translateLLMUnscoped, true)
+    const applyEdittransRegex = bindExecutionContext(executionContext, () => applyEdittransRegexUnscoped, true)
+
     if(!html){
         return html
     }
@@ -283,7 +328,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
     if(charArg !== ''){
         if(typeof(charArg) === 'string'){
             const db = getDatabase()
-            const charId = get(selectedCharID)
+            const charId = executionContext?.resolve()?.characterIndex ?? get(selectedCharID)
             alwaysExistChar = db.characters[charId]
         }
         else{
@@ -299,7 +344,8 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
         }
     }
     let db = getDatabase()
-    let DoingChat = get(doingChat)
+    const selectedCharacter = db.characters[executionContext?.resolve()?.characterIndex ?? get(selectedCharID)]
+    const DoingChat = isChatGenerating(executionContext?.chatId ?? selectedCharacter?.chats[selectedCharacter.chatPage]?.id)
     if(DoingChat){
         if(isExpTranslator()){
             if(!(db.translatorType === 'llm' && await getLLMCache(html) !== null)){
@@ -526,6 +572,12 @@ function needSuperChunkedTranslate(){
 }
 
 async function translateLLM(text:string, arg:{to:string, from:string, regenerate?:boolean,translatorNote?:string, onCacheState?:(cached:boolean) => void}):Promise<string>{
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const parseChatML = bindExecutionContext(executionContext, () => parseChatMLUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const requestChatData = bindExecutionContext(executionContext, () => requestChatDataUnscoped, true)
+    const getCurrentTranslatorPreset = bindExecutionContext(executionContext, () => getCurrentTranslatorPresetUnscoped, true)
+
     if(!arg.regenerate){
         const cacheMatch = llmTranslateCache.get(text)
         if(cacheMatch !== undefined){

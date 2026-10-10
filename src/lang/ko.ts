@@ -1399,6 +1399,8 @@ export const languageKorean = {
   registryNoticeDismiss: "이 변경은 다시 보지 않기",
   registryNoticeConfirm: "확인",
   apiKeyManagerMenu: "API 키 관리",
+  apiKeyMaxConcurrent: "최대 동시 요청 수",
+  apiKeyMaxConcurrentDesc: "이 키로 동시에 실행할 요청 수입니다. 나머지 요청은 차례대로 대기합니다.",
   apiKeyManagerDesc: "여러 프리셋에서 재사용할 API 키를 저장합니다.",
   apiKeyAdd: "키 추가",
   apiKeyName: "이름",
@@ -2855,6 +2857,9 @@ export const languageKorean = {
   chatToolsInfo: "현재 대화의 툴을 켜거나 끌 수 있습니다. 우클릭하거나 길게 눌러 캐릭터에 연결할 수 있습니다.",
 
   requestStatus: {
+    queued: "대기 중…",
+    generating: "생성중",
+    openChat: "생성 중인 대화로 이동",
     connecting: "요청 중…",
     thinking: "사고 중…",
     responding: "응답 중…",
@@ -2862,7 +2867,7 @@ export const languageKorean = {
     retrying: "재시도 중…",
     stalled: "멈춤…",
     background: "백그라운드 진행 중…",
-    done: "완료",
+    done: "완료됨",
     failed: "실패",
     aborted: "취소됨",
     kindMain: "메인",

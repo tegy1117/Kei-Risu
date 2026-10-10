@@ -1,3 +1,4 @@
+import { createChatExecutionContext, withExecutionContext } from 'src/ts/process/executionContext.svelte'
 import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
 import { SandboxHost } from "./factory";
 import { getCurrentChat, getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
@@ -21,8 +22,8 @@ import { getLLMCache, searchLLMCache } from "src/ts/translator/translator";
 import { hasher, risuChatParser, type CbsConditions } from "src/ts/parser/parser.svelte";
 import { LLMFlags, LLMFormat, LLMProvider, LLMTokenizer, type LLMModel } from "src/ts/model/types";
 import { readPersistentJson, removePersistentKey, writePersistentJson } from "src/ts/storage/persistentKv";
-import { endAllGenerations } from "src/ts/process/generationState";
-import { sendChat as processSendChat, doingChat } from "src/ts/process/index.svelte";
+import { isChatGenerating } from "src/ts/process/generationState";
+import { sendChat as processSendChat } from "src/ts/process/index.svelte";
 import { processScriptFull } from "src/ts/process/scripts";
 import { getModelInfo } from "src/ts/model/modellist";
 import type { ModelModeExtended } from "src/ts/process/request/shared";
@@ -1578,7 +1579,8 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             staticModel?: string
             allowPlugins?: boolean
         }) => {
-            return requestChatDataMain({
+            const executionContext = createChatExecutionContext()
+            return withExecutionContext(executionContext, () => requestChatDataMain({
                 formated: options.messages,
                 bias: {},
                 staticModel: options.staticModel,
@@ -1591,9 +1593,11 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 // explicitly with `allowPlugins: true`, accepting responsibility
                 // for avoiding provider-to-provider call loops.
                 blockPlugins: !options.allowPlugins,
-            }, options.mode)
+                executionContext,
+            }, options.mode))
         },
         sendChat: async (message: string) => {
+            const executionContext = createChatExecutionContext()
             const conf = await getPluginPermission(plugin.name, 'sendChat');
             if(!conf){
                 return false;
@@ -1603,25 +1607,24 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 throw new Error("Message must be a string");
             }
 
-            if(get(doingChat)){
-                throw new Error("A chat is already in progress");
-            }
+            if (!executionContext) throw new Error("No active chat found");
+            if (isChatGenerating(executionContext.chatId)) throw new Error("This chat is already in progress");
 
             // The model the main request would go to: a plugin provider there
             // (global or slot-pinned) is blocked; a ModelPreset main is not.
-            const mainModelId = resolveClassicModelId(getCurrentChat(), 'model')
+            const mainModelId = withExecutionContext(executionContext, () => resolveClassicModelId(executionContext.resolve()?.chat, 'model'))
             if(mainModelId && getModelInfo(mainModelId).id.startsWith('pluginmodel:::')){
                 // Executing plugin provider is block because it can be used for loopholes for ipc right now.
                 throw new Error("Sending chat with plugin-based model is currently blocked");
             }
 
-            const charId = get(selectedCharID);
-            const char = DBState.db.characters[charId];
+            const target = executionContext.resolve();
+            const char = target?.character;
             if(!char){
                 throw new Error("No character selected");
             }
 
-            const chat = char.chats[char.chatPage];
+            const chat = target.chat;
             if(!chat){
                 throw new Error("No active chat found");
             }
@@ -1634,15 +1637,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 });
             }
 
-            try {
-                await processSendChat(-1, {});
-            } finally {
-                // Plugin API path does not pass through the UI unlock logic,
-                // so release doingChat here on both success and failure.
-                endAllGenerations();
-            }
-
-            return true;
+            return processSendChat(-1, { executionContext });
         },
         addPluginChannelListener: (channelName: string, callback: Function) => {
             pluginChannel.set(plugin.name + channelName, callback);

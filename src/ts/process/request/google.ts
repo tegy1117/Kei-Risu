@@ -1,6 +1,7 @@
-import { fetchNative, textifyReadableStream } from "src/ts/globalApi.svelte"
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
+import { fetchNative as fetchNativeUnscoped, textifyReadableStream } from "src/ts/globalApi.svelte"
 import { LLMFlags, LLMFormat, type LLMModel } from "src/ts/model/modellist"
-import { getDatabase, setDatabase } from "src/ts/storage/database.svelte"
+import { getDatabase as getDatabaseUnscoped, setDatabase } from "src/ts/storage/database.svelte"
 import { base64url, simplifySchema } from "src/ts/util"
 import { v4 } from "uuid"
 import { saveInlayedSignature, setInlayAsset, writeInlayImage, type InlaySignature } from "../files/inlays"
@@ -9,8 +10,16 @@ import { callToolDetailed, decodeToolCall, encodeToolExecution } from "../mcp/mc
 import { notifyError } from "src/ts/alert";
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from './request'
 import { toLogSource } from './logSource'
-import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type LLMParameter } from './shared'
+import { applyAdditionalParameters, applyParameters as applyParametersUnscoped, getAdditionalParameters as getAdditionalParametersUnscoped, type LLMParameter } from './shared'
 import { bodyIntercepterStore } from "src/ts/stores.svelte"
+const getAdditionalParameters = lazyFunction(() => getAdditionalParametersUnscoped)
+const fetchNative = lazyFunction(() => fetchNativeUnscoped)
+
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const applyParameters = lazyFunction(() => applyParametersUnscoped)
+const requestGoogleUnscoped = requestGoogle
+const wrapToolStreamUnscoped = wrapToolStream
+
 
 type GeminiFunctionCall = {
     id?: string;
@@ -56,6 +65,12 @@ function geminiRetryBackoff(failedAttempt: number, signal?: AbortSignal): Promis
 }
 
 export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getAdditionalParameters = bindExecutionContext(executionContext, () => getAdditionalParametersUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+    const requestGoogle = bindExecutionContext(executionContext, () => requestGoogleUnscoped, true)
+
 
     const formated = arg.formated
     const db = getDatabase()
@@ -612,6 +627,11 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
 }
 
 async function requestGoogle(url:string, body:any, headers:{[key:string]:string}, arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const fetchNative = bindExecutionContext(executionContext, () => fetchNativeUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const wrapToolStream = bindExecutionContext(executionContext, () => wrapToolStreamUnscoped, true)
+
     
     const db = getDatabase()
 

@@ -1,15 +1,17 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
+import { managedKeyRef } from './requestSlots'
 import { Ollama } from 'ollama/dist/browser.mjs';
 import { language } from "../../../lang";
-import { globalFetch, fetchNative } from "../../globalApi.svelte";
-import { getModelInfo, LLMFlags, LLMFormat, type LLMModel } from "../../model/modellist";
-import { risuChatParser, risuEscape, risuUnescape } from "../../parser/parser.svelte";
+import { globalFetch as globalFetchUnscoped, fetchNative } from "../../globalApi.svelte";
+import { getModelInfo as getModelInfoUnscoped, LLMFlags, LLMFormat, type LLMModel } from "../../model/modellist";
+import { risuChatParser as risuChatParserUnscoped, risuEscape, risuUnescape } from "../../parser/parser.svelte";
 import { pluginProcess, pluginV2 } from "../../plugins/plugins.svelte";
-import { getCurrentCharacter, getCurrentChat, getDatabase, type character, type MessageGenerationInfo } from "../../storage/database.svelte";
+import { getCurrentCharacter as getCurrentCharacterUnscoped, getCurrentChat as getCurrentChatUnscoped, getDatabase as getDatabaseUnscoped, type character, type MessageGenerationInfo } from "../../storage/database.svelte";
 import { tokenizeNum, encodeWithTokenizer } from "../../tokenizer";
 import { v4 as uuidv4 } from "uuid";
 import { simplifySchema, sleep } from "../../util";
 import type { OpenAIChat } from "../index.svelte";
-import { getTools, callToolDetailed, encodeToolCall, decodeToolCall, stripToolDisplayMarkers } from "../mcp/mcp";
+import { getTools as getToolsUnscoped, callToolDetailed, encodeToolCall, decodeToolCall, stripToolDisplayMarkers } from "../mcp/mcp";
 import type { MCPTool, RPCToolCallContent } from "../mcp/mcplib";
 import type { ToolExecutionContext } from "../tools/tools";
 import { NovelAIBadWordIds, stringlizeNAIChat } from "../models/nai";
@@ -17,11 +19,11 @@ import { OobaParams } from "../prompt";
 import { getStopStrings, stringlizeAINChat, unstringlizeAIN, unstringlizeChat } from "../stringlize";
 import { applyChatTemplate } from "../templates/chatTemplate";
 import { runTransformers } from "../transformers";
-import { runTrigger } from "../triggers";
-import { requestClaude } from './anthropic';
-import { requestGoogleCloudVertex } from './google';
-import { requestOpenAI, requestOpenAILegacyInstruct, requestOpenAIResponseAPI } from "./openAI/requests";
-import { applyParameters, collectStreamingText, type ModelModeExtended } from './shared';
+import { runTrigger as runTriggerUnscoped } from "../triggers";
+import { requestClaude as requestClaudeUnscoped } from './anthropic';
+import { requestGoogleCloudVertex as requestGoogleCloudVertexUnscoped } from './google';
+import { requestOpenAI as requestOpenAIUnscoped, requestOpenAILegacyInstruct as requestOpenAILegacyInstructUnscoped, requestOpenAIResponseAPI as requestOpenAIResponseAPIUnscoped } from "./openAI/requests";
+import { applyParameters as applyParametersUnscoped, collectStreamingText, type ModelModeExtended } from './shared';
 import {
     sendChatRequest, streamChatRequest, previewChatRequest,
     sendAnthropicChatRequest, streamAnthropicChatRequest, previewAnthropicChatRequest,
@@ -38,7 +40,7 @@ import { resolveWireModelId } from "src/ts/preset/adapter/wireInvariants";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./jobFetch";
 import { toLogSource, toRequestKind } from "./logSource";
-import { resolveChatModelBinding, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision } from "./modelPresetBinding";
+import { resolveChatModelBinding as resolveChatModelBindingUnscoped, classicModelIdFor, buildModelPresetCredential as buildModelPresetCredentialUnscoped, applyPromptPresetParams as applyPromptPresetParamsUnscoped, presetSupportsVision } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import { prepareToolSchema } from "./toolSchemaCompatibility";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
@@ -47,6 +49,43 @@ import {
     startStatus, appendText, endStatus, setStatusTokenCounter, addBadge, markPhase,
     type RequestKind,
 } from "src/ts/status/requestStatus";
+const getModelInfo = lazyFunction(() => getModelInfoUnscoped)
+const globalFetch = lazyFunction(() => globalFetchUnscoped)
+
+const getCurrentCharacter = lazyFunction(() => getCurrentCharacterUnscoped)
+const getCurrentChat = lazyFunction(() => getCurrentChatUnscoped)
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const getTools = lazyFunction(() => getToolsUnscoped)
+const runTrigger = lazyFunction(() => runTriggerUnscoped)
+const requestChatDataMainUnscoped = requestChatDataMain
+const requestClaude = lazyFunction(() => requestClaudeUnscoped)
+const requestGoogleCloudVertex = lazyFunction(() => requestGoogleCloudVertexUnscoped)
+const requestOpenAI = lazyFunction(() => requestOpenAIUnscoped)
+const requestOpenAILegacyInstruct = lazyFunction(() => requestOpenAILegacyInstructUnscoped)
+const requestOpenAIResponseAPI = lazyFunction(() => requestOpenAIResponseAPIUnscoped)
+const resolveChatModelBinding = lazyFunction(() => resolveChatModelBindingUnscoped)
+const applyPromptPresetParams = lazyFunction(() => applyPromptPresetParamsUnscoped)
+const reformaterUnscoped = reformater
+const requestModelPresetUnscoped = requestModelPreset
+const requestNovelAIUnscoped = requestNovelAI
+const requestOobaLegacyUnscoped = requestOobaLegacy
+const requestOobaUnscoped = requestOoba
+const requestPluginUnscoped = requestPlugin
+const requestEchoUnscoped = requestEcho
+const requestKoboldUnscoped = requestKobold
+const requestNovelListUnscoped = requestNovelList
+const requestOllamaUnscoped = requestOllama
+const requestCohereUnscoped = requestCohere
+const requestHordeUnscoped = requestHorde
+const requestWebLLMUnscoped = requestWebLLM
+const buildModelPresetCredential = lazyFunction(() => buildModelPresetCredentialUnscoped)
+const makeProxiedFetchUnscoped = makeProxiedFetch
+const statusEnabledUnscoped = statusEnabled
+const runModelPresetToolLoopUnscoped = runModelPresetToolLoop
+const createModelPresetToolStreamUnscoped = createModelPresetToolStream
+const risuChatParser = lazyFunction(() => risuChatParserUnscoped)
+const applyParameters = lazyFunction(() => applyParametersUnscoped)
+
 
 export type ToolCall = {
     name: string;
@@ -54,6 +93,8 @@ export type ToolCall = {
 }
 
 interface requestDataArgument{
+    executionContext?: ChatExecutionContext
+    originChatId?: string
     formated: OpenAIChat[]
     bias: {[key:number]:number}
     biasString?: [string,number][]
@@ -152,9 +193,19 @@ export type requestDataResponse = {
 export interface StreamResponseChunk{[key:string]:string}
 
 export async function requestChatData(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getTools = bindExecutionContext(executionContext, () => getToolsUnscoped, true)
+    const runTrigger = bindExecutionContext(executionContext, () => runTriggerUnscoped, true)
+    const requestChatDataMain = bindExecutionContext(executionContext, () => requestChatDataMainUnscoped, true)
+
     const db = getDatabase()
     arg = {
         ...arg,
+        executionContext,
+        originChatId: arg.originChatId ?? executionContext?.chatId,
         formated: arg.formated.map((message) => ({
             ...message,
             content: typeof message.content === 'string' ? stripToolDisplayMarkers(message.content) : message.content,
@@ -208,7 +259,7 @@ export async function requestChatData(arg:requestDataArgument, model:ModelModeEx
                         displayData: JSON.stringify(arg.formated)
                     })
         
-                    const got = JSON.parse(d.displayData)
+                    const got = JSON.parse(d?.displayData ?? JSON.stringify(arg.formated))
                     if(!got || !Array.isArray(got)){
                         throw new Error('Invalid return')
                     }
@@ -411,8 +462,33 @@ export function reformater(formated:OpenAIChat[],modelInfo:LLMModel|LLMFlags[]){
 
 
 export async function requestChatDataMain(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getModelInfo = bindExecutionContext(executionContext, () => getModelInfoUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const requestClaude = bindExecutionContext(executionContext, () => requestClaudeUnscoped, true)
+    const requestGoogleCloudVertex = bindExecutionContext(executionContext, () => requestGoogleCloudVertexUnscoped, true)
+    const requestOpenAI = bindExecutionContext(executionContext, () => requestOpenAIUnscoped, true)
+    const requestOpenAILegacyInstruct = bindExecutionContext(executionContext, () => requestOpenAILegacyInstructUnscoped, true)
+    const requestOpenAIResponseAPI = bindExecutionContext(executionContext, () => requestOpenAIResponseAPIUnscoped, true)
+    const resolveChatModelBinding = bindExecutionContext(executionContext, () => resolveChatModelBindingUnscoped, true)
+    const applyPromptPresetParams = bindExecutionContext(executionContext, () => applyPromptPresetParamsUnscoped, true)
+    const reformater = bindExecutionContext(executionContext, () => reformaterUnscoped, true)
+    const requestModelPreset = bindExecutionContext(executionContext, () => requestModelPresetUnscoped, true)
+    const requestNovelAI = bindExecutionContext(executionContext, () => requestNovelAIUnscoped, true)
+    const requestOobaLegacy = bindExecutionContext(executionContext, () => requestOobaLegacyUnscoped, true)
+    const requestOoba = bindExecutionContext(executionContext, () => requestOobaUnscoped, true)
+    const requestPlugin = bindExecutionContext(executionContext, () => requestPluginUnscoped, true)
+    const requestEcho = bindExecutionContext(executionContext, () => requestEchoUnscoped, true)
+    const requestKobold = bindExecutionContext(executionContext, () => requestKoboldUnscoped, true)
+    const requestNovelList = bindExecutionContext(executionContext, () => requestNovelListUnscoped, true)
+    const requestOllama = bindExecutionContext(executionContext, () => requestOllamaUnscoped, true)
+    const requestCohere = bindExecutionContext(executionContext, () => requestCohereUnscoped, true)
+    const requestHorde = bindExecutionContext(executionContext, () => requestHordeUnscoped, true)
+    const requestWebLLM = bindExecutionContext(executionContext, () => requestWebLLMUnscoped, true)
+
     const db = getDatabase()
-    const targ:RequestDataArgumentExtended = arg
+    const targ:RequestDataArgumentExtended = { ...arg, executionContext, originChatId: arg.originChatId ?? executionContext?.chatId }
 
     // P4 dual-regime dispatch (plan v6 §7). Resolve the per-chat ModelPreset
     // binding BEFORE any classic model selection so a binding chat never touches
@@ -577,7 +653,8 @@ function previewModelPreset(
 // chatId (= the message generationId) is threaded into fetchNative so the
 // request is recorded in the fetch log against the message — otherwise the
 // per-message "view log" shows "deleted log" for binding requests.
-function makeProxiedFetch(chatId?: string, onRoute?: (route: RequestLogRoute) => void): typeof fetch {
+function makeProxiedFetch(chatId?: string, onRoute?: (route: RequestLogRoute) => void, apiKeyRef?: string): typeof fetch {
+    const requestTimeoutMs = (getDatabase().localNetworkTimeoutSec ?? 600) * 1000
     return ((input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString()
         return fetchNative(url, {
@@ -585,6 +662,7 @@ function makeProxiedFetch(chatId?: string, onRoute?: (route: RequestLogRoute) =>
             // direct fetch and falls back to /proxy2 on CORS/network failure),
             // so the route is reported back rather than assumed here.
             onLogRoute: onRoute,
+            apiKeyRef,
             method: (init?.method as 'POST' | 'GET' | 'PUT' | 'DELETE') ?? 'POST',
             headers: (init?.headers as Record<string, string>) ?? {},
             body: init?.body as string,
@@ -594,7 +672,7 @@ function makeProxiedFetch(chatId?: string, onRoute?: (route: RequestLogRoute) =>
             // proxy rather than a browser-direct fetch to a private address.
             networkRoute: isLocalNetworkUrl(url) ? 'local_network' : 'auto',
             // Honor the same request-timeout the classic path uses.
-            requestTimeoutMs: (getDatabase().localNetworkTimeoutSec ?? 600) * 1000,
+            requestTimeoutMs,
         })
     }) as typeof fetch
 }
@@ -698,6 +776,16 @@ function toAdapterToolDef(tool: MCPTool, preset: ModelPreset): AdapterToolDef {
 const formatPresetReasoning = formatReasoningParts
 
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const buildModelPresetCredential = bindExecutionContext(executionContext, () => buildModelPresetCredentialUnscoped, true)
+    const reformater = bindExecutionContext(executionContext, () => reformaterUnscoped, true)
+    const makeProxiedFetch = bindExecutionContext(executionContext, () => makeProxiedFetchUnscoped, true)
+    const statusEnabled = bindExecutionContext(executionContext, () => statusEnabledUnscoped, true)
+    const runModelPresetToolLoop = bindExecutionContext(executionContext, () => runModelPresetToolLoopUnscoped, true)
+    const createModelPresetToolStream = bindExecutionContext(executionContext, () => createModelPresetToolStreamUnscoped, true)
+
     arg.toolExecutionContext = {
         ...(arg.toolExecutionContext ?? { stack: [] }),
         abortSignal: abortSignal ?? arg.toolExecutionContext?.abortSignal,
@@ -745,7 +833,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         provider: preset.profileSnapshot.providerBaseId,
         streaming: resolvePresetStreaming(preset, arg),
     })
-    const proxiedFetch = makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
+    const apiKeyRef = preset.apiKeyRef ?? managedKeyRef('', credential?.apiKey ? { authorization: `Bearer ${credential.apiKey}` } : {})
+    const proxiedFetch = makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route), apiKeyRef)
 
     // Tool gating. Three guards:
     //  1) Per-preset opt-in (preset.toolUse, default OFF) — the hard regression
@@ -800,6 +889,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             streaming: resolvePresetStreaming(preset, arg),
             timeoutMs: (getDatabase().localNetworkTimeoutSec ?? 600) * 1000,
             fallbackFetch: proxiedFetch,
+            apiKeyRef,
         })
         : proxiedFetch
 
@@ -857,7 +947,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                 // housekeeping calls must not become jobs. Built without the
                 // route reporter so a cachedContents call cannot relabel the
                 // chat request's log entries.
-                fetchImpl: makeProxiedFetch(arg.chatId),
+                fetchImpl: makeProxiedFetch(arg.chatId, undefined, apiKeyRef),
             }
         }
     }
@@ -935,7 +1025,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         const useStreaming = resolvePresetStreaming(preset, arg)
         if (tools) {
             if (reportStatus) {
-                safeStatus(() => startStatus(genId, { kind: statusKind, label: statusLabel, chatId: arg.realChatId, parentId: arg.requestStatus?.parentId, order: arg.requestStatus?.order, phase: 'connecting', now: Date.now() }))
+                safeStatus(() => startStatus(genId, { kind: statusKind, label: statusLabel, chatId: arg.originChatId ?? arg.realChatId ?? executionContext?.chatId, parentId: arg.requestStatus?.parentId, order: arg.requestStatus?.order, phase: 'connecting', now: Date.now() }))
             }
             if (useStreaming) {
                 const stream = createModelPresetToolStream({
@@ -968,7 +1058,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             anthropicCache1h: getDatabase().claude1HourCaching === true,
         }
         if (reportStatus) {
-            safeStatus(() => startStatus(genId, { kind: statusKind, label: statusLabel, chatId: arg.realChatId, parentId: arg.requestStatus?.parentId, order: arg.requestStatus?.order, phase: 'connecting', now: Date.now() }))
+            safeStatus(() => startStatus(genId, { kind: statusKind, label: statusLabel, chatId: arg.originChatId ?? arg.realChatId ?? executionContext?.chatId, parentId: arg.requestStatus?.parentId, order: arg.requestStatus?.order, phase: 'connecting', now: Date.now() }))
         }
         if(useStreaming){
             const gen = streamModelPreset(kind, preset, options, credential)
@@ -1077,6 +1167,10 @@ export async function requestAgentModelPreset(
     preset: ModelPreset,
     abortSignal: AbortSignal = null,
 ): Promise<{ ok: true, text: string, model?: string } | { ok: false, error: string, model?: string }> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getTools = bindExecutionContext(executionContext, () => getToolsUnscoped, true)
+    const requestModelPreset = bindExecutionContext(executionContext, () => requestModelPresetUnscoped, true)
+
     const response = await requestModelPreset({ ...arg, tools: arg.tools ?? await getTools() }, preset, abortSignal, 'otherAx')
     if(response.type === 'success') return { ok: true, text: response.result, model: response.model }
     if(response.type === 'streaming'){
@@ -1104,6 +1198,9 @@ export interface ModelPresetTestResult {
 }
 
 export async function testModelPreset(preset: ModelPreset, message: string, abortSignal: AbortSignal = null): Promise<ModelPresetTestResult> {
+    const executionContext = getExecutionContext()
+    const requestModelPreset = bindExecutionContext(executionContext, () => requestModelPresetUnscoped, true)
+
     const arg: RequestDataArgumentExtended = {
         formated: [{ role: 'user', content: message }],
         bias: {},
@@ -1154,6 +1251,9 @@ async function runModelPresetToolLoop(
     abortSignal: AbortSignal | null,
     runtime: ModelPresetToolLoopRuntime,
 ): Promise<{ result: string; toolsExecuted: boolean; usage?: AdapterUsage }> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     // Tracks whether any tool actually ran, so the caller can block outer
     // success-path retries that would otherwise re-execute side-effecting tools.
     let toolsExecuted = false
@@ -1505,6 +1605,11 @@ function toolResponseError(response: RPCToolCallContent[]): string | undefined {
 
 
 async function requestNovelAI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel
@@ -1615,6 +1720,12 @@ async function requestNovelAI(arg:RequestDataArgumentExtended):Promise<requestDa
 }
 
 async function requestOobaLegacy(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const risuChatParser = bindExecutionContext(executionContext, () => risuChatParserUnscoped, true)
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel
@@ -1754,6 +1865,11 @@ async function requestOobaLegacy(arg:RequestDataArgumentExtended):Promise<reques
 }
 
 async function requestOoba(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const risuChatParser = bindExecutionContext(executionContext, () => risuChatParserUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel
@@ -1826,6 +1942,10 @@ async function requestOoba(arg:RequestDataArgumentExtended):Promise<requestDataR
 }
 
 async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+
     const db = getDatabase()
     const isV3Model = arg.aiModel.startsWith('pluginmodel:::')
     const responseModel = isV3Model ? arg.aiModel : 'custom'
@@ -1957,6 +2077,9 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
 }
 
 async function requestEcho(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const db = getDatabase()
     const delay = db.echoDelay ?? 0
     const message = db.echoMessage ?? "Echo Message"
@@ -1972,6 +2095,11 @@ async function requestEcho(arg:RequestDataArgumentExtended):Promise<requestDataR
 }
 
 async function requestKobold(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const maxTokens = arg.maxTokens
@@ -2039,6 +2167,11 @@ async function requestKobold(arg:RequestDataArgumentExtended):Promise<requestDat
 }
 
 async function requestNovelList(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
 
     const formated = arg.formated
     const db = getDatabase()
@@ -2123,6 +2256,9 @@ async function requestNovelList(arg:RequestDataArgumentExtended):Promise<request
 }
 
 async function requestOllama(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
 
@@ -2195,6 +2331,11 @@ async function requestOllama(arg:RequestDataArgumentExtended):Promise<requestDat
 }
 
 async function requestCohere(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel
@@ -2327,6 +2468,10 @@ async function requestCohere(arg:RequestDataArgumentExtended):Promise<requestDat
 
 
 async function requestHorde(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel
@@ -2454,6 +2599,10 @@ async function requestHorde(arg:RequestDataArgumentExtended):Promise<requestData
 }
 
 async function requestWebLLM(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel

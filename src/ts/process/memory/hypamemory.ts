@@ -2,6 +2,7 @@ import { globalFetch } from "src/ts/globalApi.svelte";
 import { runEmbedding } from "../transformers";
 import { appendLastPath } from "src/ts/util";
 import { getDatabase } from "src/ts/storage/database.svelte";
+import { getExecutionContext, withExecutionContext, bindExecutionContext } from '../executionScope';
 import { makeHashedStorageKey, readPersistentJson, readPersistentJsonMany, writePersistentJson } from "src/ts/storage/persistentKv";
 import { isContextModel, getContextProvider } from "./contextualEmbedding";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
@@ -109,6 +110,9 @@ export async function setPersistedHypaVector(cacheKey: string, value: memoryVect
 }
 
 export class HypaProcesser{
+    private readonly executionContext = getExecutionContext()
+    private readonly readDatabase = bindExecutionContext(this.executionContext, getDatabase)
+    private readonly fetch = bindExecutionContext(this.executionContext, globalFetch)
     oaikey:string
     vectors:memoryVector[]
     model:HypaModel
@@ -116,7 +120,7 @@ export class HypaProcesser{
 
     constructor(model:HypaModel|'auto' = 'auto',customEmbeddingUrl?:string){
         this.vectors = []
-        const db = getDatabase()
+        const db = this.readDatabase()
         if(model === 'auto'){
             this.model = db.hypaModel || 'MiniLM'
         }
@@ -145,7 +149,7 @@ export class HypaProcesser{
     
     async getEmbeds(input:string[]|string, inputType:'query'|'document' = 'query'):Promise<VectorArray[]> {
         if(isContextModel(this.model)){
-            const provider = getContextProvider(this.model)
+            const provider = withExecutionContext(this.executionContext, () => getContextProvider(this.model))
             const inputs:string[] = Array.isArray(input) ? input : [input]
             if(inputType === 'query'){
                 return await provider.embedQueries(inputs)
@@ -167,7 +171,7 @@ export class HypaProcesser{
             const {customEmbeddingUrl} = this
             const replaceUrl = customEmbeddingUrl.endsWith('/embeddings')?customEmbeddingUrl:appendLastPath(customEmbeddingUrl,'embeddings')
 
-            const db = getDatabase()
+            const db = this.readDatabase()
             const fetchArgs = {
                 headers: {
                     ...(db.hypaCustomSettings?.key?.trim() ? {"Authorization": "Bearer " + db.hypaCustomSettings.key.trim()} : {})
@@ -179,17 +183,17 @@ export class HypaProcesser{
             };
  
             const localNetworkOpts = isLocalNetworkUrl(replaceUrl.toString()) ? { networkRoute: 'local_network' as const } : {};
-            gf = await globalFetch(replaceUrl.toString(), { ...fetchArgs, ...localNetworkOpts, logCategory: 'embedding', logSource: 'memory' })
+            gf = await this.fetch(replaceUrl.toString(), { ...fetchArgs, ...localNetworkOpts, logCategory: 'embedding', logSource: 'memory' })
         }
         if(this.model === 'ada' || this.model === 'openai3small' || this.model === 'openai3large'){
-            const db = getDatabase()
+            const db = this.readDatabase()
             const models = {
                 'ada':'text-embedding-ada-002',
                 'openai3small':'text-embedding-3-small',
                 'openai3large':'text-embedding-3-large'
             }
 
-            gf = await globalFetch("https://api.openai.com/v1/embeddings", {
+            gf = await this.fetch("https://api.openai.com/v1/embeddings", {
                 logCategory: 'embedding',
                 logSource: 'memory',
                 headers: {
@@ -227,7 +231,7 @@ export class HypaProcesser{
     }
     
     async addText(texts:string[]) {
-        const db = getDatabase()
+        const db = this.readDatabase()
         const suffix = (this.model === 'custom' && db.hypaCustomSettings?.model?.trim()) ? `-${db.hypaCustomSettings.model.trim()}` : ""
 
         const persisted = await getPersistedHypaVectors(texts.map((text) => text + '|' + this.model + suffix))

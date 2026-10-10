@@ -1,3 +1,4 @@
+import { getExecutionContext, withExecutionContext, bindExecutionContext } from './process/executionScope';
 import type { Tiktoken } from "@dqbd/tiktoken";
 import type { Tokenizer } from "@mlc-ai/web-tokenizers";
 import { type character, type Chat, getCurrentCharacter, getDatabase } from "./storage/database.svelte";
@@ -375,6 +376,9 @@ export async function tokenizeAccurate(data:string | null | undefined, consistan
 
 
 export class ChatTokenizer {
+    private readonly executionContext = getExecutionContext()
+    private readonly encode = bindExecutionContext(this.executionContext, encode)
+    private readonly readDatabase = bindExecutionContext(this.executionContext, getDatabase)
 
     private chatAdditionalTokens:number
     private useName:'name'|'noName'
@@ -390,9 +394,9 @@ export class ChatTokenizer {
     async tokenizeChat(data:OpenAIChat, args:{
         countThoughts?:boolean,
     } = {}) {
-        let encoded = (await encode(data.content, this.modelId)).length + this.chatAdditionalTokens
+        let encoded = (await this.encode(data.content, this.modelId)).length + this.chatAdditionalTokens
         if(data.name && this.useName ==='name'){
-            encoded += (await encode(data.name, this.modelId)).length + 1
+            encoded += (await this.encode(data.name, this.modelId)).length + 1
         }
         if(data.multimodals && data.multimodals.length > 0){
             for(const multimodal of data.multimodals){
@@ -401,7 +405,7 @@ export class ChatTokenizer {
         }
         if(data.thoughts && data.thoughts.length > 0 && args.countThoughts){
             for(const thought of data.thoughts){
-                encoded += (await encode(thought, this.modelId)).length + 1
+                encoded += (await this.encode(thought, this.modelId)).length + 1
             }
         }
         return encoded
@@ -415,8 +419,8 @@ export class ChatTokenizer {
     }
 
     tokenizeMultiModal(data:MultiModal){
-        const db = getDatabase()
-        if(!supportsInlayImage()){
+        const db = this.readDatabase()
+        if(!withExecutionContext(this.executionContext, () => supportsInlayImage())){
             return this.chatAdditionalTokens
         }
         if(db.gptVisionQuality === 'low'){

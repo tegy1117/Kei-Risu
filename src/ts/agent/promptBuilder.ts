@@ -1,11 +1,17 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../process/executionScope'
 import type { OpenAIChat } from '../process/index.svelte'
-import { parseChatML } from '../parser/chatML'
-import { risuChatParser } from '../parser/parser.svelte'
-import { loadLoreBookV3Prompt } from '../process/lorebook.svelte'
+import { parseChatML as parseChatMLUnscoped } from '../parser/chatML'
+import { risuChatParser as risuChatParserUnscoped } from '../parser/parser.svelte'
+import { loadLoreBookV3Prompt as loadLoreBookV3PromptUnscoped } from '../process/lorebook.svelte'
 import type { AgentPipelineNode } from './types'
 import type { PromptItem, PromptRole } from '../process/prompt'
 import type { botPreset, character, Chat, customscript } from '../storage/database.svelte'
-import { getPersonaPrompt } from '../util'
+import { getPersonaPrompt as getPersonaPromptUnscoped } from '../util'
+const parseChatML = lazyFunction(() => parseChatMLUnscoped)
+const risuChatParser = lazyFunction(() => risuChatParserUnscoped)
+const loadLoreBookV3Prompt = lazyFunction(() => loadLoreBookV3PromptUnscoped)
+const getPersonaPrompt = lazyFunction(() => getPersonaPromptUnscoped)
+
 
 export interface AgentOutputValue {
     nodeId: string
@@ -54,6 +60,12 @@ function push(messages: OpenAIChat[], value: OpenAIChat | OpenAIChat[]) {
 }
 
 export async function buildAgentPrompt(input: BuildAgentPromptInput): Promise<BuildAgentPromptResult> {
+    const executionContext = getExecutionContext()
+    const parseChatML = bindExecutionContext(executionContext, () => parseChatMLUnscoped, true)
+    const risuChatParser = bindExecutionContext(executionContext, () => risuChatParserUnscoped, true)
+    const loadLoreBookV3Prompt = bindExecutionContext(executionContext, () => loadLoreBookV3PromptUnscoped, true)
+    const getPersonaPrompt = bindExecutionContext(executionContext, () => getPersonaPromptUnscoped, true)
+
     const { node, promptPreset, character, chat, outputs, outputOrder } = input
     const warnings: string[] = []
     const result: OpenAIChat[] = []

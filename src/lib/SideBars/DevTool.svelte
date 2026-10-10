@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { generationStates, isChatGenerating } from "src/ts/process/generationState";
+    import { createChatExecutionContext } from "src/ts/process/executionContext.svelte";
     import { selectedCharID } from "src/ts/stores.svelte";
     import TextInput from "../UI/GUI/TextInput.svelte";
     import NumberInput from "../UI/GUI/NumberInput.svelte";
@@ -13,21 +15,21 @@
     import TextAreaInput from "../UI/GUI/TextAreaInput.svelte";
     import { HardDriveUploadIcon, PlusIcon, TrashIcon } from "@lucide/svelte";
     import { selectSingleFile } from "src/ts/util";
-    import { endAllGenerations } from "src/ts/process/generationState";
-    import { doingChat, previewFormated, previewBody, sendChat } from "src/ts/process/index.svelte";
+    import { previewFormated, previewBody, sendChat } from "src/ts/process/index.svelte";
     import SelectInput from "../UI/GUI/SelectInput.svelte";
     import { applyChatTemplate, chatTemplates } from "src/ts/process/templates/chatTemplate";
     import OptionInput from "../UI/GUI/OptionInput.svelte";
   import { loadLoreBookV3Prompt } from "src/ts/process/lorebook.svelte";
   import { getModules } from "src/ts/process/modules";
 
+    const currentGenerating = $derived($generationStates.has(DBState.db.characters[$selectedCharID]?.chats[DBState.db.characters[$selectedCharID]?.chatPage]?.id))
     let previewMode = $state('chat')
     let previewJoin = $state('yes')
     let instructType = $state('chatml')
     let instructCustom = $state('')
 
     const preview = async () => {
-        if($doingChat){
+        if(currentGenerating){
             return false
         }
         alertWait("Loading...")
@@ -47,7 +49,7 @@
         if(previewJoin === 'prompt'){
             md += '### Prompt\n'
             md += '```json\n' + JSON.stringify(JSON.parse(previewBody), null, 2).replaceAll('```', '\\`\\`\\`') + '\n```\n'
-            endAllGenerations()
+
             alertMd(md)
             return
         }
@@ -78,7 +80,7 @@
 
             md += '### Instruction\n'
             md += '```\n' + instructed.replaceAll('```', '\\`\\`\\`') + '\n```\n'
-            endAllGenerations()
+
             alertMd(md)
             return
         }
@@ -102,7 +104,7 @@
 
             md += '```\n' + formated[i].content.replaceAll('```', '\\`\\`\\`') + '\n```\n'
         }
-        endAllGenerations()
+
         alertMd(md)
     }
     
@@ -212,30 +214,22 @@
         </button>
     </div>
     <Button className="mt-2" onclick={async () => {
-        if($doingChat){
+        if(currentGenerating){
             return
         }
+        const executionContext = createChatExecutionContext()
+        if (!executionContext) return
         for(let i=0;i<autopilot.length;i++){
-            const db = (DBState.db)
-            let currentChar = db.characters[$selectedCharID]
-            let currentChat = currentChar.chats[currentChar.chatPage]
+            const target = executionContext.resolve()
+            if (!target || isChatGenerating(executionContext.chatId)) return
+            const currentChat = target.chat
             currentChat.message.push({
                 role: 'user',
                 data: autopilot[i]
             })
-            currentChar.chats[currentChar.chatPage] = currentChat
-            db.characters[$selectedCharID] = currentChar
-            if($doingChat){
-                return
-            }
-            currentChar.chats[currentChar.chatPage] = currentChat
-            db.characters[$selectedCharID] = currentChar
-            endAllGenerations()
-            await sendChat(i);
-            currentChar = db.characters[$selectedCharID]
-            currentChat = currentChar.chats[currentChar.chatPage]
+            await sendChat(i, { executionContext });
         }
-        endAllGenerations()
+
     }}>Run</Button>
 </Accordion>
 

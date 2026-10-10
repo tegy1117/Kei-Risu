@@ -1,3 +1,4 @@
+import { getExecutionContext, bindExecutionContext } from '../executionScope';
 import { globalFetch } from "src/ts/globalApi.svelte";
 import { getDatabase } from "src/ts/storage/database.svelte";
 import { contextHash, type VectorArray } from "./hypamemory";
@@ -29,13 +30,16 @@ const MAX_CHUNKS_PER_REQUEST = 16000;
 const MAX_INPUTS_PER_REQUEST = 1000;
 
 class VoyageContextProvider implements ContextualEmbeddingProvider {
+  private readonly executionContext = getExecutionContext();
+  private readonly readDatabase = bindExecutionContext(this.executionContext, getDatabase);
+  private readonly fetch = bindExecutionContext(this.executionContext, globalFetch);
   constructor(
     readonly modelId: string,
     private readonly cacheKey: string
   ) {}
 
   private getApiKey(): string {
-    const db = getDatabase();
+    const db = this.readDatabase();
     const apiKey = db.voyageApiKey?.trim();
     if (!apiKey) {
       throw new Error(`${this.modelId} requires a Voyage API Key`);
@@ -50,7 +54,7 @@ class VoyageContextProvider implements ContextualEmbeddingProvider {
 
     let groupOffset = 0;
     for (const batch of batches) {
-      const response = await globalFetch(VOYAGE_API_URL, {
+      const response = await this.fetch(VOYAGE_API_URL, {
         logCategory: 'embedding',
         logSource: 'memory',
         headers: {
@@ -83,7 +87,7 @@ class VoyageContextProvider implements ContextualEmbeddingProvider {
 
   async embedQueries(queries: string[]): Promise<VectorArray[]> {
     const apiKey = this.getApiKey();
-    const response = await globalFetch(VOYAGE_API_URL, {
+    const response = await this.fetch(VOYAGE_API_URL, {
       logCategory: 'embedding',
       logSource: 'memory',
       headers: {

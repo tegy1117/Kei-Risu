@@ -1,8 +1,16 @@
-import { getDatabase, type Chat, type character } from "src/ts/storage/database.svelte";
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
+import { getDatabase as getDatabaseUnscoped, type Chat, type character } from "src/ts/storage/database.svelte";
 import { HypaProcesser } from '../memory/hypamemory'
-import { getUserName } from "src/ts/util";
+import { getUserName as getUserNameUnscoped } from "src/ts/util";
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const getUserName = lazyFunction(() => getUserNameUnscoped)
+
 
 export async function additionalInformations(char: character,chats:Chat,){
+    const executionContext = getExecutionContext()
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const getUserName = bindExecutionContext(executionContext, () => getUserNameUnscoped, true)
+
     const processer = new HypaProcesser()
     const db = getDatabase()
 

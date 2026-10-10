@@ -439,6 +439,7 @@ export function emptyModelBinding(): ModelBindingSet {
 }
 
 export interface ApiKeyPoolEntry {
+    maxConcurrentRequests?: number
     id: string
     name: string
     provider?: string

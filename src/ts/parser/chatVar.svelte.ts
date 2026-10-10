@@ -1,9 +1,13 @@
+import { getExecutionContext } from '../process/executionScope'
 import { get } from 'svelte/store'
-import { DBState, selectedCharID } from '../stores.svelte'
+import { DBState as liveDBState, selectedCharID } from '../stores.svelte'
 import { parseKeyValue } from '../util'
 
 export function getChatVar(key:string): string {
-    const selectedChar = get(selectedCharID)
+    const context = getExecutionContext()
+    if (context && !context.resolve()) return 'null'
+    const selectedChar = context?.resolve()?.characterIndex ?? get(selectedCharID)
+    const DBState = { db: context?.db ?? liveDBState.db }
     const char = DBState.db.characters[selectedChar]
     if(!char){
         return 'null'
@@ -25,7 +29,10 @@ export function getChatVar(key:string): string {
 }
 
 export function setChatVar(key:string, value:string): boolean {
-    const selectedChar = get(selectedCharID)
+    const context = getExecutionContext()
+    if (context && !context.resolve()) return false
+    const selectedChar = context?.resolve()?.characterIndex ?? get(selectedCharID)
+    const DBState = { db: context?.db ?? liveDBState.db }
     const chat = DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage]
     chat.scriptstate ??= {}
 
@@ -39,5 +46,5 @@ export function setChatVar(key:string, value:string): boolean {
 }
 
 export function getGlobalChatVar(key:string): string {
-    return DBState.db.globalChatVariables[key] ?? 'null'
+    return (getExecutionContext()?.db ?? liveDBState.db).globalChatVariables[key] ?? 'null'
 }

@@ -26,11 +26,12 @@ export function getApiKey(id: string | undefined): ApiKeyPoolEntry | undefined {
     return getDatabase().apiKeyPool?.[id]
 }
 
-export function addApiKey(input: { name: string; key: string; provider?: string }): ApiKeyPoolEntry {
+export function addApiKey(input: { name: string; key: string; provider?: string; maxConcurrentRequests?: number }): ApiKeyPoolEntry {
     const db = getDatabase()
     const now = Date.now()
     const entry: ApiKeyPoolEntry = {
         id: uuidv4(),
+        maxConcurrentRequests: normalizeConcurrentRequests(input.maxConcurrentRequests),
         name: input.name,
         provider: input.provider,
         key: input.key,
@@ -43,12 +44,12 @@ export function addApiKey(input: { name: string; key: string; provider?: string 
 
 export function updateApiKey(
     id: string,
-    patch: Partial<Pick<ApiKeyPoolEntry, 'name' | 'key' | 'provider'>>,
+    patch: Partial<Pick<ApiKeyPoolEntry, 'name' | 'key' | 'provider' | 'maxConcurrentRequests'>>,
 ): void {
     const db = getDatabase()
     const cur = db.apiKeyPool?.[id]
     if (!cur) return
-    const next: ApiKeyPoolEntry = { ...cur, ...patch, updatedAt: Date.now() }
+    const next: ApiKeyPoolEntry = { ...cur, ...patch, maxConcurrentRequests: normalizeConcurrentRequests(patch.maxConcurrentRequests ?? cur.maxConcurrentRequests), updatedAt: Date.now() }
     db.apiKeyPool = { ...(db.apiKeyPool ?? {}), [id]: next }
 }
 
@@ -58,4 +59,8 @@ export function removeApiKey(id: string): void {
     const next = { ...db.apiKeyPool }
     delete next[id]
     db.apiKeyPool = next
+}
+
+export function normalizeConcurrentRequests(value: number | undefined): number {
+    return Number.isSafeInteger(value) && value >= 1 ? value : 1
 }

@@ -1,7 +1,8 @@
+import { managedKeyRef, reserveRequestSlot } from './process/request/requestSlots'
 import { changeFullscreen, checkNullish, sleep } from "./util"
 import { v4 as uuidv4, v4 } from 'uuid';
 import { tick } from "svelte";
-import { get } from "svelte/store";
+import { fromStore, get } from "svelte/store";
 import streamSaver from 'streamsaver';
 import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
@@ -768,6 +769,7 @@ export async function saveDb() {
     $effect.root(() => {
 
         let selIdState = $state(0)
+        const activeGenerations = fromStore(generationStates)
         let knownCharacterIds = new Set<string>((getDatabase()?.characters ?? []).map((character) => character?.chaId).filter(Boolean))
         let didInitRootEffect = false
         let didInitBotPresetEffect = false
@@ -810,6 +812,21 @@ export async function saveDb() {
         });
         window.addEventListener('pagehide', flushImmediate);
 
+        // The selected chat is not the only writer: generations continue in
+        // other conversations. Track their live bodies throughout the send.
+        $effect(() => {
+            for (const [chatId, generation] of activeGenerations.current) {
+                if (generation.kind !== 'live') continue
+                const char = DBState.db.characters.find(c => c.chats.some(chat => chat.id === chatId))
+                const chat = char?.chats.find(chat => chat.id === chatId)
+                if (!char || !chat || chat._placeholder) continue
+                deepTouch(chat)
+                if (isHydrating(char.chaId, chatId)) continue
+                if (!changeTracker.chat.some(([owner, id]) => owner === char.chaId && id === chatId)) changeTracker.chat.push([char.chaId, chatId])
+                if (!changeTracker.character.includes(char.chaId)) changeTracker.character.push(char.chaId)
+                saveTimeoutExecute()
+            }
+        })
         $effect(() => {
             for (const key in DBState.db) {
                 if (
@@ -1791,6 +1808,8 @@ const knownHostes = ["localhost", "127.0.0.1", "0.0.0.0"];
  * @property {string} [chatId] - The chat ID associated with the request.
  */
 interface GlobalFetchArgs {
+    apiKeyRef?: string;
+    requestSlotId?: string;
     plainFetchForce?: boolean;
     plainFetchDeforce?: boolean;
     body?: any;
@@ -1855,13 +1874,16 @@ export async function globalFetch(url: string, arg: GlobalFetchArgs = {}): Promi
             }
         }
 
+        const apiKeyRef = managedKeyRef(url, arg.headers, arg.apiKeyRef)
+        const slot = apiKeyRef ? await reserveRequestSlot(apiKeyRef, arg.abortSignal, arg.chatId) : undefined
+        if (slot) arg = { ...arg, apiKeyRef, requestSlotId: slot.id }
         const timeoutSignal = buildTimeoutSignal(arg.abortSignal, arg.requestTimeoutMs)
         const requestArg = timeoutSignal.signal === arg.abortSignal
             ? arg
             : { ...arg, abortSignal: timeoutSignal.signal }
 
         try {
-            if (useLocalNetworkRoute) {
+            if (useLocalNetworkRoute || apiKeyRef) {
                 return await fetchWithProxy(url, requestArg);
             }
 
@@ -1875,6 +1897,8 @@ export async function globalFetch(url: string, arg: GlobalFetchArgs = {}): Promi
             return await fetchWithProxy(url, requestArg);
         } finally {
             timeoutSignal.cleanup()
+            slot?.cleanup()
+            slot?.cancel()
         }
 
     } catch (error) {
@@ -1985,6 +2009,8 @@ async function fetchWithProxy(url: string, arg: GlobalFetchArgs): Promise<Global
         const headers = {
             "risu-header": encodeURIComponent(JSON.stringify(arg.headers)),
             "risu-url": encodeURIComponent(url),
+            ...(arg.apiKeyRef ? { "risu-key-ref": arg.apiKeyRef } : {}),
+            ...(arg.requestSlotId ? { "risu-request-slot": arg.requestSlotId } : {}),
             "Content-Type": arg.body instanceof URLSearchParams ? "application/x-www-form-urlencoded" : "application/json",
             ...(arg.useRisuToken && { "x-risu-tk": "use" }),
             ...(DBState?.db?.requestLocation && { "risu-location": DBState.db.requestLocation }),
@@ -2630,6 +2656,8 @@ export class AppendableBuffer {
  * @throws {Error} - Throws an error if the request is aborted or if there is an error in the response.
  */
 export interface FetchNativeArgs {
+    apiKeyRef?: string,
+    requestSlotId?: string,
     body?: string | Uint8Array | ArrayBuffer,
     headers?: { [key: string]: string },
     method?: "POST" | "GET" | "PUT" | "PATCH" | "DELETE",
@@ -2697,6 +2725,7 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
     onRealBody?: (body: string) => void,
     onRoute?: (route: RequestLogRoute) => void,
 }): Promise<Response> {
+    const db = getDatabase()
     const useInterceptor = !!arg.interceptor
     if (arg.body === undefined && (arg.method === 'POST' || arg.method === 'PUT')) {
         throw new Error('Body is required for POST and PUT requests')
@@ -2738,17 +2767,23 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
     // rewrote it — which is why it is reported from here rather than from the
     // wrapper's view of arg.body.
     hooks?.onRealBody?.(realBody ? new TextDecoder().decode(realBody) : '')
+    const apiKeyRef = managedKeyRef(url, headers, arg.apiKeyRef)
+    const slot = apiKeyRef ? await reserveRequestSlot(apiKeyRef, arg.signal, arg.chatId) : undefined
+    if (slot) arg = { ...arg, apiKeyRef, requestSlotId: slot.id }
     const useLocalNetworkRoute = arg.networkRoute === 'local_network' && isLocalNetworkUrl(url)
     const usePublicToolRoute = arg.networkPolicy === 'public'
     const timeoutSignal = buildTimeoutSignal(arg.signal, arg.requestTimeoutMs)
     const requestSignal = timeoutSignal.signal
-    const db = getDatabase()
     let throughProxy = !db.usePlainFetch || usePublicToolRoute
     if (useLocalNetworkRoute) {
         throughProxy = true
     }
 
     try {
+        if (apiKeyRef) {
+            hooks?.onRoute?.('proxy')
+            return await fetchViaProxy2(url, headers, realBody, { ...arg, signal: requestSignal })
+        }
         if (window.userScriptFetch && !throughProxy) {
             hooks?.onRoute?.('direct')
             return await window.userScriptFetch(url, {
@@ -2813,7 +2848,11 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
                 signal: requestSignal
             })
         }
+    } catch (error) {
+        slot?.cancel()
+        throw error
     } finally {
+        slot?.cleanup()
         timeoutSignal.cleanup()
     }
 }
@@ -2824,11 +2863,13 @@ async function fetchViaProxy2(
     url: string,
     headers: Record<string, string>,
     realBody: Uint8Array | undefined,
-    arg: { method?: string, signal?: AbortSignal, useRisuTk?: boolean, requestTimeoutMs?: number, networkPolicy?: 'public' }
+    arg: { method?: string, signal?: AbortSignal, useRisuTk?: boolean, requestTimeoutMs?: number, networkPolicy?: 'public', apiKeyRef?: string, requestSlotId?: string }
 ): Promise<Response> {
     const proxyHeaders: Record<string, string> = {
         "risu-header": encodeURIComponent(JSON.stringify(headers)),
         "risu-url": encodeURIComponent(url),
+        ...(arg.apiKeyRef ? { "risu-key-ref": arg.apiKeyRef } : {}),
+        ...(arg.requestSlotId ? { "risu-request-slot": arg.requestSlotId } : {}),
         "risu-auth": await forageStorage.createAuth(),
         ...(arg.useRisuTk ? { "x-risu-tk": "use" } : {}),
         ...(arg.requestTimeoutMs && { "risu-timeout-ms": Math.max(1, Math.floor(arg.requestTimeoutMs)).toString() }),

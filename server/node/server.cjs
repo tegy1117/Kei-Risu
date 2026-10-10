@@ -2163,21 +2163,12 @@ function getRequestTimeoutMs(timeoutHeader) {
     return timeoutMs;
 }
 
-function createTimeoutController(timeoutMs) {
-    if (!timeoutMs) {
-        return {
-            signal: undefined,
-            cleanup: () => {}
-        };
-    }
-
+function createTimeoutController(timeoutMs, deferred = false) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    return {
-        signal: controller.signal,
-        cleanup: () => clearTimeout(timer)
-    };
+    let timer;
+    const start = () => { if (timeoutMs && !timer) timer = setTimeout(() => controller.abort(), timeoutMs); };
+    if (!deferred) start();
+    return { signal: controller.signal, abort: () => controller.abort(), start, cleanup: () => clearTimeout(timer) };
 }
 
 // /proxy2 inactivity bound (issue #84). The total timeout above only exists
@@ -2199,7 +2190,7 @@ function abortUpstreamOnClientClose(res, idle) {
     });
 }
 
-function createIdleWatchdog(idleMs, totalSignal) {
+function createIdleWatchdog(idleMs, totalSignal, deferred = false) {
     const controller = new AbortController();
     let timer = null;
     let firedIdle = false;
@@ -2209,7 +2200,7 @@ function createIdleWatchdog(idleMs, totalSignal) {
     };
     const onTotal = () => controller.abort();
     totalSignal?.addEventListener('abort', onTotal, { once: true });
-    arm();
+    if (!deferred) arm();
     return {
         signal: controller.signal,
         idle: () => firedIdle,
@@ -2495,7 +2486,13 @@ async function runProxyStreamJob(job, arg) {
     }
     const bodyBuffer = arg.bodyBase64 ? Buffer.from(arg.bodyBase64, 'base64') : undefined;
 
+    let releaseSlot = () => {};
     try {
+        job.queued = true;
+        job.deadlineAt = Infinity;
+        releaseSlot = await requestSlots.acquire({ headers, url: targetUrl, signal: job.abortController.signal, abort: () => job.abortController.abort() });
+        job.queued = false;
+        job.deadlineAt = Date.now() + job.timeoutMs;
         const upstreamResponse = await requestLocalTargetStream(targetUrl, {
             method: arg.method,
             headers,
@@ -2528,7 +2525,7 @@ async function runProxyStreamJob(job, arg) {
         const message = error?.name === 'AbortError' ? 'Proxy stream job aborted' : `${error}`;
         pushJobEvent(job, { type: 'error', status: 504, message });
         markJobDone(job);
-    }
+    } finally { releaseSlot(); }
 }
 
 // --- Proxy Stream: WebSocket setup ---
@@ -3313,12 +3310,13 @@ const reverseProxyFunc = async (req, res, next) => {
         });
         return;
     }
+    let releaseSlot = () => {};
     const timeoutMs = getRequestTimeoutMs(req.headers['risu-timeout-ms']);
-    const timeout = createTimeoutController(timeoutMs);
+    const timeout = createTimeoutController(timeoutMs, true);
     // A client-configured total timeout longer than the default idle bound
     // (localNetworkTimeoutSec up to 3600s) must not be undercut by it.
     const idleMs = Math.max(PROXY_IDLE_TIMEOUT_MS, timeoutMs || 0);
-    const idle = createIdleWatchdog(idleMs, timeout.signal);
+    const idle = createIdleWatchdog(idleMs, timeout.signal, true);
     abortUpstreamOnClientClose(res, idle);
     let originalResponse;
     try {
@@ -3353,6 +3351,15 @@ const reverseProxyFunc = async (req, res, next) => {
                 requestBody = JSON.stringify(req.body);
             }
         }
+        releaseSlot = await requestSlots.acquire({
+            apiKeyRef: req.headers['risu-key-ref'], ticketId: req.headers['risu-request-slot'],
+            headers: header, url: urlParam, signal: idle.signal,
+            abort: () => idle.abort()
+        });
+        delete header['risu-key-ref'];
+        delete header['risu-request-slot'];
+        timeout.start();
+        idle.touch();
         // make request to original server
         originalResponse = await fetch(urlParam, {
             method: req.method,
@@ -3411,6 +3418,7 @@ const reverseProxyFunc = async (req, res, next) => {
         return;
     } finally {
         idle.cleanup();
+        releaseSlot();
         timeout.cleanup();
     }
 }
@@ -3428,12 +3436,13 @@ const reverseProxyFunc_get = async (req, res, next) => {
         });
         return;
     }
+    let releaseSlot = () => {};
     const timeoutMs = getRequestTimeoutMs(req.headers['risu-timeout-ms']);
-    const timeout = createTimeoutController(timeoutMs);
+    const timeout = createTimeoutController(timeoutMs, true);
     // A client-configured total timeout longer than the default idle bound
     // (localNetworkTimeoutSec up to 3600s) must not be undercut by it.
     const idleMs = Math.max(PROXY_IDLE_TIMEOUT_MS, timeoutMs || 0);
-    const idle = createIdleWatchdog(idleMs, timeout.signal);
+    const idle = createIdleWatchdog(idleMs, timeout.signal, true);
     abortUpstreamOnClientClose(res, idle);
     let originalResponse;
     try {
@@ -3447,6 +3456,11 @@ const reverseProxyFunc_get = async (req, res, next) => {
     if(!header['x-forwarded-for']){
         header['x-forwarded-for'] = req.ip
     }
+        releaseSlot = await requestSlots.acquire({ apiKeyRef: req.headers['risu-key-ref'], ticketId: req.headers['risu-request-slot'], headers: header, url: urlParam, signal: idle.signal, abort: () => idle.abort() });
+        delete header['risu-key-ref'];
+        delete header['risu-request-slot'];
+        timeout.start();
+        idle.touch();
         // make request to original server
         originalResponse = await fetch(urlParam, {
             method: 'GET',
@@ -3498,6 +3512,7 @@ const reverseProxyFunc_get = async (req, res, next) => {
         return;
     } finally {
         idle.cleanup();
+        releaseSlot();
         timeout.cleanup();
     }
 }
@@ -3511,8 +3526,10 @@ const publicNetworkProxyFunc = async (req, res, next) => {
         return;
     }
 
+    let releaseSlot = () => {};
     const timeoutMs = getRequestTimeoutMs(req.headers['risu-timeout-ms']);
-    const timeout = createTimeoutController(timeoutMs);
+    const timeout = createTimeoutController(timeoutMs, true);
+    abortUpstreamOnClientClose(res, timeout);
     try {
         const headers = req.headers['risu-header']
             ? JSON.parse(decodeURIComponent(req.headers['risu-header']))
@@ -3531,6 +3548,10 @@ const publicNetworkProxyFunc = async (req, res, next) => {
                 : req.body === undefined ? undefined : JSON.stringify(req.body);
         }
 
+        releaseSlot = await requestSlots.acquire({ apiKeyRef: req.headers['risu-key-ref'], ticketId: req.headers['risu-request-slot'], headers: headers, url: urlParam, signal: timeout.signal, abort: () => timeout.abort() });
+        delete headers['risu-key-ref'];
+        delete headers['risu-request-slot'];
+        timeout.start();
         const originalResponse = await fetchPublicNetworkUrl(urlParam, {
             method: req.method,
             headers,
@@ -3574,6 +3595,7 @@ const publicNetworkProxyFunc = async (req, res, next) => {
         next(err);
     }
     finally {
+        releaseSlot();
         timeout.cleanup();
     }
 }
@@ -3828,7 +3850,10 @@ app.delete('/proxy-stream-jobs/:jobId', async (req, res) => {
 // that disconnects mid-generation can recover the response. All logic lives
 // in model-jobs.cjs; registers /api/model-jobs* with /proxy2-level auth.
 const { createModelJobs } = require('./model-jobs.cjs');
-const modelJobs = createModelJobs({ saveDir: savePath, logger });
+const { createRequestSlots } = require('./request-slots.cjs');
+const requestSlots = createRequestSlots({ getPool: async () => await loadDbCacheIfMissing() ? (dbCache[DB_HEX_KEY].apiKeyPool || {}) : {} });
+requestSlots.registerRoutes(app, { auth: checkProxyAuth });
+const modelJobs = createModelJobs({ saveDir: savePath, logger, requestSlots });
 modelJobs.registerRoutes(app, { auth: checkProxyAuth });
 
 // app.get('/api/password', async(req, res)=> {
@@ -9171,7 +9196,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
                 cleanupJob(jobId);
                 continue;
             }
-            if (!job.done && now - job.updatedAt > Math.max(PROXY_STREAM_DEFAULT_TIMEOUT_MS, job.timeoutMs * 2)) {
+            if (!job.done && !job.queued && now - job.updatedAt > Math.max(PROXY_STREAM_DEFAULT_TIMEOUT_MS, job.timeoutMs * 2)) {
                 cleanupJob(jobId);
             }
         }

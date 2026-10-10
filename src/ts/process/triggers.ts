@@ -1,9 +1,10 @@
-import { parseChatML } from "../parser/chatML";
-import { risuChatParser } from "../parser/parser.svelte";
-import { getCurrentCharacter, getCurrentChat, getDatabase, setCurrentCharacter, setDatabase, type Chat, type character } from "../storage/database.svelte";
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from './executionScope'
+import { parseChatML as parseChatMLUnscoped } from "../parser/chatML";
+import { risuChatParser as risuChatParserUnscoped } from "../parser/parser.svelte";
+import { getCurrentCharacter as getCurrentCharacterUnscoped, getCurrentChat as getCurrentChatUnscoped, getDatabase as getDatabaseUnscoped, setCurrentCharacter as setCurrentCharacterUnscoped, setDatabase, type Chat, type character } from "../storage/database.svelte";
 import { tokenize } from "../tokenizer";
-import { getModuleTriggers } from "./modules";
-import { getToolTriggers } from './tools/features'
+import { getModuleTriggers as getModuleTriggersUnscoped } from "./modules";
+import { getToolTriggers as getToolTriggersUnscoped } from './tools/features'
 import { get } from "svelte/store";
 import { ReloadChatPointer, ReloadGUIPointer, selectedCharID, CurrentTriggerIdStore } from "../stores.svelte";
 import { processMultiCommand } from "./command";
@@ -11,12 +12,23 @@ import { parseKeyValue, sleep } from "../util";
 import { alertError, alertInput, alertNormal, alertSelect } from "../alert";
 import type { OpenAIChat } from "./index.svelte";
 import { HypaProcesser } from "./memory/hypamemory";
-import { requestChatData } from "./request/request";
+import { requestChatData as requestChatDataUnscoped } from "./request/request";
 import { collectStreamingText } from "./request/shared";
 import { generateAIImage } from "./stableDiff";
 import { writeInlayImage } from "./files/inlays";
-import { runScripted } from "./scriptings";
+import { runScripted as runScriptedUnscoped } from "./scriptings";
 import { calcString } from "./infunctions";
+const parseChatML = lazyFunction(() => parseChatMLUnscoped)
+const risuChatParser = lazyFunction(() => risuChatParserUnscoped)
+const getCurrentCharacter = lazyFunction(() => getCurrentCharacterUnscoped)
+const getCurrentChat = lazyFunction(() => getCurrentChatUnscoped)
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const setCurrentCharacter = lazyFunction(() => setCurrentCharacterUnscoped)
+const getModuleTriggers = lazyFunction(() => getModuleTriggersUnscoped)
+const getToolTriggers = lazyFunction(() => getToolTriggersUnscoped)
+const requestChatData = lazyFunction(() => requestChatDataUnscoped)
+const runScripted = lazyFunction(() => runScriptedUnscoped)
+
 
 
 export interface triggerscript{
@@ -1046,6 +1058,7 @@ export const requestAllowList = [
 
 export async function runTrigger(char:character,mode:triggerMode, arg:{
     chat: Chat,
+    executionContext?: import('./executionContext.svelte').ChatExecutionContext,
     recursiveCount?: number
     additonalSysPrompt?: additonalSysPrompt
     stopSending?: boolean
@@ -1055,6 +1068,18 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
     displayData?: string
     tempVars?: Record<string, string>
 }){
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const parseChatML = bindExecutionContext(executionContext, () => parseChatMLUnscoped, true)
+    const risuChatParser = bindExecutionContext(executionContext, () => risuChatParserUnscoped, true)
+    const getCurrentCharacter = bindExecutionContext(executionContext, () => getCurrentCharacterUnscoped, true)
+    const getCurrentChat = bindExecutionContext(executionContext, () => getCurrentChatUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const setCurrentCharacter = bindExecutionContext(executionContext, () => setCurrentCharacterUnscoped, true)
+    const getModuleTriggers = bindExecutionContext(executionContext, () => getModuleTriggersUnscoped, true)
+    const getToolTriggers = bindExecutionContext(executionContext, () => getToolTriggersUnscoped, true)
+    const requestChatData = bindExecutionContext(executionContext, () => requestChatDataUnscoped, true)
+    const runScripted = bindExecutionContext(executionContext, () => runScriptedUnscoped, true)
+
     arg.recursiveCount ??= 0
     char = arg.displayMode ? char : safeStructuredClone(char)
     let varChanged = false
@@ -1203,7 +1228,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
             return setLocalVar(key, value, currentIndent)
         }
         
-        const selectedCharId = get(selectedCharID)
+        const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
         const currentCharacter = getCurrentCharacter()
         const db = getDatabase()
         chat.scriptstate ??= {}
@@ -1979,7 +2004,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     }
 
                     const db = getDatabase()
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     db.characters[selectedCharId].globalLore = char.globalLore
                     setCurrentCharacter(db.characters[selectedCharId])
                     break
@@ -2011,7 +2036,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     let value = effect.value
                     char.globalLore[index][2] = value
 
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase()
                     db.characters[selectedCharId].globalLore = char.globalLore
                     setCurrentCharacter(char)
@@ -2115,7 +2140,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'v2SetCharacterDesc':{
                     let value = effect.valueType === 'value' ? risuChatParser(effect.value,{chara:char}) : getVar(risuChatParser(effect.value,{chara:char}))
                     char.desc = value
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase();
                     (db.characters[selectedCharId] as character).desc = value
                     setCurrentCharacter(char)
@@ -2144,7 +2169,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'v2SetReplaceGlobalNote':{
                     const value = effect.valueType === 'value' ? risuChatParser(effect.value,{chara:char}) : getVar(risuChatParser(effect.value,{chara:char}))
                     char.replaceGlobalNote = value
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase();
                     (db.characters[selectedCharId] as character).replaceGlobalNote = value
                     setCurrentCharacter(char)
@@ -2521,7 +2546,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                         selective: false
                     })
 
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase()
                     db.characters[selectedCharId].globalLore = char.globalLore
                     setCurrentCharacter(char)
@@ -2556,7 +2581,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                         char.globalLore[index].insertorder = insertOrderNum
                     }
 
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase()
                     db.characters[selectedCharId].globalLore = char.globalLore
                     setCurrentCharacter(char)
@@ -2572,7 +2597,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
 
                     char.globalLore.splice(index, 1)
 
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase()
                     db.characters[selectedCharId].globalLore = char.globalLore
                     setCurrentCharacter(char)
@@ -2593,7 +2618,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
 
                     char.globalLore[index].alwaysActive = effect.value
 
-                    const selectedCharId = get(selectedCharID)
+                    const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                     const db = getDatabase()
                     db.characters[selectedCharId].globalLore = char.globalLore
                     setCurrentCharacter(char)
@@ -2621,7 +2646,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     chat.note = value
                     
                     if(!arg.displayMode){
-                        const selectedCharId = get(selectedCharID)
+                        const selectedCharId = (executionContext?.resolve()?.characterIndex ?? get(selectedCharID))
                         const currentCharacter = getCurrentCharacter()
                         const db = getDatabase()
                         currentCharacter.chats[currentCharacter.chatPage].note = value

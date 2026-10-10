@@ -15,8 +15,9 @@
     .rs-stack {
         display: flex;
         flex-direction: column;
+        align-items: flex-end;
         gap: 8px;
         width: min(420px, calc(100vw - 32px));
-        pointer-events: auto;
+        pointer-events: none;
     }
 </style>

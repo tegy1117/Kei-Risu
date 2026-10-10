@@ -1,10 +1,11 @@
+import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from '../executionScope'
 import { Sha256 } from "@aws-crypto/sha256-js"
 import { HttpRequest } from "@smithy/protocol-http"
 import { SignatureV4 } from "@smithy/signature-v4"
-import { fetchNative, globalFetch, textifyReadableStream } from "src/ts/globalApi.svelte"
+import { fetchNative as fetchNativeUnscoped, globalFetch as globalFetchUnscoped, textifyReadableStream } from "src/ts/globalApi.svelte"
 import { LLMFlags, LLMFormat } from "src/ts/model/modellist"
 import { registerClaudeObserver } from "src/ts/observer.svelte"
-import { getDatabase } from "src/ts/storage/database.svelte"
+import { getDatabase as getDatabaseUnscoped } from "src/ts/storage/database.svelte"
 import { replaceAsync, simplifySchema, sleep } from "src/ts/util"
 import { v4 } from "uuid"
 import type { MultiModal } from "../index.svelte"
@@ -12,7 +13,15 @@ import { extractJSON } from "../templates/jsonSchema"
 import { callToolDetailed, decodeToolCall, encodeToolExecution } from "../mcp/mcp"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from './request'
 import { toLogSource } from './logSource'
-import { applyAdditionalParameters, applyParameters, getAdditionalParameters } from './shared'
+import { applyAdditionalParameters, applyParameters as applyParametersUnscoped, getAdditionalParameters as getAdditionalParametersUnscoped } from './shared'
+const fetchNative = lazyFunction(() => fetchNativeUnscoped)
+const globalFetch = lazyFunction(() => globalFetchUnscoped)
+const getAdditionalParameters = lazyFunction(() => getAdditionalParametersUnscoped)
+
+const getDatabase = lazyFunction(() => getDatabaseUnscoped)
+const applyParameters = lazyFunction(() => applyParametersUnscoped)
+const requestClaudeHTTPUnscoped = requestClaudeHTTP
+
 
 interface Claude3TextBlock {
     type: 'text',
@@ -70,6 +79,14 @@ interface Claude3ExtendedChat {
 }
 
 export async function requestClaude(arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const fetchNative = bindExecutionContext(executionContext, () => fetchNativeUnscoped, true)
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getAdditionalParameters = bindExecutionContext(executionContext, () => getAdditionalParametersUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+    const applyParameters = bindExecutionContext(executionContext, () => applyParametersUnscoped, true)
+    const requestClaudeHTTP = bindExecutionContext(executionContext, () => requestClaudeHTTPUnscoped, true)
+
     const formated = arg.formated
     const db = getDatabase()
     const aiModel = arg.aiModel
@@ -799,6 +816,11 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
 }
 
 async function requestClaudeHTTP(replacerURL:string, headers:{[key:string]:string}, body:any, arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
+    const executionContext = (arg as { executionContext?: ChatExecutionContext })?.executionContext ?? getExecutionContext()
+    const fetchNative = bindExecutionContext(executionContext, () => fetchNativeUnscoped, true)
+    const globalFetch = bindExecutionContext(executionContext, () => globalFetchUnscoped, true)
+    const getDatabase = bindExecutionContext(executionContext, () => getDatabaseUnscoped, true)
+
     
     if(arg.useStreaming){
         
