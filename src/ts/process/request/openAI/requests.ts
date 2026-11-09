@@ -553,8 +553,8 @@ export async function requestOpenAI(arg:RequestDataArgumentExtended):Promise<req
         headers["Authorization"] = "Bearer " + db.OaiCompAPIKeys[arg.modelInfo.keyIdentifier]
     }
     if(aiModel === 'openrouter'){
-        headers["X-Title"] = 'PocketRisu'
-        headers["HTTP-Referer"] = 'https://github.com/PocketRisu/PocketRisu'
+        headers["X-Title"] = 'Kei-Risu'
+        headers["HTTP-Referer"] = 'https://github.com/tegy1117/Kei-Risu'
     }
     if(aiModel === 'nanogpt' && db.nanogptProvider){
         headers["X-Provider"] = db.nanogptProvider

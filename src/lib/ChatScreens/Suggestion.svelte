@@ -86,7 +86,7 @@
 
     const translateSuggest = async (toggle:boolean, messages:string[]) => {
         const run = ++translationRun;
-        if (!toggle || !messages?.length) return;
+        if (!toggle || DBState.db.translator === '' || !messages?.length) return;
         const context = createChatExecutionContext();
         const translated:string[] = [];
         for (const message of messages) {

@@ -37,7 +37,7 @@ export const languageChineseTraditional = {
         "persistFailureTitle": "伺服器儲存失敗 — 變更未寫入磁碟",
         "persistFailureAttemptedSize": "嘗試儲存的大小",
         "storageRequestTooLarge": "儲存請求因資料過大而失敗（HTTP 413）。請檢查伺服器或反向代理（例如 Nginx）的 Request Body 大小上限",
-        "backupEncryptedAccount": "此備份是在 Risuai 網頁版登入帳號並啟用同步時匯出的，因此資料庫已加密，Kei-Risu 無法讀取。請使用「設定 > 資料移轉」中的「從 RisuAI 帳號匯入」，或先在 Risuai 登出帳號（資料會移至裝置端）／改用「部分備份」後重新匯出備份。您目前的資料未被取代",
+        "backupEncryptedAccount": "此備份是從 RisuAI 網頁版（risuai.xyz）匯出的。其資料庫已加密，只能在 risuai.xyz 上開啟，因此 Kei-Risu 無法讀取。請在 RisuAI 中開啟「將資料儲存至帳號」，再使用「設定 > 資料移轉」中的「從 RisuAI 帳號匯入」。詳細步驟請參閱遷移指南。您現有的資料未被取代。",
         "chatGuardTitle": "已觸發對話資料保護 — 已切換至安全儲存模式",
         "chatGuardDesc": "系統已阻擋可疑的儲存模式。您的變更會改用安全的完整寫入方式儲存。若持續發生，請連同瀏覽器主控台記錄一起回報問題",
         "chatGuardPersistTitle": "為保護現有對話資料，已中止儲存",
