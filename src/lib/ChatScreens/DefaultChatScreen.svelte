@@ -3,7 +3,7 @@
     import { getActiveHypaV3Preset } from "src/ts/process/memory/memoryPresets";
 
     import Suggestion from './Suggestion.svelte';
-    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MessageSquareIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, WrenchIcon } from "@lucide/svelte";
+    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, ClipboardPasteIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MessageSquareIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, WrenchIcon } from "@lucide/svelte";
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
@@ -38,6 +38,7 @@ import { isMobile } from 'src/ts/platform'
     import { v4 } from 'uuid';
     import { processMultiCommand } from 'src/ts/process/command';
     import { postChatFile } from 'src/ts/process/files/multisend';
+    import { getPastedImageFiles, readClipboardImageFiles } from 'src/ts/clipboardImages';
     import { getInlayAsset } from 'src/ts/process/files/inlays';
     import { quickMenu } from 'src/ts/hotkey';
     import { loadChatDraft, scheduleSaveChatDraft, flushChatDraft, removeChatDraft } from 'src/ts/storage/chatDraft';
@@ -76,6 +77,8 @@ import { isMobile } from 'src/ts/platform'
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
+    let imagePastePending = $state(false)
+    const androidImagePaste = /Android/i.test(navigator.userAgent)
     let showNewMessageButton = $state(false)
     let showScrollNav = $state(false)
     let scrollNavTimer: ReturnType<typeof setTimeout> | null = null
@@ -87,6 +90,60 @@ import { isMobile } from 'src/ts/platform'
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
+
+    function pasteImages(e: ClipboardEvent | InputEvent) {
+        if ('inputType' in e && e.inputType !== 'insertFromPaste') return
+        // Capture files during the paste event; clipboard data expires after it returns.
+        const clipboard = 'clipboardData' in e ? e.clipboardData : e.dataTransfer
+        const files = getPastedImageFiles(clipboard)
+        if (files.length === 0) return
+        e.preventDefault()
+        void attachPastedImages(files, e.currentTarget as HTMLTextAreaElement)
+    }
+
+    function pasteImagesFromClipboard() {
+        if (imagePastePending || !currentChatReady) return
+        void attachPastedImages(readClipboardImageFiles(), composerFullscreen ? fullscreenEle : inputEle, true)
+    }
+
+    async function attachPastedImages(images: File[] | Promise<File[]>, input: HTMLTextAreaElement, explicit = false) {
+        if (imagePastePending || !currentChatReady) return
+        const characterId = currentCharacter.chaId
+        const chatId = currentChatSlot.id
+        const isCurrentChat = () => input?.isConnected && currentCharacter?.chaId === characterId && currentChatSlot?.id === chatId
+        imagePastePending = true
+        try {
+            let files: File[]
+            try {
+                files = await images
+            } catch {
+                if (isCurrentChat()) notifyWarning(language.pasteImagesUnavailable)
+                return
+            }
+            if (!isCurrentChat()) return
+            if (files.length === 0) {
+                if (explicit) notifyInfo(language.pasteImagesEmpty)
+                return
+            }
+            if (!await alertConfirm(language.pasteImagesConfirm.replace('{count}', String(files.length)))) return
+            for (const file of files) {
+                if (!isCurrentChat()) return
+                const data = new Uint8Array(await file.arrayBuffer())
+                if (!isCurrentChat()) return
+                const results = await postChatFile({ name: file.name || 'clipboard.png', data })
+                if (!isCurrentChat()) return
+                for (const res of results ?? []) {
+                    if (res?.type === 'asset') fileInput.push(res.data)
+                    if (res?.type === 'text') messageInput += `{{file::${res.name}::${res.data}}}`
+                }
+            }
+            updateInputSizeAll()
+        } catch (error) {
+            notifyError(String(error))
+        } finally {
+            imagePastePending = false
+        }
+    }
 
     // ─── Per-chat composer draft ────────────────────────────────────────────
     // The message input is kept per chat, stored outside the chat body, so it
@@ -1086,6 +1143,9 @@ import { isMobile } from 'src/ts/platform'
                             }}>
                                 <ImagePlusIcon /><span>{language.postFile}</span>
                             </ShDropdownMenuItem>
+                            <ShDropdownMenuItem onSelect={pasteImagesFromClipboard} disabled={imagePastePending}>
+                                <ClipboardPasteIcon /><span>{language.pasteImages}</span>
+                            </ShDropdownMenuItem>
                             <ShDropdownMenuItem class={DBState.db.useAutoSuggestions ? 'text-green-500' : ''} onSelect={() => { DBState.db.useAutoSuggestions = !DBState.db.useAutoSuggestions }}>
                                 <ReplyIcon /><span>{language.autoSuggest}</span>
                             </ShDropdownMenuItem>
@@ -1133,6 +1193,7 @@ import { isMobile } from 'src/ts/platform'
                 {/if}
 
                 <textarea class="text-input-area outline-hidden text-textcolor px-2 py-1.5 min-w-0 bg-transparent input-text text-base resize-none overflow-x-hidden max-w-full"
+                          class:android-image-paste={androidImagePaste}
                           class:flex-1={!multiline}
                           class:basis-full={multiline}
                           class:order-first={multiline}
@@ -1153,49 +1214,20 @@ import { isMobile } from 'src/ts/platform'
                             e.preventDefault()
                         }
                     }}
-                          onpaste={(e) => {
-                        const items = e.clipboardData?.items
-                        if(!items){
-                            return
-                        }
-                        let canceled = false
-
-                        for(const item of items){
-                            if(item.kind === 'file' && item.type.startsWith('image')){
-                                if(!canceled){
-                                    e.preventDefault()
-                                    canceled = true
-                                }
-                                const file = item.getAsFile()
-                                if(file){
-                                    const reader = new FileReader()
-                                    reader.onload = async (e) => {
-                                        const buf = e.target?.result as ArrayBuffer
-                                        const uint8 = new Uint8Array(buf)
-                                        const results = await postChatFile({
-                                            name: file.name,
-                                            data: uint8
-                                        })
-                                        if(!results) return
-                                        for(const res of results){
-                                            if(res?.type === 'asset'){
-                                                fileInput.push(res.data)
-                                            }
-                                            if(res?.type === 'text'){
-                                                messageInput += `{{file::${res.name}::${res.data}}}`
-                                            }
-                                        }
-                                        updateInputSizeAll()
-                                    }
-                                    reader.readAsArrayBuffer(file)
-                                }
-                            }
-                        }
-                    }}
+                          onpaste={pasteImages}
+                          onbeforeinput={pasteImages}
                           oninput={()=>{updateInputSizeAll();updateInputTransateMessage(false)}}
                           onblur={persistDraftNow}
                           style:height={inputHeight}
                 ></textarea>
+
+                {#if isMobile}
+                    <button onclick={pasteImagesFromClipboard} disabled={imagePastePending}
+                            aria-label={language.pasteImages} title={language.pasteImages}
+                            class="order-1 shrink-0 flex justify-center items-center w-9 h-9 rounded-full text-textcolor hover:bg-primary/20 transition-colors disabled:opacity-50">
+                        <ClipboardPasteIcon size={18} />
+                    </button>
+                {/if}
 
                 <button
                         onclick={() => composerFullscreen = true}
@@ -1235,7 +1267,10 @@ import { isMobile } from 'src/ts/platform'
                         <LanguagesIcon />
                     </label>
                     <textarea id = 'messageInputTranslate' class="text-textcolor rounded-md p-2 min-w-0 bg-transparent input-text text-xl grow ml-4 mr-2 border-darkbutton resize-none focus:bg-selected overflow-y-hidden overflow-x-hidden max-w-full"
+                              class:android-image-paste={androidImagePaste}
                               bind:value={messageInputTranslate}
+                              onpaste={pasteImages}
+                              onbeforeinput={pasteImages}
                               bind:this={inputTranslateEle}
                               onkeydown={(e) => {
                             if(e.key.toLocaleLowerCase() === "enter" && !e.isComposing){
@@ -1473,13 +1508,21 @@ import { isMobile } from 'src/ts/platform'
                 </button>
             </div>
             <textarea
+                    class:android-image-paste={androidImagePaste}
                     bind:value={messageInput}
                     bind:this={fullscreenEle}
+                    onpaste={pasteImages}
+                    onbeforeinput={pasteImages}
                     onblur={persistDraftNow}
                     placeholder={language.enterMessageToPersona(activePersonaName)}
                     class="flex-1 min-h-0 w-full resize-none rounded-md border border-darkborderc bg-transparent p-3 text-textcolor text-base outline-hidden overflow-y-auto focus:border-textcolor transition-colors"
             ></textarea>
             <div class="flex justify-end mt-3">
+                <button onclick={pasteImagesFromClipboard} disabled={imagePastePending}
+                        class="mr-auto flex items-center gap-1 px-3 h-10 rounded-full text-textcolor hover:bg-primary/20 disabled:opacity-50">
+                    <ClipboardPasteIcon size={18} />
+                    <span>{language.pasteImages}</span>
+                </button>
                 <button onclick={sendFullscreen} aria-label="send"
                         class="flex items-center gap-1 px-4 h-10 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors">
                     <Send size={18} />
@@ -1490,6 +1533,11 @@ import { isMobile } from 'src/ts/platform'
     </div>
 {/if}
 <style>
+    /* Android IMEs only offer image insertion to a richly editable target.
+       Keep textarea value/selection semantics while advertising that capability. */
+    .android-image-paste {
+        -webkit-user-modify: read-write;
+    }
 
     .chat-process-stage-1{
         border-top: 0.4rem solid #60a5fa;
