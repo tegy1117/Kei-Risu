@@ -10,7 +10,7 @@ import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingS
 import { recordDbTransferSize } from "./transferSize";
 import { newSaveTiming, recordSaveSample, type SaveOutcome, type SaveTiming } from "./storage/saveMetrics";
 import { loadPlugins } from "./plugins/plugins.svelte";
-import { alertConfirm, alertConfirmMulti, alertError, alertMd, alertNormalWait, alertSelect, alertTOS, waitAlert, notifySuccess, notifyError, notifyInfo } from "./alert";
+import { alertClear, alertConfirm, alertConfirmMulti, alertError, alertMd, alertNormalWait, alertSelect, alertTOS, alertWait, waitAlert, notifySuccess, notifyError, notifyInfo } from "./alert";
 import { hasher } from "./parser/parser.svelte";
 import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
@@ -430,6 +430,7 @@ let flushSavesImpl: () => Promise<boolean> = async () => false
 let serverMutationImpl: (action: () => Promise<unknown>) => Promise<unknown> = async () => { throw new Error('Database saving is not ready.') }
 let serverMutationQueue: Promise<unknown> = Promise.resolve()
 let trackCharacterForSaveImpl: (chaId: string) => void = () => {}
+let trackChatForSaveImpl: (chaId: string, chatId: string) => void = () => {}
 let patchSyncBaseline: Database | null = null
 let activeSavePatcher: RisuSavePatcher | null = null
 
@@ -558,6 +559,15 @@ export function trackCharacterForSave(chaId: string) {
     trackCharacterForSaveImpl(chaId)
 }
 
+/**
+ * Include this chat's body in the next save. Only the chat on screen is
+ * tracked automatically, so a write to any other chat needs this; a failed
+ * save keeps it queued like any other change.
+ */
+export function trackChatForSave(chaId: string, chatId: string) {
+    trackChatForSaveImpl(chaId, chatId)
+}
+
 export function setPatchSyncBaseline(data: Database | null) {
     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
 }
@@ -591,11 +601,31 @@ export async function saveDb() {
         channel = new BroadcastChannel('risu-db')
     }
     // Every way this tab loses the writer role ends here. Saving stops first
-    // (gotChannel); a reload then happens as before when nothing is unsaved,
-    // otherwise only after the user chose it, with the unsaved edits
-    // downloadable first. Cancel keeps the tab open with saving paused.
+    // (gotChannel); a reload then follows, on its own for a return check
+    // with nothing unsaved, otherwise once the user confirmed it, with any
+    // unsaved edits downloadable first. Cancel keeps the tab open with saving
+    // paused.
     let handoffDialogOpen = false
-    async function resolveSessionHandoff(kind: 'tab' | 'return') {
+    // The user chose to keep working in this tab: take the writer role back
+    // before reloading, or a holder that keeps saving on its own (a tab left
+    // open on another device) turns this one stale again after every reload.
+    // The screen stays blocked while the claim is under way; an edit that
+    // still slipped in (a plugin, a finishing reply) would be reloaded away,
+    // so then it returns false and the caller offers the unsaved-edits choice.
+    async function claimAndReload(): Promise<boolean> {
+        const seq = editSeq
+        alertWait(language.loading)
+        try {
+            await forageStorage.claimWriterLock()
+        } catch { /* handled like a refused claim: the reload takes over with its first action */ }
+        if (editSeq !== seq) {
+            alertClear()
+            return false
+        }
+        location.reload()
+        return true
+    }
+    async function resolveSessionHandoff(kind: 'tab' | 'return', reason: string | null = null) {
         if (handoffDialogOpen) return
         handoffDialogOpen = true
         try {
@@ -603,12 +633,35 @@ export async function saveDb() {
             if (saveInFlight) await saveInFlight.catch(() => {})
             if (editSeq <= savedEditSeq) {
                 if (kind === 'return') {
-                    try { sessionStorage.setItem('risu-session-handoff-reload', '1') } catch { /* toast is best-effort */ }
-                } else {
-                    await alertNormalWait(language.activeTabChange)
+                    // A reload the user did not ask for never claims. Its
+                    // mark lets the next page notice a repeat; without
+                    // storage a repeat would go unnoticed, so ask right away.
+                    let marked = false
+                    try {
+                        sessionStorage.setItem('risu-session-handoff-reload', String(Date.now()))
+                        marked = true
+                    } catch { /* ask below */ }
+                    if (marked) {
+                        location.reload()
+                        return
+                    }
                 }
-                location.reload()
-                return
+                // An account import refuses every claim, so none is asked for.
+                if (reason === 'ACCOUNT_IMPORT_ACTIVE') {
+                    await alertNormalWait(language.risuAccountImportActive)
+                    location.reload()
+                    return
+                }
+                // Only the button counts as the user's answer. The dialog
+                // also closes without one (cancel, outside click, or other
+                // code clearing alerts), and that must not take the lock
+                // from a device that may be in use: saving stays paused.
+                const choice = await alertConfirmMulti(language.activeTabChange, [language.confirm])
+                if (choice !== 0) {
+                    notifyInfo(language.sessionUnsavedPaused)
+                    return
+                }
+                if (await claimAndReload()) return
             }
             while (true) {
                 const choice = await alertConfirmMulti(language.sessionUnsavedTitle, [
@@ -624,8 +677,12 @@ export async function saveDb() {
                     continue
                 }
                 if (choice === 1) {
-                    location.reload()
-                    return
+                    if (reason === 'ACCOUNT_IMPORT_ACTIVE') {
+                        location.reload()
+                        return
+                    }
+                    if (await claimAndReload()) return
+                    continue
                 }
                 notifyInfo(language.sessionUnsavedPaused)
                 return
@@ -658,10 +715,10 @@ export async function saveDb() {
         if (changeTracker.plugins) out.plugins = db.plugins
         return JSON.stringify(out, null, 2)
     }
-    const handOffSession = () => {
+    const handOffSession = (event?: Event) => {
         if (gotChannel) return
         gotChannel = true
-        void resolveSessionHandoff('tab')
+        void resolveSessionHandoff('tab', (event as CustomEvent<{ code?: string | null }> | undefined)?.detail?.code ?? null)
     }
     if (channel) {
         channel.onmessage = (ev) => {
@@ -674,9 +731,11 @@ export async function saveDb() {
     // Cross-device single-writer lock: mirrors BroadcastChannel behavior
     // across devices via server-side session check (423 → deactivate).
     // With reload-on-return below, a write actually reaching 423 means TRUE
-    // simultaneous use of two devices — rare, and the attempted change cannot
+    // simultaneous use of two devices, or a tab left open on another device
+    // that keeps saving on its own — rare, and the attempted change cannot
     // be saved — so it stays an explicit blocking modal, never an automatic
-    // reload that would eat the user's action without a word.
+    // reload that would eat the user's action without a word. Its OK claims
+    // the lock for this tab (claimAndReload).
     window.addEventListener('risu-session-deactivated', handOffSession)
 
     // Reload-on-return: while this tab was hidden, another device may have
@@ -687,6 +746,12 @@ export async function saveDb() {
     // 'fresh' means our copy is still current and the next user action simply
     // takes the lock back with no reload at all.
     let lastLockReturnCheck = 0
+    // When the previous page life ended in a reload-on-return. Stale again
+    // soon after one means something keeps saving elsewhere (a tab left open
+    // on another device): another silent reload would only repeat, so the
+    // user is asked instead, and confirming takes the lock (claimAndReload).
+    const RETURN_RELOAD_REPEAT_MS = 60_000
+    let returnReloadAt = 0
     const checkWriterLockOnReturn = () => {
         const nowMs = Date.now()
         if (nowMs - lastLockReturnCheck < 5000) return
@@ -703,9 +768,12 @@ export async function saveDb() {
                 return
             }
             const state = await forageStorage.getWriterLockState()
+            // Holding the lock ends a run of stale returns. 'fresh' does not:
+            // the other device may simply not have saved again yet.
+            if (state === 'active') returnReloadAt = 0
             if (state !== 'stale' || gotChannel) return
             gotChannel = true
-            await resolveSessionHandoff('return')
+            await resolveSessionHandoff(Date.now() - returnReloadAt < RETURN_RELOAD_REPEAT_MS ? 'tab' : 'return')
         })().catch(() => { /* status check failed — do nothing, write path 423 still guards */ })
     }
     window.addEventListener('focus', checkWriterLockOnReturn)
@@ -716,8 +784,10 @@ export async function saveDb() {
     // Post-handoff notice from a reload-on-return in the previous page life.
     // Delayed so the toast container is mounted before it fires.
     try {
-        if (sessionStorage.getItem('risu-session-handoff-reload')) {
+        const handoffReload = sessionStorage.getItem('risu-session-handoff-reload')
+        if (handoffReload) {
             sessionStorage.removeItem('risu-session-handoff-reload')
+            returnReloadAt = Number(handoffReload) || 0
             setTimeout(() => notifyInfo(language.sessionHandoffReload), 1500)
         }
     } catch { /* storage unavailable — skip the notice */ }
@@ -1139,26 +1209,33 @@ export async function saveDb() {
         const latestData = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
         if (latestData && latestData.length > 0) {
             const latestDb = await decodeRisuSave(latestData) as Database
-            const selectedChaId = getCurrentCharacter()?.chaId
             const localNames = new Map<string, string>(
                 (Array.isArray(db.characters) ? db.characters : [])
                     .filter((char) => char?.chaId)
                     .map((char) => [char.chaId, char.name || char.chaId] as [string, string]),
             )
-            const generating = generatingCharacters(db)
-            toSave = withTrackedCharacters(toSave, [...generating.keys()])
-            const { mergedDb, skippedArchivedCharIds } = mergeServerDbWithTrackedLocalChanges(
-                latestDb, db, toSave, safeStructuredClone, convertStubsToPlaceholders, syncedArchivedIds, syncedBaselineDb, normalizeJSON,
-            )
+            // Merges the live DB and tracker as they are at the call. Changes
+            // still waiting in the tracker (queued after this save took its
+            // batch) are kept too: queued characters whole, queued chats on
+            // their own.
+            const mergeLatest = () => {
+                const generating = generatingCharacters(db)
+                toSave = withTrackedCharacters(toSave, [...generating.keys(), ...changeTracker.character])
+                const merged = mergeServerDbWithTrackedLocalChanges(
+                    latestDb, db, toSave, safeStructuredClone, convertStubsToPlaceholders, syncedArchivedIds, syncedBaselineDb, normalizeJSON,
+                    changeTracker.chat,
+                )
+                return { ...merged, generatingSkippedKeys: merged.skippedArchivedCharIds.flatMap((chaId) => generating.get(chaId) ?? []) }
+            }
+            let merged = mergeLatest()
             // A character deactivated elsewhere while a generation streams into
             // it has no slot in the merged DB. The send pipeline addresses its
             // target by index into DBState.db, so end those generations first
             // and only then swap the database: every write they still make
             // lands in the old object, which is discarded whole.
-            const generatingSkippedKeys = skippedArchivedCharIds.flatMap((chaId) => generating.get(chaId) ?? [])
-            if (generatingSkippedKeys.length > 0) {
-                console.warn('[Save] Aborting generations for characters deactivated elsewhere before rebase:', skippedArchivedCharIds)
-                if (!await abortGenerationsAndWait(generatingSkippedKeys, 5000)) {
+            while (merged.generatingSkippedKeys.length > 0) {
+                console.warn('[Save] Aborting generations for characters deactivated elsewhere before rebase:', merged.skippedArchivedCharIds)
+                if (!await abortGenerationsAndWait(merged.generatingSkippedKeys, 5000)) {
                     // Swapping now would let the still-running send write
                     // through its stale indices into the new database. Give
                     // up on this attempt instead: the changes are requeued by
@@ -1183,7 +1260,13 @@ export async function saveDb() {
                     requeueTrackedChanges(toSave)
                     throw new Error('Rebase deferred: a generation for a character deactivated elsewhere has not ended yet')
                 }
+                // Edits made while waiting (a trigger result, a chat switch)
+                // are in the live DB and tracker but not in that merge. Merge
+                // again; nothing awaits between the last merge and the swap.
+                merged = mergeLatest()
             }
+            const { mergedDb, skippedArchivedCharIds } = merged
+            const selectedChaId = getCurrentCharacter()?.chaId
             setDatabase(mergedDb)
             // selectedCharID is an index into db.characters; the merged array
             // follows the server's order and may have gained or lost entries,
@@ -1658,6 +1741,14 @@ export async function saveDb() {
                     savedEditSeq = Math.max(savedEditSeq, editSeqAtStart)
                     savetrys = 0
                     consecutiveRetries = 0
+                    // Holding the lock ends a run of stale returns, as in the
+                    // return check. A save also passes from a fresh page that
+                    // does not hold it, so ask the server.
+                    if (returnReloadAt) {
+                        void forageStorage.getWriterLockState().then((state) => {
+                            if (state === 'active') returnReloadAt = 0
+                        }).catch(() => {})
+                    }
                 } else if (result === 'retry') {
                     // A rebase requeued the changes; a conflict that never
                     // settles must surface instead of re-downloading forever.
@@ -1751,6 +1842,14 @@ export async function saveDb() {
 
     trackCharacterForSaveImpl = (chaId) => {
         if (chaId && !changeTracker.character.includes(chaId)) changeTracker.character.push(chaId)
+    }
+    trackChatForSaveImpl = (chaId, chatId) => {
+        if (!chaId || !chatId) return
+        // Counted as an unsaved edit even when the chat is already queued, so
+        // a writer handoff offers to keep it instead of reloading it away.
+        editSeq++
+        if (changeTracker.chat.some(([c, id]) => c === chaId && id === chatId)) return
+        changeTracker.chat.push([chaId, chatId])
     }
 
     serverMutationImpl = async (action) => {
@@ -2057,7 +2156,8 @@ async function fetchWithProxy(url: string, arg: GlobalFetchArgs): Promise<Global
 
         const body = arg.body instanceof URLSearchParams ? arg.body.toString() : JSON.stringify(arg.body);
 
-        const response = await fetch(furl, { body, headers, method: arg.method ?? "POST", signal: arg.abortSignal });
+        // no-store: all targets share the /proxy2 URL (see fetchViaProxy2).
+        const response = await fetch(furl, { body, headers, method: arg.method ?? "POST", signal: arg.abortSignal, cache: 'no-store' });
         const isSuccess = response.ok && response.status >= 200 && response.status < 300;
 
         if (arg.rawResponse) {
@@ -2895,7 +2995,7 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
 
 const defaultProxyJobHeartbeatSec = 15
 
-async function fetchViaProxy2(
+export async function fetchViaProxy2(
     url: string,
     headers: Record<string, string>,
     realBody: Uint8Array | undefined,
@@ -2917,11 +3017,14 @@ async function fetchViaProxy2(
     }
 
     const proxyEndpoint = arg.networkPolicy === 'public' ? '/public-proxy' : '/proxy2'
+    // Every target shares the one proxy URL (the real one is in risu-url), so
+    // a cached GET response would be served for a different target.
     const r = await fetch(proxyEndpoint, {
         body: realBody as any,
         headers: proxyHeaders,
         method: arg.method,
-        signal: arg.signal
+        signal: arg.signal,
+        cache: 'no-store',
     })
 
     return new Response(r.body, {

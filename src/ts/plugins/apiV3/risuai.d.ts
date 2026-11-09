@@ -810,6 +810,7 @@ interface SafeElement {
      * - Keyboard: keydown, keyup, keypress
      *
      * listener function receives trimmed event object with common properties only.
+     * listeners receive events that reach the element via normal DOM propagation; for document-wide listening, use the SafeDocument from getRootDocument().
      * 
      * @example
      * ```typescript
@@ -829,9 +830,9 @@ interface SafeElement {
 
     /**
      * Removes an event listener using its ID
-     * @param type - Event type
+     * @param type - Event type (for compatibility; removal is resolved by ID)
      * @param id - Listener ID returned by addEventListener
-     * @param options - Event listener options
+     * @param options - Event listener options (for compatibility)
      */
     removeEventListener(
         type: string,
@@ -967,6 +968,8 @@ interface SafeMutationRecord {
     getTarget(): Promise<SafeElement>;
     /** Added nodes in mutation */
     getAddedNodes(): Promise<SafeClassArray<SafeElement>>;
+    /** Removed nodes in mutation */
+    getRemovedNodes(): Promise<SafeClassArray<SafeElement>>;
 }
 
 /**
@@ -1064,7 +1067,8 @@ interface PluginStorage {
 }
 
 /**
- * Device-local storage that persists outside of save files.
+ * Server-backed storage shared by devices connected to the same server.
+ * Data is stored separately and is excluded from save-file backups.
  * Uses generic types for flexible value storage.
  * Storage is shared between all plugins under a common prefix.
  *
@@ -1098,7 +1102,10 @@ interface SafeLocalPluginStorage {
     /**
      * Sets an item in storage
      * @param key - Storage key
-     * @param value - Value to store (any JSON-serializable value)
+     * @param value - JSON data, Blob/File, ArrayBuffer, typed arrays, DataView,
+     * Date, Map, Set, RegExp, or BigInt; these may be nested in objects and arrays.
+     * Ordinary values use JSON serialization when no rich types are present.
+     * Unsupported native values reject with DataCloneError.
      * @returns Promise that resolves when item is stored
      */
     setItem<T>(key: string, value: T): Promise<void>;
@@ -1141,6 +1148,8 @@ interface SafeLocalStorage {
     removeItem(key: string): Promise<void>;
     clear(): Promise<void>;
     key(index: number): Promise<string | null>;
+    /** Gets all keys (only keys stored through safeLocalStorage) */
+    keys(): Promise<string[]>;
     length(): Promise<number>;
 }
 
@@ -1435,8 +1444,8 @@ interface RisuaiPluginAPI {
     safeLocalStorage: SafeLocalStorage;
 
     /**
-     * Gets a device-local storage instance shared between plugins
-     * @returns SafeLocalPluginStorage instance for device-local storage
+     * Gets a server-backed storage instance shared between plugins
+     * @returns SafeLocalPluginStorage instance for storage on the connected server
      *
      * @example
      * ```typescript
@@ -1510,12 +1519,15 @@ interface RisuaiPluginAPI {
 
     /**
      * Sets the database (lightweight save)
-     * @param db - DatabaseSubset object to save
+     * The `plugins` property is ignored.
+     * @param db - DatabaseSubset object to save, excluding `plugins`
      */
-    setDatabaseLite(db: DatabaseSubset): Promise<void>;
+    setDatabaseLite(db: Omit<DatabaseSubset, 'plugins'>): Promise<void>;
 
     /**
      * Sets the database (full save with sync)
+     * In `plugins`, only API 3.0 plugins that are new or whose script changed are applied,
+     * each after the user confirms. Removing, reordering, enabling or disabling plugins is ignored.
      * @param db - DatabaseSubset object to save
      */
     setDatabase(db: DatabaseSubset): Promise<void>;

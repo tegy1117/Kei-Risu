@@ -26,7 +26,7 @@ const getVips = () => {
     return _vipsPromise
 }
 const { kvGet, kvSet, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvListWithSizesAndUpdatedAt, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities, checkpointWal,
+        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities, checkpointWal,
         gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, db: sqliteDb } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
@@ -38,6 +38,7 @@ const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON, norm
 const { createPatchHashCache, decodePointerSegment } = require('./patch-hash-cache.cjs');
 const { clonePatchSnapshot } = require('./patch-selective-clone.cjs');
 const pluginStorage = require('./plugin-storage-store.cjs');
+const upstreamPluginStorage = require('./upstream-plugin-storage.cjs');
 const { createAssetManifestStore } = require('./assetManifestStore.cjs');
 const {
     stripAssetManifests,
@@ -337,29 +338,48 @@ function createBackupAndRotate({ force = false } = {}) {
     trimSnapshotsToLimits();
 }
 
+// The flush that took the persist timer, while it is still writing.
+let dbFlushInFlight = null;
+
 async function flushPendingDb() {
-    if (saveTimers[DB_HEX_KEY]) {
-        clearTimeout(saveTimers[DB_HEX_KEY]);
-        delete saveTimers[DB_HEX_KEY];
-        try {
-            if (dbCache[DB_HEX_KEY]) {
-                await persistDbCacheWithChats(DB_HEX_KEY, 'database/database.bin');
-            } else if (fullChatStore && fullChatStore.size > 0) {
-                // No stripped cache but chat store has data — merge and persist directly
-                const raw = kvGet('database/database.bin');
-                if (raw) {
-                    const dbObj = normalizeJSON(await decodeRisuSave(raw));
-                    const fullDb = hydrateDatabaseForDisk(stripDatabaseForClient(dbObj, { reconcileManifests: true }));
-                    kvSet('database/database.bin', Buffer.from(encodeRisuSaveLegacy(fullDb)));
-                }
-            }
-        } catch (error) {
-            // The timer was the only record that memory is ahead of disk.
-            retryDatabasePersistLater('flush');
-            throw error;
-        }
-        createBackupAndRotate();
+    // /api/read and export flush outside the storage queue. A flush that
+    // finds the timer already taken must wait for that write: a cold load
+    // right after would otherwise read the disk from before it.
+    while (dbFlushInFlight) await dbFlushInFlight.catch(() => {});
+    if (!saveTimers[DB_HEX_KEY]) return;
+    const flush = writePendingDb();
+    dbFlushInFlight = flush;
+    try {
+        await flush;
+    } finally {
+        if (dbFlushInFlight === flush) dbFlushInFlight = null;
     }
+}
+
+async function writePendingDb() {
+    clearTimeout(saveTimers[DB_HEX_KEY]);
+    delete saveTimers[DB_HEX_KEY];
+    const cold = !dbCache[DB_HEX_KEY];
+    try {
+        if (dbCache[DB_HEX_KEY]) {
+            await persistDbCacheWithChats(DB_HEX_KEY, 'database/database.bin');
+        } else if (fullChatStore && fullChatStore.size > 0) {
+            // No stripped cache but chat store has data — merge and persist directly
+            const raw = kvGet('database/database.bin');
+            if (raw) {
+                const dbObj = normalizeJSON(await decodeRisuSave(raw));
+                const fullDb = hydrateDatabaseForDisk(stripDatabaseForClient(dbObj, { reconcileManifests: true }));
+                kvSet('database/database.bin', Buffer.from(encodeRisuSaveLegacy(fullDb)));
+                clearPersistFailure();
+            }
+        }
+    } catch (error) {
+        // The timer was the only record that memory is ahead of disk.
+        if (cold) retryColdPersistLater('flush');
+        else retryDatabasePersistLater('flush');
+        throw error;
+    }
+    createBackupAndRotate();
 }
 
 // A failed persist used to drop its timer, so nothing wrote the pending
@@ -373,6 +393,22 @@ const PERSIST_RETRY_MS = process.env.POCKETRISU_PERSIST_RETRY_MS
 function retryDatabasePersistLater(source) {
     if (!dbCache[DB_HEX_KEY] || saveTimers[DB_HEX_KEY]) return;
     scheduleDatabasePersist(`${source}:retry`, PERSIST_RETRY_MS);
+}
+
+// The same for a write of the chat store with no dbCache (right after a
+// restart or an import): the store is still ahead of disk. The timer is the
+// record of that — the next flush writes again, a cold load's included,
+// which then fails rather than rebuild the store without those bodies — and
+// it also retries on its own.
+function retryColdPersistLater(source) {
+    if (saveTimers[DB_HEX_KEY]) return;
+    const timer = setTimeout(() => {
+        queueStorageOperation(async () => {
+            if (saveTimers[DB_HEX_KEY] !== timer) return;
+            await flushPendingDb();
+        }).catch((error) => logger.error(`[${source}] Retry failed:`, error));
+    }, PERSIST_RETRY_MS);
+    saveTimers[DB_HEX_KEY] = timer;
 }
 
 // ── /api/patch × plugin storage ─────────────────────────────────────────────
@@ -418,8 +454,14 @@ function partitionPluginStorageOps(patch) {
 // Returns false when there is no blob on disk.
 async function loadDbCacheIfMissing({ createBackup = false } = {}) {
     if (dbCache[DB_HEX_KEY]) return true;
+    // A chat body saved while the cache was cold (right after a restart or an
+    // import) is only in fullChatStore until the debounced persist, and the
+    // load below rebuilds the store from disk. Write it out first.
+    await flushPendingDb();
     const raw = kvGet('database/database.bin');
     if (!raw) return false;
+    // The flush writes only chats the database lists; a body posted before
+    // its entry is carried across the rebuild (carryUnlistedChatPosts).
     const dbObj = await initChatStoreFromDisk(await decodeDatabaseWithPersistentChatIds(raw, { createBackup }));
     dbCache[DB_HEX_KEY] = normalizeJSON(stripDatabaseForClient(dbObj, { reconcileManifests: true }));
     return true;
@@ -429,6 +471,7 @@ function invalidateDbCache() {
     delete dbCache[DB_HEX_KEY];
     fullChatStore = null;
     pendingActivations.clear();
+    unlistedChatPosts.clear();
     if (saveTimers[DB_HEX_KEY]) {
         clearTimeout(saveTimers[DB_HEX_KEY]);
         delete saveTimers[DB_HEX_KEY];
@@ -552,15 +595,9 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
     // Same one-time path for upstream's cold-storage-backed plugin storage.
     // Must run before the kv split below so the restored values move with it.
     const coldPluginResult = restoreColdPluginStorageInDb(dbObj);
-    if (coldPluginResult.restored > 0 || coldPluginResult.failed > 0) needsPersist = true;
-    if (coldPluginResult.restored > 0) {
-        logger.info(`[ColdStorage] Restored ${coldPluginResult.restored} plugin storage key(s) from cold storage`);
-    }
-    if (coldPluginResult.failed > 0) {
-        logger.error(`[ColdStorage] ${coldPluginResult.failed} plugin storage key(s) could not be restored and were kept under pluginCustomStorage._coldplugin. Cold storage KV data is preserved.`);
-        for (const key of coldPluginResult.failedKeys) {
-            logger.error(`[ColdStorage]   - "${key}"`);
-        }
+    if (coldPluginResult) {
+        needsPersist = true;
+        logPluginStorageRestore('Restored', coldPluginResult);
     }
 
     // One-time move of pluginCustomStorage into kv (plugin-storage/*). Runs on
@@ -588,6 +625,17 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
         logger.error('[PluginStorage] Migration failed; plugin data stays in database.bin', e);
     }
 
+    let leakedPluginResult = null;
+    try {
+        leakedPluginResult = recoverLeakedPluginStorageKeys(dbObj);
+    } catch (e) {
+        logger.error('[PluginStorage] Recovering upstream plugin storage keys from kv failed; they stay as they are', e);
+    }
+    if (leakedPluginResult) {
+        needsPersist = true;
+        logPluginStorageRestore('Recovered', leakedPluginResult);
+    }
+
     if (needsPersist) {
         try {
             kvSet('database/database.bin', Buffer.from(encodeRisuSaveLegacy(dbObj)));
@@ -607,6 +655,7 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
     }
     if (migrationResult) {
         migrationResult.coldStorageFailed = coldRestoreResult.failed;
+        migrationResult.pluginStorageColdFailed = (coldPluginResult?.failed || 0) + (leakedPluginResult?.failed || 0);
     }
     return dbObj;
 }
@@ -672,6 +721,53 @@ function initChatStore(dbObj) {
         if (charChats.size > 0) {
             fullChatStore.set(char.chaId, charChats);
         }
+    }
+    carryUnlistedChatPosts(previous, dbObj);
+}
+
+// Chat bodies posted while the database did not list the chat: a chat (or a
+// character) created on the client reaches the server before the patch that
+// adds its entry. Every store rebuild — a persist, a full write, a cold load —
+// keeps only listed chats, and disk has no copy of these, so carry them across
+// until the database lists them. A post the entry never follows (the chat was
+// deleted first) is forgotten after UNLISTED_CHAT_POST_TTL_MS.
+const unlistedChatPosts = new Map(); // `${chaId}\0${chatId}` → { chaId, chatId, at }
+const UNLISTED_CHAT_POST_TTL_MS = 10 * 60 * 1000;
+
+function isChatListed(dbObj, chaId, chatId) {
+    const char = Array.isArray(dbObj?.characters) ? dbObj.characters.find((c) => c?.chaId === chaId) : null;
+    return Array.isArray(char?.chats) && char.chats.some((chat) => chat?.id === chatId);
+}
+
+function recordChatPost(chaId, chatId) {
+    if (isChatListed(dbCache[DB_HEX_KEY], chaId, chatId)) return;
+    unlistedChatPosts.set(`${chaId}\0${chatId}`, { chaId, chatId, at: Date.now() });
+}
+
+// Once the database lists a posted chat, its body is persisted like any other
+// one. A delete that follows before the next rebuild must not find the post
+// still on record and carry the deleted body across it.
+function forgetListedChatPosts(dbObj) {
+    if (unlistedChatPosts.size === 0) return;
+    for (const [key, post] of unlistedChatPosts) {
+        if (isChatListed(dbObj, post.chaId, post.chatId)) unlistedChatPosts.delete(key);
+    }
+}
+
+function carryUnlistedChatPosts(previous, dbObj) {
+    if (unlistedChatPosts.size === 0) return;
+    const now = Date.now();
+    // A deactivated character's chats are carryPendingActivations' business.
+    const archived = new Set(archivedStubsOf(dbObj).map((s) => s.chaId));
+    for (const [key, post] of unlistedChatPosts) {
+        if (now - post.at > UNLISTED_CHAT_POST_TTL_MS || isChatListed(dbObj, post.chaId, post.chatId)) {
+            unlistedChatPosts.delete(key);
+            continue;
+        }
+        const body = previous?.get(post.chaId)?.get(post.chatId);
+        if (!body || archived.has(post.chaId)) continue;
+        if (!fullChatStore.has(post.chaId)) fullChatStore.set(post.chaId, new Map());
+        fullChatStore.get(post.chaId).set(post.chatId, body);
     }
 }
 
@@ -1422,6 +1518,11 @@ const inlayMigrationMarker = path.join(inlayDir, '.migrated_to_fs')
 const hexRegex = /^[0-9a-fA-F]+$/;
 const BACKUP_IMPORT_MAX_BYTES = Number(process.env.RISU_BACKUP_IMPORT_MAX_BYTES ?? '0');
 const BACKUP_ENTRY_NAME_MAX_BYTES = 1024;
+// Backup uploads are cut off once the client has sent nothing for this long
+// (upload-stall.cjs).
+const BACKUP_UPLOAD_STALL_MS = Number(process.env.POCKETRISU_BACKUP_UPLOAD_STALL_MS) || 2 * 60 * 1000;
+const { watchUploadStall: watchUploadStallFor } = require('./upload-stall.cjs');
+const watchUploadStall = (req) => watchUploadStallFor(req, BACKUP_UPLOAD_STALL_MS);
 // Minimum free disk space headroom multiplier: require 2× the backup size to be free
 const BACKUP_DISK_HEADROOM = 2;
 // Heartbeat interval for NDJSON import progress stream. 5 s by default —
@@ -2074,8 +2175,34 @@ async function checkDiskSpace(requiredBytes) {
 // freshly-booted session, and only stale sessions get 423.
 const { createSessionLock } = require('./session-lock.cjs');
 const sessionLock = createSessionLock();
+const SESSION_WRITE_MAX_MS = process.env.POCKETRISU_SESSION_WRITE_MAX_MS
+    ? Number(process.env.POCKETRISU_SESSION_WRITE_MAX_MS)
+    : 5 * 60 * 1000;
+// Below the client's 30 s request timeout, so the page gets an answer.
+const SESSION_IDLE_WAIT_MS = 10 * 1000;
 
-function checkActiveSession(req, res) {
+// Waits until no accepted write is under way, then runs onIdle in that same
+// synchronous step: another request can start a write between a waiter's
+// wake-up and the code after its await. Returns false without running
+// onIdle if the wait takes longer than SESSION_IDLE_WAIT_MS.
+async function whenSessionWritesIdle(onIdle) {
+    const deadline = Date.now() + SESSION_IDLE_WAIT_MS;
+    while (!sessionLock.isIdle()) {
+        const left = deadline - Date.now();
+        if (left <= 0 || !await sessionLock.whenIdle(left)) return false;
+    }
+    onIdle();
+    return true;
+}
+
+function checkActiveSession(req, res, { allowDuringAccountImport = false, changesData = true, replacesData = false } = {}) {
+    // A started RisuAI account import will replace all data: nothing may
+    // write until it ends. Its own routes work from any open import screen.
+    if (risuAccountImport.isBlocking()) {
+        if (allowDuringAccountImport) return true
+        res.status(423).json({ error: 'A RisuAI account import is in progress', code: 'ACCOUNT_IMPORT_ACTIVE' })
+        return false
+    }
     const clientSessionId = req.headers['x-session-id']
     // The client attaches x-user-active only when a real user gesture happened
     // recently — automatic writes (boot housekeeping, flush-on-hide) carry no
@@ -2085,7 +2212,51 @@ function checkActiveSession(req, res) {
     if (result.tookOver) {
         console.log('[Session] Write lock taken over by a freshly-booted session')
     }
-    if (result.ok) return true
+    if (result.ok) {
+        // Under way until the route answers, which it does once its write is
+        // applied (session-lock.cjs writeStarted). That answer comes with
+        // 'prefinish' even when the client has gone; 'close' fires as soon as
+        // the connection drops, while the route goes on writing. Routes that
+        // leave the data as it was (a backup copy, compacting the database)
+        // can run for minutes and a page booting meanwhile reads the same
+        // data, so they are not counted.
+        if (!changesData) return true
+        sessionLock.writeStarted()
+        // 'running' → 'released' (by the cap) → 'ended'
+        let state = 'running'
+        const end = () => {
+            if (state === 'ended') return
+            clearTimeout(cap)
+            // Pages booted after the cap let them through read the data
+            // without this write: none of them may save over it now.
+            if (state === 'released') sessionLock.revokeAll()
+            else sessionLock.writeEnded()
+            state = 'ended'
+        }
+        res.once('prefinish', end)
+        // A route that fails after its answer started never answers in full;
+        // the error middleware ends it then.
+        res.locals.endSessionWrite = end
+        // A write still running after SESSION_WRITE_MAX_MS must not hold every
+        // page boot back. Whatever it has put in the storage queue lands
+        // first; whatever it does later is covered by end(). Backup imports
+        // (replacesData) replace the data outside that queue, so a release
+        // would let pages boot fresh and save right before the import
+        // overwrites them: those keep counting until they end, and cut off a
+        // stalled upload themselves (watchUploadStall).
+        let cap = null
+        if (!replacesData) {
+            cap = setTimeout(() => {
+                queueStorageOperation(async () => {}).then(() => {
+                    if (state !== 'running') return
+                    state = 'released'
+                    sessionLock.writeEnded()
+                })
+            }, SESSION_WRITE_MAX_MS)
+            cap.unref()
+        }
+        return true
+    }
     res.status(423).json({ error: 'Session deactivated' })
     return false
 }
@@ -2844,8 +3015,8 @@ function backupImportError(message, code) {
 // its local backups since v2026.6.102 (kwaroran/RisuAI d0548267). The key is
 // fetched from sv.risuai.xyz per backup and is not obtainable from here.
 const BACKUP_ENCRYPTED_MESSAGE =
-    'This backup was exported from RisuAI while logged in to a web account (sync), so its database is encrypted and cannot be imported. ' +
-    'In RisuAI, log out of the account (your data is moved to the device) or use Partial Backup, then export again. Your existing database was not replaced.';
+    'This backup was exported from the RisuAI web version (risuai.xyz), so its database is encrypted and can only be opened on risuai.xyz. ' +
+    'Turn on "Save Data in Account" in RisuAI, then use "Import from RisuAI account" in Data Migration. Your existing database was not replaced.';
 
 // decodeRisuSave has lenient fallbacks that can turn random bytes into a
 // msgpack primitive instead of throwing, so the result must also be an object.
@@ -2893,6 +3064,19 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     const importedSidecarIds = new Set();
     const explicitSidecarMap = new Map();
     const legacyInlayInfoMap = new Map();
+    // Rows a backup replaces wholesale. They are deleted in the final
+    // transaction, and only those the backup did not bring: entries are
+    // committed in BATCH_SIZE batches, so a delete in the first batch survived
+    // a rejection later in the stream (duplicate entry, the encryption marker
+    // upstream writes after every asset, a truncated upload, an undecodable
+    // database) and left the old database without its images and cold items.
+    // Rows the import creates are removed again when it fails (createdKeys).
+    // Incoming rows overwrite same-named old rows on the way in and stay;
+    // asset names are content hashes and cold ids are UUIDs, so those carry
+    // the same data.
+    const REPLACED_PREFIXES = ['assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/', 'coldstorage/', 'drafts/', 'remotes/'];
+    const importedKeys = new Set();
+    const createdKeys = new Set();
 
     const stagingDir = path.join(savePath, 'inlays_import_staging');
     const backupInlayDir = path.join(savePath, 'inlays_import_backup');
@@ -2900,11 +3084,21 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     await fs.rm(backupInlayDir, { recursive: true, force: true });
     await fs.mkdir(stagingDir, { recursive: true });
 
+    // Entry ids become file names here. Ids are validated before use, and
+    // this check keeps a crafted name from writing outside the staging dir
+    // even if a parser misses one (e.g. "\" separators on Windows).
+    const resolvedStagingDir = path.resolve(stagingDir) + path.sep;
+    function assertInsideStagingDir(filePath) {
+        if (!path.resolve(filePath).startsWith(resolvedStagingDir)) {
+            throw new Error(`Path escapes inlay import staging directory: ${filePath}`);
+        }
+        return filePath;
+    }
     function stagingInlayFilePath(id, ext) {
-        return path.join(stagingDir, `${id}.${normalizeInlayExt(ext)}`);
+        return assertInsideStagingDir(path.join(stagingDir, `${id}.${normalizeInlayExt(ext)}`));
     }
     function stagingSidecarPath(id) {
-        return path.join(stagingDir, `${id}.meta.json`);
+        return assertInsideStagingDir(path.join(stagingDir, `${id}.meta.json`));
     }
     function writeStagingInlayFileSync(id, ext, buffer, info) {
         const normalizedExt = normalizeInlayExt(ext);
@@ -2938,31 +3132,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     sqliteDb.pragma('synchronous = OFF');
 
     sqliteDb.exec('BEGIN');
-    kvDelPrefix('assets/');
-    kvDelPrefix('inlay/');
-    kvDelPrefix('inlay_thumb/');
-    kvDelPrefix('inlay_meta/');
-    kvDelPrefix('inlay_info/');
-    kvDelPrefix('coldstorage/');
-    // archive/ and archive-meta/ rows are deliberately NOT wiped: the imported
-    // database is inlined and references none of them, and the pre-import
-    // snapshot may still. They become orphan rows for the dashboard purge.
-    // NOTE: plugin-storage/ is NOT cleared here — see the final COMMIT below.
-    // Composer drafts are session/device-local and not carried in the backup;
-    // wipe stale ones so an old snapshot's chats don't resurrect later drafts.
-    kvDelPrefix('drafts/');
-    // Same reasoning as clearExistingData (save-folder import path): wipe stale
-    // remote payloads from the prior user before this backup's contents land.
-    // .bin backups never carry REMOTE blocks today, so the migration won't
-    // resolveRemote on them — but keeping the two import paths consistent
-    // avoids a contamination regression if that ever changes (upstream sync,
-    // plugin-generated buffers, etc.).
-    kvDelPrefix('remotes/');
-    // Allow remote-block migration to re-evaluate against the new database.bin.
-    // (.bin backups themselves never carry REMOTE blocks — legacy msgpack
-    // format only — but a fresh import is a clear "data changed" signal.)
-    kvDel(REMOTE_MIGRATION_MARKER_KEY);
-    clearEntities();
 
     try {
         for await (const chunk of dataSource) {
@@ -2993,6 +3162,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 const inlaySidecar = parseInlaySidecarBackupName(name);
 
                 if (inlayRaw) {
+                    // parseInlayBackupName only rejects "/"; an id with "\"
+                    // or ".." would escape the staging dir on Windows.
+                    if (!isSafeInlayId(inlayRaw.id)) {
+                        throw new Error(`Invalid inlay backup entry name: ${name}`);
+                    }
                     importedInlayIds.add(inlayRaw.id);
                     if (inlayRaw.ext) {
                         writeStagingInlayFileSync(inlayRaw.id, inlayRaw.ext, data, legacyInlayInfoMap.get(inlayRaw.id) || { ext: inlayRaw.ext, name: inlayRaw.id, type: 'image' });
@@ -3074,7 +3248,9 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                                 parseColdStorageJsonBuffer(data, name, { allowPlainJson: true }).coldData
                             )
                             : data;
+                        if (kvGetUpdatedAt(storageKey) === null) createdKeys.add(storageKey);
                         kvSet(storageKey, storageValue);
+                        importedKeys.add(storageKey);
                         assetsRestored += 1;
                     }
                 }
@@ -3138,15 +3314,49 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         // the marker with the prefix makes the re-split a first migration
         // (DB-wins), which is what a full replace means.
         kvDelPrefix(pluginStorage.PREFIX);
+        // See REPLACED_PREFIXES. archive/ and archive-meta/ rows are
+        // deliberately NOT wiped: the imported database is inlined and
+        // references none of them, and the pre-import snapshot may still.
+        // They become orphan rows for the dashboard purge. Composer drafts are
+        // session/device-local and not carried in the backup, so stale ones
+        // go and an old snapshot's chats don't resurrect later drafts. Stale
+        // remote payloads go for the same reason as in clearExistingData
+        // (save-folder import): .bin backups never carry REMOTE blocks today,
+        // but keeping the two import paths consistent avoids a contamination
+        // regression if that ever changes.
+        for (const prefix of REPLACED_PREFIXES) {
+            for (const key of kvList(prefix)) {
+                if (!importedKeys.has(key)) kvDel(key);
+            }
+        }
+        // Allow remote-block migration to re-evaluate against the new
+        // database.bin — a fresh import is a clear "data changed" signal.
+        kvDel(REMOTE_MIGRATION_MARKER_KEY);
+        clearEntities();
         sqliteDb.exec('COMMIT');
     } catch (error) {
         try { sqliteDb.exec('ROLLBACK'); } catch (_) {}
+        // Earlier batches are committed already: take back the rows they added.
+        if (createdKeys.size > 0) {
+            try {
+                sqliteDb.transaction(() => {
+                    for (const key of createdKeys) kvDel(key);
+                })();
+            } catch (cleanupError) {
+                logger.error(`[Backup Import] Could not remove ${createdKeys.size} row(s) of the failed import:`, cleanupError);
+            }
+        }
         await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
         await fs.rm(backupInlayDir, { recursive: true, force: true }).catch(() => {});
         throw error;
     } finally {
         sqliteDb.pragma('synchronous = NORMAL');
     }
+
+    // The new database is committed: drop what describes the old one now. A
+    // failure in the inlay swap below throws past the rest of this function,
+    // and a store left behind would be flushed back over the import.
+    invalidateDbCache();
 
     await ensureInlayDir();
     try {
@@ -3165,11 +3375,10 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         throw swapError;
     }
 
-    invalidateDbCache();
-
     // Trigger cold storage migration now so import result includes failure count.
     const dbRaw = kvGet('database/database.bin');
     let coldStorageFailed = 0;
+    let pluginStorageColdFailed = 0;
     if (dbRaw) {
         const migration = {};
         const dbObj = await decodeDatabaseWithPersistentChatIds(dbRaw, {
@@ -3177,6 +3386,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
             migrationResult: migration,
         });
         coldStorageFailed = migration.coldStorageFailed || 0;
+        pluginStorageColdFailed = migration.pluginStorageColdFailed || 0;
         await initChatStoreFromDisk(dbObj);
     }
 
@@ -3190,7 +3400,10 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     if (coldStorageFailed > 0) {
         logger.error(`[Backup Import] ${coldStorageFailed} cold storage character(s) could not be restored`);
     }
-    return { assetsRestored, bytesReceived, coldStorageFailed };
+    if (pluginStorageColdFailed > 0) {
+        logger.error(`[Backup Import] ${pluginStorageColdFailed} plugin storage item(s) could not be restored from cold storage`);
+    }
+    return { assetsRestored, bytesReceived, coldStorageFailed, pluginStorageColdFailed };
 }
 
 app.get('/', async (req, res, next) => {
@@ -3374,7 +3587,16 @@ const reverseProxyFunc = async (req, res, next) => {
         head.delete('content-security-policy');
         head.delete('content-security-policy-report-only');
         head.delete('clear-site-data');
-        head.delete('Cache-Control');
+        // Targets picked by the risu-url header all share the /proxy(2) URL, so
+        // no cache (browser or CDN) may store a relay response for reuse, and
+        // upstream cache headers (Expires, CDN-only ones) must not override that.
+        head.set('Cache-Control', 'private, no-store');
+        head.delete('Expires');
+        head.delete('CDN-Cache-Control');
+        head.delete('Cloudflare-CDN-Cache-Control');
+        head.delete('Surrogate-Control');
+        head.delete('Edge-Control');
+        head.delete('X-Accel-Expires');
         head.delete('Content-Encoding');
         // Node's fetch already decompressed the body, so the upstream
         // (compressed) Content-Length no longer matches and would truncate the
@@ -3474,7 +3696,16 @@ const reverseProxyFunc_get = async (req, res, next) => {
         head.delete('content-security-policy');
         head.delete('content-security-policy-report-only');
         head.delete('clear-site-data');
-        head.delete('Cache-Control');
+        // Targets picked by the risu-url header all share the /proxy(2) URL, so
+        // no cache (browser or CDN) may store a relay response for reuse, and
+        // upstream cache headers (Expires, CDN-only ones) must not override that.
+        head.set('Cache-Control', 'private, no-store');
+        head.delete('Expires');
+        head.delete('CDN-Cache-Control');
+        head.delete('Cloudflare-CDN-Cache-Control');
+        head.delete('Surrogate-Control');
+        head.delete('Edge-Control');
+        head.delete('X-Accel-Expires');
         head.delete('Content-Encoding');
         // Node's fetch already decompressed the body, so the upstream
         // (compressed) Content-Length no longer matches and would truncate the
@@ -3670,24 +3901,22 @@ async function hubProxyFunc(req, res) {
     ];
 
     try {
-        let externalURL = '';
-
-        const pathHeader = req.headers['x-risu-node-path'];
-        if (pathHeader) {
-            const decodedPath = decodeURIComponent(pathHeader);
-            externalURL = decodedPath;
-        } else {
-            const pathAndQuery = req.originalUrl.replace(/^\/hub-proxy/, '');
-            externalURL = hubURL + pathAndQuery;
+        const hubOrigin = new URL(hubURL).origin;
+        const pathAndQuery = req.originalUrl.replace(/^\/hub-proxy/, '');
+        const externalURL = new URL(hubURL + pathAndQuery);
+        if (externalURL.origin !== hubOrigin) {
+            res.status(400).send({ error: 'Invalid hub path' });
+            return;
         }
-        
+
         const headersToSend = { ...req.headers };
         delete headersToSend.host;
         delete headersToSend.connection;
         delete headersToSend['content-length'];
         delete headersToSend['x-risu-node-path'];
+        delete headersToSend['risu-auth'];
+        delete headersToSend.cookie;
 
-        const hubOrigin = new URL(hubURL).origin;
         headersToSend.origin = hubOrigin;
 
         //if Authorization header is "Server-Auth, set the token to be Server-Auth
@@ -3720,7 +3949,12 @@ async function hubProxyFunc(req, res) {
         res.status(response.status);
 
         if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
-            const redirectUrl = response.headers.get('location');
+            const redirectUrl = new URL(response.headers.get('location'), externalURL);
+            if (redirectUrl.origin !== hubOrigin) {
+                res.removeHeader('location');
+                res.status(502).send({ error: 'Hub redirected to a different origin' });
+                return;
+            }
             const newHeaders = { ...headersToSend };
             const redirectResponse = await fetch(redirectUrl, {
                 method: req.method,
@@ -3964,7 +4198,40 @@ app.post('/api/token/refresh', async (req, res) => {
 app.get('/api/session/lock-status', async (req, res) => {
     if (!await checkAuth(req, res)) return
     const id = req.headers['x-session-id']
-    res.json({ state: sessionLock.peek(typeof id === 'string' ? id : '') })
+    // During an account import every open page reloads into the import screen.
+    res.json({ state: risuAccountImport.isBlocking() ? 'stale' : sessionLock.peek(typeof id === 'string' ? id : '') })
+})
+
+// "Keep using this tab" from the deactivated dialog: hands the write lock to
+// the id the tab boots with after its reload (session-lock.cjs claim()).
+app.post('/api/session/claim', async (req, res) => {
+    if (!await checkAuth(req, res)) return
+    if (risuAccountImport.isBlocking()) {
+        res.status(423).json({ error: 'A RisuAI account import is in progress', code: 'ACCOUNT_IMPORT_ACTIVE' })
+        return
+    }
+    const id = req.headers['x-session-id']
+    if (typeof id !== 'string' || id === '') {
+        res.status(400).json({ error: 'Missing session id' })
+        return
+    }
+    if (!sessionLock.claim(id)) {
+        res.status(409).json({ error: 'Session id already in use' })
+        return
+    }
+    // Writes accepted before the claim may still be under way. Answer once
+    // they have landed, so the reload that follows reads them instead of a
+    // copy it would later save over them: it boots as the holder, so no
+    // stale check would stop it. If they take too long, refuse and give the
+    // lock back; the client then keeps its old id and that page stays stale.
+    if (!await whenSessionWritesIdle(() => {})) {
+        sessionLock.unclaim(id)
+        res.status(503).json({ error: 'Earlier writes are still in progress' })
+        return
+    }
+    await queueStorageOperation(async () => {})
+    console.log('[Session] Write lock claimed by user request')
+    res.json({ ok: true })
 })
 
 // ── Session cookie issuance (F-0) ──────────────────────────────────────────
@@ -3974,8 +4241,11 @@ app.post('/api/session', async (req, res) => {
     if (!await checkAuth(req, res)) return
     const clientSessionId = req.headers['x-session-id']
     if (typeof clientSessionId === 'string') {
-        // Registers the boot; takes the lock only if nobody holds it.
-        sessionLock.register(clientSessionId)
+        // Registers the boot; takes the lock only if nobody holds it. The
+        // page reads its data after this answer, so writes still under way
+        // land first; if they take too long, the boot counts as stale.
+        const register = () => sessionLock.register(clientSessionId)
+        if (!await whenSessionWritesIdle(register)) sessionLock.register(clientSessionId, true)
         console.log('[Session] Session boot registered')
     }
     const token = nodeCrypto.randomBytes(32).toString('hex')
@@ -4375,6 +4645,7 @@ app.get('/api/remove', async (req, res, next) => {
     if(!await checkAuth(req, res)){
         return;
     }
+    if (!checkActiveSession(req, res)) return;
     const filePath = normalizeFilePathHeader(req.headers['file-path']);
     if (!filePath) {
         res.status(400).send({ error:'File path required' });
@@ -5030,6 +5301,7 @@ app.post('/api/patch', async (req, res, next) => {
                 databasePatchHashCache.update(dbCache[filePath], next, patch);
             }
             dbCache[filePath] = next;
+            if (decodedKey === 'database/database.bin') forgetListedChatPosts(next);
             // DB patch is in; now the kv half (see ordering note above).
             applyPluginKvOps();
 
@@ -5313,6 +5585,13 @@ app.post('/api/assets/bulk-write', async (req, res, next) => {
         const entries = req.body; // {key: string, value: base64}[]
         if(!Array.isArray(entries)){
             res.status(400).send({ error: 'Body must be a JSON array of {key, value}' });
+            return;
+        }
+        // database.bin goes through /api/write. Written here it would skip
+        // every guard and leave dbCache and the chat store describing the
+        // old one, which the next flush writes back over it.
+        if(entries.some((entry) => entry?.key === DB_BLOB_KEY)){
+            res.status(400).send({ error: 'database/database.bin cannot be written through bulk-write' });
             return;
         }
         for(let i = 0; i < entries.length; i += BULK_BATCH){
@@ -5675,7 +5954,7 @@ app.post('/api/backup/import/prepare', async (req, res, next) => {
 
 app.post('/api/backup/import', async (req, res, next) => {
     if(!await checkAuth(req, res)){ return; }
-    if (!checkActiveSession(req, res)) return;
+    if (!checkActiveSession(req, res, { replacesData: true })) return;
 
     if (importInProgress) {
         res.status(409).json({ error: 'Another import is already in progress' });
@@ -5683,11 +5962,15 @@ app.post('/api/backup/import', async (req, res, next) => {
     }
     importInProgress = true;
 
-    // Disable timeouts for large backup uploads
-    const prevRequestTimeout = req.socket.server?.requestTimeout;
+    // Disable timeouts for large backup uploads. Keep the server reference:
+    // when the upload is cut off (client abort, rejection mid-stream) the
+    // finally block runs after req.socket was detached, and reading
+    // req.socket.server there threw and took the whole process down.
+    const httpServer = req.socket.server;
+    const prevRequestTimeout = httpServer?.requestTimeout;
     req.socket.setTimeout(0);
     req.socket.setKeepAlive(true);
-    if (req.socket.server) req.socket.server.requestTimeout = 0;
+    if (httpServer) httpServer.requestTimeout = 0;
 
     // NDJSON streaming keeps the response socket alive during long
     // post-upload work (WAL checkpoint, cold-storage migration). Without it
@@ -5695,6 +5978,7 @@ app.post('/api/backup/import', async (req, res, next) => {
     // and bounce the request back to the client as 502 Bad Gateway.
     const wantsNdjson = String(req.headers['accept'] ?? '').includes('application/x-ndjson');
     let heartbeatTimer = null;
+    const stall = watchUploadStall(req);
 
     try {
         const contentType = String(req.headers['content-type'] ?? '');
@@ -5728,6 +6012,7 @@ app.post('/api/backup/import', async (req, res, next) => {
                 maxBytes: BACKUP_IMPORT_MAX_BYTES,
                 totalBytes,
                 onProgress: (received, total) => {
+                    stall.received();
                     const now = Date.now();
                     if (now - lastProgressWrite < 200) return;
                     lastProgressWrite = now;
@@ -5739,14 +6024,16 @@ app.post('/api/backup/import', async (req, res, next) => {
                 ok: true,
                 assetsRestored: result.assetsRestored,
                 coldStorageFailed: result.coldStorageFailed,
+                pluginStorageColdFailed: result.pluginStorageColdFailed,
             }) + '\n');
             res.end();
         } else {
-            const result = await importBackupFromSource(req, { maxBytes: BACKUP_IMPORT_MAX_BYTES });
+            const result = await importBackupFromSource(req, { maxBytes: BACKUP_IMPORT_MAX_BYTES, onProgress: stall.received });
             res.json({
                 ok: true,
                 assetsRestored: result.assetsRestored,
                 coldStorageFailed: result.coldStorageFailed,
+                pluginStorageColdFailed: result.pluginStorageColdFailed,
             });
         }
     } catch (error) {
@@ -5760,10 +6047,128 @@ app.post('/api/backup/import', async (req, res, next) => {
         }
     } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
+        stall.stop();
         importInProgress = false;
-        if (req.socket.server && prevRequestTimeout !== undefined) {
-            req.socket.server.requestTimeout = prevRequestTimeout;
+        if (httpServer && prevRequestTimeout !== undefined) {
+            httpServer.requestTimeout = prevRequestTimeout;
         }
+    }
+});
+
+// ── RisuAI account import ───────────────────────────────────────────────────
+// Downloads a risuai.xyz account (database, assets, cold storage) to a staging
+// folder, then applies it through importBackupFromSource. Logic lives in
+// risu-account-import.cjs; while an import is started, checkActiveSession
+// refuses every data write. POCKETRISU_RISU_ACCOUNT_URL points tests at a fake
+// account server and POCKETRISU_RISU_ACCOUNT_GAP_MS shortens the pause between
+// account requests there.
+const { createRisuAccountImport, AccountImportError } = require('./risu-account-import.cjs');
+const accountRequestGapMs = Number(process.env.POCKETRISU_RISU_ACCOUNT_GAP_MS);
+const risuAccountImport = createRisuAccountImport({
+    baseUrl: process.env.POCKETRISU_RISU_ACCOUNT_URL || undefined,
+    requestGapMs: process.env.POCKETRISU_RISU_ACCOUNT_GAP_MS && Number.isFinite(accountRequestGapMs) && accountRequestGapMs >= 0 ? accountRequestGapMs : undefined,
+    stagingDir: path.join(savePath, 'account_import_staging'),
+    logger,
+    decodeRisuSave,
+    encodeRisuSaveLegacy,
+    checkDiskSpace,
+    applyEntries: applyRisuAccountEntries,
+});
+
+async function applyRisuAccountEntries(entries, { totalBytes, onProgress }) {
+    if (importInProgress) {
+        throw new AccountImportError('Another import is already in progress', 'ACCOUNT_IMPORT_BUSY', 409);
+    }
+    importInProgress = true;
+    try {
+        // Writes accepted before the import started may still wait in the
+        // storage queue; they run before the swap, not after it. New ones are
+        // refused while the import blocks.
+        await queueStorageOperation(async () => {});
+        const disk = await checkDiskSpace(totalBytes * BACKUP_DISK_HEADROOM);
+        if (!disk.ok) {
+            throw new AccountImportError('Not enough free disk space to apply the import', 'ACCOUNT_DISK_FULL', 507);
+        }
+        try {
+            return await importBackupFromSource(entries, { totalBytes, onProgress });
+        } finally {
+            // Every page loaded before the swap holds the old data in memory.
+            // Also after a failure, which may come after the new data was
+            // committed (inlay folder swap).
+            sessionLock.revokeAll();
+        }
+    } finally {
+        importInProgress = false;
+    }
+}
+
+function sendAccountImportError(res, error, next) {
+    if (error?.code && typeof error.status === 'number') {
+        res.status(error.status).json({ error: error.message, code: error.code });
+        return;
+    }
+    next(error);
+}
+
+app.get('/api/risu-account/config', async (req, res) => {
+    if (!await checkAuth(req, res)) { return; }
+    res.json(risuAccountImport.config());
+});
+
+app.get('/api/risu-account/status', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    try {
+        res.json(await risuAccountImport.status());
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/risu-account/prepare', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        // Reads the account database in the background; the client polls
+        // status for the summary (or the error).
+        risuAccountImport.prepare({ token: req.body?.token, id: req.body?.id });
+        res.json({ ok: true });
+    } catch (error) {
+        sendAccountImportError(res, error, next);
+    }
+});
+
+// The first call starts the import: from then on PocketRisu is blocked until
+// it is applied or cancelled.
+app.post('/api/risu-account/download', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        res.json(risuAccountImport.startDownload());
+    } catch (error) {
+        sendAccountImportError(res, error, next);
+    }
+});
+
+app.post('/api/risu-account/cancel', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        await risuAccountImport.cancel();
+        res.json({ ok: true });
+    } catch (error) {
+        sendAccountImportError(res, error, next);
+    }
+});
+
+// Applies a download with missing items once the user accepts them (one
+// without missing items applies by itself). Runs in the background.
+app.post('/api/risu-account/apply', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        res.json(risuAccountImport.startApply());
+    } catch (error) {
+        sendAccountImportError(res, error, next);
     }
 });
 
@@ -5772,7 +6177,7 @@ app.post('/api/backup/import', async (req, res, next) => {
 // Save current data as a .bin backup file on the server
 app.post('/api/backup/server/save', async (req, res, next) => {
     if (!await checkAuth(req, res)) { return; }
-    if (!checkActiveSession(req, res)) return;
+    if (!checkActiveSession(req, res, { changesData: false })) return;
     try {
         await flushPendingDb();
 
@@ -5930,7 +6335,7 @@ app.get('/api/backup/server/list', async (req, res, next) => {
 // Restore from a server backup file
 app.post('/api/backup/server/restore', async (req, res, next) => {
     if (!await checkAuth(req, res)) { return; }
-    if (!checkActiveSession(req, res)) return;
+    if (!checkActiveSession(req, res, { replacesData: true })) return;
 
     if (importInProgress) {
         res.status(409).json({ error: 'Another import is already in progress' });
@@ -5983,6 +6388,7 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
             ok: true,
             assetsRestored: result.assetsRestored,
             coldStorageFailed: result.coldStorageFailed,
+            pluginStorageColdFailed: result.pluginStorageColdFailed,
         }) + '\n');
         res.end();
     } catch (error) {
@@ -6140,50 +6546,87 @@ function restoreColdStorageCharactersInDb(dbObj) {
     return result;
 }
 
-// Upstream (cad8595a) keeps v3 pluginStorage values in cold storage and leaves
-// only a key -> cold id map in pluginCustomStorage._coldplugin. Fold the
-// values back inline so pluginStorage.migrateFromDb moves them into kv.
-// Keys whose entry is missing or unreadable stay in _coldplugin as recovery
-// breadcrumbs; their cold storage KV entries are never deleted.
-const COLD_PLUGIN_STORAGE_KEY = '_coldplugin';
+// Upstream keeps v3 pluginStorage values in cold storage: cad8595a leaves a
+// key -> cold id map in pluginCustomStorage._coldplugin, and 68b5d032c
+// (v2026.10.210+) a _coldpluginIndex pointer to one index item. Fold both back
+// into plain keys so pluginStorage.migrateFromDb moves them into kv (see
+// upstream-plugin-storage.cjs). Cold storage KV entries are never deleted.
+// What cannot be restored is recorded in nodeOnlyPluginStorageRecovery,
+// outside the plugin key space, so a reserved key never reaches a plugin or
+// an export to upstream, where it would be read as a live pointer.
+const PLUGIN_STORAGE_RECOVERY_KEY = 'nodeOnlyPluginStorageRecovery';
+
+function readColdPluginItem(coldId) {
+    try {
+        const entry = readColdStorageJsonEntry(coldId, { migrateLegacy: true });
+        return entry ? entry.coldData : undefined;
+    } catch (err) {
+        logger.error(`[ColdStorage] plugin storage item ${coldId} could not be read:`, err.message);
+        throw err;
+    }
+}
+
+function appendPluginStorageRecovery(dbObj, record) {
+    const existing = Array.isArray(dbObj[PLUGIN_STORAGE_RECOVERY_KEY]) ? dbObj[PLUGIN_STORAGE_RECOVERY_KEY] : [];
+    dbObj[PLUGIN_STORAGE_RECOVERY_KEY] = [...existing, record];
+}
+
+function logPluginStorageRestore(action, result) {
+    if (result.restored > 0) {
+        logger.info(`[ColdStorage] ${action} ${result.restored} plugin storage key(s) from cold storage`);
+    }
+    if (result.failed > 0) {
+        logger.error(`[ColdStorage] ${result.failed} plugin storage item(s) could not be restored; details are kept in ${PLUGIN_STORAGE_RECOVERY_KEY}. Cold storage KV data is preserved.`);
+    }
+}
 
 function restoreColdPluginStorageInDb(dbObj) {
-    const result = { restored: 0, failed: 0, failedKeys: [] };
     const storage = dbObj?.pluginCustomStorage;
-    if (!storage || typeof storage !== 'object' || Array.isArray(storage)) return result;
-    if (!Object.prototype.hasOwnProperty.call(storage, COLD_PLUGIN_STORAGE_KEY)) return result;
-    const map = storage[COLD_PLUGIN_STORAGE_KEY];
-    if (!map || typeof map !== 'object' || Array.isArray(map)) return result;
+    if (!upstreamPluginStorage.hasReservedKeys(storage)) return null;
+    const resolved = upstreamPluginStorage.resolveUpstreamPluginStorage(storage, {
+        readCold: readColdPluginItem,
+        isPresent: (key) => Object.prototype.hasOwnProperty.call(storage, key),
+        source: 'database',
+    });
+    for (const key of upstreamPluginStorage.RESERVED_KEYS) delete storage[key];
+    for (const [key, value] of resolved.assign) {
+        // defineProperty keeps a "__proto__" key an own property.
+        Object.defineProperty(storage, key, { value, enumerable: true, writable: true, configurable: true });
+    }
+    if (resolved.record) appendPluginStorageRecovery(dbObj, resolved.record);
+    return resolved;
+}
 
-    const remaining = {};
-    for (const key of Object.keys(map)) {
-        const coldId = map[key];
-        let entry = null;
+// Builds that did not know the index layout moved upstream's reserved keys
+// into kv as ordinary plugin keys (the pointer string, and _coldplugin
+// breadcrumbs). Resolve them the same way, once: the values already in kv are
+// live and win over the cold copies.
+function recoverLeakedPluginStorageKeys(dbObj) {
+    const leaked = {};
+    for (const key of upstreamPluginStorage.RESERVED_KEYS) {
+        let value = null;
         try {
-            entry = typeof coldId === 'string' && coldId
-                ? readColdStorageJsonEntry(coldId, { migrateLegacy: true })
-                : null;
+            value = pluginStorage.get(key);
         } catch (err) {
-            logger.error(`[ColdStorage] plugin storage key "${key}" (${coldId}) could not be read:`, err.message);
+            logger.error(`[PluginStorage] Reserved key "${key}" in kv could not be read:`, err.message);
         }
-        if (!entry) {
-            remaining[key] = coldId;
-            result.failed++;
-            result.failedKeys.push(key);
-            continue;
-        }
-        // The cold copy is upstream's live value; an inline key of the same
-        // name is a stale pre-migration leftover.
-        storage[key] = entry.coldData;
-        result.restored++;
+        if (value !== null && value !== undefined) leaked[key] = value;
     }
+    if (Object.keys(leaked).length === 0) return null;
 
-    if (Object.keys(remaining).length > 0) {
-        storage[COLD_PLUGIN_STORAGE_KEY] = remaining;
-    } else {
-        delete storage[COLD_PLUGIN_STORAGE_KEY];
-    }
-    return result;
+    createBackupAndRotate({ force: true });
+    const present = new Set(pluginStorage.list().map((entry) => entry.key));
+    const resolved = upstreamPluginStorage.resolveUpstreamPluginStorage(leaked, {
+        readCold: readColdPluginItem,
+        isPresent: (key) => present.has(key),
+        source: 'leaked-kv',
+    });
+    sqliteDb.transaction(() => {
+        for (const [key, value] of resolved.assign) pluginStorage.set(key, value);
+        for (const key of Object.keys(leaked)) pluginStorage.remove(key);
+    })();
+    if (resolved.record) appendPluginStorageRecovery(dbObj, resolved.record);
+    return resolved;
 }
 
 function isColdStorageChat(chat) {
@@ -6347,6 +6790,7 @@ app.post('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
                 fullChatStore.set(chaId, new Map());
             }
             fullChatStore.get(chaId).set(expectedChatId, chatData);
+            recordChatPost(chaId, expectedChatId);
 
             // Schedule debounced persist (reuses existing timer mechanism)
             if (saveTimers[DB_HEX_KEY]) {
@@ -6354,6 +6798,7 @@ app.post('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
             }
             saveTimers[DB_HEX_KEY] = setTimeout(async () => {
                 let failed = false;
+                const cold = !dbCache[DB_HEX_KEY];
                 try {
                     // If dbCache has stripped DB, persist with merged chats
                     if (dbCache[DB_HEX_KEY]) {
@@ -6390,7 +6835,8 @@ app.post('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
                 } finally {
                     delete saveTimers[DB_HEX_KEY];
                 }
-                if (failed) retryDatabasePersistLater('chat-content');
+                if (failed && cold) retryColdPersistLater('chat-content');
+                else if (failed) retryDatabasePersistLater('chat-content');
             }, SAVE_INTERVAL);
 
             res.json({ success: true });
@@ -6576,7 +7022,7 @@ app.post('/api/migrate/save-folder/execute', async (req, res, next) => {
 
 app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
-    if (!checkActiveSession(req, res)) return;
+    if (!checkActiveSession(req, res, { replacesData: true })) return;
     if (importInProgress) {
         res.status(409).json({ error: 'Another import is already in progress' });
         return;
@@ -6585,13 +7031,17 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
 
     req.socket.setTimeout(0);
     req.socket.setKeepAlive(true);
-    const prevRequestTimeout = req.socket.server?.requestTimeout;
-    if (req.socket.server) req.socket.server.requestTimeout = 0;
+    // Same as /api/backup/import: req.socket can be detached by the finally block.
+    const httpServer = req.socket.server;
+    const prevRequestTimeout = httpServer?.requestTimeout;
+    if (httpServer) httpServer.requestTimeout = 0;
+    const stall = watchUploadStall(req);
 
     try {
         const chunks = [];
         let totalSize = 0;
         for await (const chunk of req) {
+            stall.received();
             totalSize += chunk.length;
             if (BACKUP_IMPORT_MAX_BYTES > 0 && totalSize > BACKUP_IMPORT_MAX_BYTES) {
                 res.status(413).json({ error: 'Zip file exceeds max allowed size' });
@@ -6631,9 +7081,10 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
     } catch (error) {
         res.status(400).json({ error: error.message || 'Import failed' });
     } finally {
+        stall.stop();
         importInProgress = false;
-        if (req.socket.server && prevRequestTimeout !== undefined) {
-            req.socket.server.requestTimeout = prevRequestTimeout;
+        if (httpServer && prevRequestTimeout !== undefined) {
+            httpServer.requestTimeout = prevRequestTimeout;
         }
     }
 });
@@ -7605,15 +8056,33 @@ function decodeRemoteMetaLastUsed(raw) {
     }
 }
 
+// A new install keeps the client's boot placeholder `{}` on disk until the
+// first change is saved, so the database has no character list yet. That is
+// not a bad decode, but it is only safe to treat as "nothing to do" while no
+// row the sweep could delete exists: with any present, a missing character
+// list still means we cannot tell what is referenced, so the sweep refuses.
+function isNewSaveWithNothingToSweep(dbObj, { includeAssets, includeRemotes, assets }) {
+    if (!dbObj || typeof dbObj !== 'object' || Array.isArray(dbObj) || 'characters' in dbObj) return false;
+    if (includeAssets && assets.length > 0) return false;
+    if (includeRemotes && kvList('remotes/').length > 0) return false;
+    return true;
+}
+
+const EMPTY_ASSET_SWEEP = Object.freeze({ ok: true, deleted: 0, assetsDeleted: 0, remotesDeleted: 0, bytes: 0, scanned: 0 });
+
 async function computeAssetSweep({ includeAssets, assetGraceMs = 0, includeRemotes = false, checkpointLabel = 'AssetSweep' } = {}) {
     let dbObj;
-    const assets = includeAssets ? kvListWithSizesAndUpdatedAt('assets/') : [];
+    // updated_at is stored after the value BLOB, so reading it walks the whole
+    // value's overflow pages — for every asset that took minutes on a large
+    // library (#102). Only unreferenced candidates need it; it is read below.
+    const assets = includeAssets ? kvListWithSizes('assets/') : [];
     const uncleanable = new Set();
     if (includeAssets) {
         await flushPendingDb();
         const raw = kvGet(DB_BLOB_KEY);
         if (!raw) return { error: 'No database blob' };
         dbObj = await decodeRisuSave(raw);
+        if (isNewSaveWithNothingToSweep(dbObj, { includeAssets, includeRemotes, assets })) return { ...EMPTY_ASSET_SWEEP };
         if (!dbObj || !Array.isArray(dbObj.characters)) return { error: 'Database decode failed' };
 
         for (const bn of buildUncleanableSet(dbObj)) uncleanable.add(bn);
@@ -7644,6 +8113,7 @@ async function computeAssetSweep({ includeAssets, assetGraceMs = 0, includeRemot
         // save those ran inside the storage queue and held up saves at boot.
         if (!(await loadDbCacheIfMissing())) return { error: 'No database blob' };
         dbObj = dbCache[DB_HEX_KEY];
+        if (isNewSaveWithNothingToSweep(dbObj, { includeAssets, includeRemotes, assets })) return { ...EMPTY_ASSET_SWEEP };
         if (!dbObj || !Array.isArray(dbObj.characters)) return { error: 'Database decode failed' };
     }
 
@@ -7651,7 +8121,7 @@ async function computeAssetSweep({ includeAssets, assetGraceMs = 0, includeRemot
     const assetVictims = includeAssets
         ? assets.filter((it) => {
             if (uncleanable.has(statsBasename(it.key))) return false;
-            if (assetGraceMs > 0 && now - Number(it.updated_at || 0) <= assetGraceMs) return false;
+            if (assetGraceMs > 0 && now - Number(kvGetUpdatedAt(it.key) || 0) <= assetGraceMs) return false;
             return true;
         })
         : [];
@@ -7663,7 +8133,7 @@ async function computeAssetSweep({ includeAssets, assetGraceMs = 0, includeRemot
         const characterIds = new Set(dbObj.characters.map((v) => v?.chaId).filter(Boolean));
         // A deactivated character still owns its remote cache.
         for (const stub of archivedStubsOf(dbObj)) characterIds.add(stub.chaId);
-        const remoteRows = kvListWithSizesAndUpdatedAt('remotes/');
+        const remoteRows = kvListWithSizes('remotes/');
         const remoteByKey = new Map(remoteRows.map((it) => [it.key, it]));
         for (const it of remoteRows) {
             if (it.key.endsWith('.meta')) continue;
@@ -7680,7 +8150,7 @@ async function computeAssetSweep({ includeAssets, assetGraceMs = 0, includeRemot
                 continue;
             }
             const lastUsed = decodeRemoteMetaLastUsed(kvGet(metaKey));
-            const newestUse = Math.max(Number(it.updated_at || 0), lastUsed ?? 0);
+            const newestUse = Math.max(Number(kvGetUpdatedAt(it.key) || 0), lastUsed ?? 0);
             if (now - newestUse > AUTO_SWEEP_GRACE_MS) {
                 remoteVictims.push(it);
                 remoteVictims.push(meta);
@@ -8188,7 +8658,7 @@ app.post('/api/db/assets/auto-sweep', async (req, res, next) => {
 
 app.post('/api/db/optimize', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
-    if (!checkActiveSession(req, res)) return;
+    if (!checkActiveSession(req, res, { changesData: false })) return;
     try {
         const saveDir = path.join(process.cwd(), 'save');
         const dbFilePath = path.join(saveDir, 'risuai.db');
@@ -8245,7 +8715,7 @@ app.post('/api/db/optimize', async (req, res, next) => {
 
 app.post('/api/db/wal-checkpoint', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
-    if (!checkActiveSession(req, res)) return;
+    if (!checkActiveSession(req, res, { changesData: false })) return;
     try {
         const saveDir = path.join(process.cwd(), 'save');
         const walFilePath = path.join(saveDir, 'risuai.db-wal');
@@ -9158,10 +9628,19 @@ app.post('/api/tunnel/stop', async (req, res) => {
 });
 
 // ─── Express error middleware — must be registered after all routes ─────────
+// A counted write whose route failed is over, even when no answer goes out
+// (checkActiveSession).
+app.use((err, req, res, next) => {
+    res.locals.endSessionWrite?.();
+    next(err);
+});
 app.use(expressErrorMiddleware);
 app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
-    res.status(500).json({ error: err?.message || 'internal server error' });
+    // Body parsers reject an oversized body with type 'entity.too.large'; keep
+    // its 413 so the client can show the size message instead of a generic one.
+    const status = err?.type === 'entity.too.large' ? 413 : 500;
+    res.status(status).json({ error: err?.message || 'internal server error' });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

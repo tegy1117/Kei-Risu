@@ -8,7 +8,7 @@
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
     import ShDropdownMenuItem from 'src/lib/UI/GUI/ShDropdownMenuItem.svelte';
-    import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, alertStore } from "../../ts/stores.svelte";
+    import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, alertStore, holdChatEditorOverlay } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
     import { getAdditionalChatLoadPages, getInitialChatLoadPages } from 'src/ts/chatLoadPages';
@@ -463,6 +463,10 @@ import { isMobile } from 'src/ts/platform'
     // editor. Enter inserts a newline (no send); sending is via the Send button.
     let composerFullscreen = $state(false)
     let fullscreenEle:HTMLTextAreaElement = $state()
+    // Lift the chat layer above the docked sidebar while the editor is open (see ChatScreen).
+    $effect(() => {
+        if (composerFullscreen) return holdChatEditorOverlay()
+    })
     $effect(() => {
         if (composerFullscreen && fullscreenEle) {
             const el = fullscreenEle
@@ -841,27 +845,48 @@ import { isMobile } from 'src/ts/platform'
             // multiline until the input is fully cleared. Reflow is therefore a
             // one-way latch (cleared only on empty), so the layout toggle can never
             // feed back into the width measurement and flip-flop 1↔2 lines.
+            // Locals instead of re-reading the state just written: a state the
+            // effect read and then changed makes it run (and measure) again.
+            let isMultiline = multiline
+            let inlineHeight: number | undefined
             if(messageInput === ''){
-                multiline = false
-            } else if(!multiline && measureHeightAt(ref) > 50){
-                multiline = true
+                isMultiline = false
+            } else if(!isMultiline){
+                inlineHeight = measureHeightAt(ref)
+                if(inlineHeight > 50) isMultiline = true
             }
-            // Height for the width that will actually be shown.
-            const sh = measureHeightAt(multiline ? "100%" : ref)
+            multiline = isMultiline
+            // Height for the width that will actually be shown; a composer that
+            // stays inline already measured it above.
+            const sh = isMultiline ? measureHeightAt("100%") : (inlineHeight ?? measureHeightAt(ref))
             // Cap the composer at ~60% of the viewport; beyond that it scrolls.
             const maxH = Math.round(window.innerHeight * 0.6)
-            inputHeight = Math.min(sh, maxH) + "px"
-            inputEle.style.height = inputHeight
+            const height = Math.min(sh, maxH) + "px"
+            inputHeight = height
+            inputEle.style.height = height
             inputOverflow = sh > maxH
         }
     }
 
-    $effect.pre(() => {
-        updateInputSizeAll()
+    // Typing reaches the composer through bind:value, so this effect is the
+    // one place a keystroke measures it (an extra call in oninput measured the
+    // same text twice, translate box included). It runs after the DOM update:
+    // text set from code (a translation, an inserted sticker or file) is only
+    // in the textarea by then, and a pre-effect measured the old text.
+    $effect(() => {
+        updateInputSize()
+    });
+    // The translate box is measured after its DOM value updates, which covers
+    // both typing in it and a translation written into it.
+    $effect(() => {
+        messageInputTranslate
+        if(inputTranslateEle) untrack(() => updateInputTranslateSize())
     });
 
     async function updateInputTransateMessage(reverse: boolean) {
-        if(!DBState.db.useAutoTranslateInput){
+        // The menu toggle is hidden while Translator Language is Disabled (''),
+        // so a stale useAutoTranslateInput must not keep translating.
+        if(!DBState.db.useAutoTranslateInput || DBState.db.translator === ''){
             return
         }
         if(isExpTranslator()){
@@ -1261,7 +1286,7 @@ import { isMobile } from 'src/ts/platform'
                 </div>
               </div>
             </div>
-            {#if DBState.db.useAutoTranslateInput && DBState.db.characters[$selectedCharID]?.chaId !== '§playground'}
+            {#if DBState.db.useAutoTranslateInput && DBState.db.translator !== '' && DBState.db.characters[$selectedCharID]?.chaId !== '§playground'}
                 <div class="flex items-center mt-2 mb-2">
                     <label for='messageInputTranslate' class="text-textcolor ml-4">
                         <LanguagesIcon />
@@ -1284,7 +1309,7 @@ import { isMobile } from 'src/ts/platform'
                                 e.preventDefault()
                             }
                         }}
-                              oninput={()=>{updateInputSizeAll();updateInputTransateMessage(true)}}
+                              oninput={()=>{updateInputTransateMessage(true)}}
                               placeholder={language.enterMessageForTranslateToEnglish}
                               style:height={inputTranslateHeight}
                     ></textarea>

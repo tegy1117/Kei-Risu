@@ -1,15 +1,14 @@
 import { migrateLegacyTrash } from "./characterArchive";
 import { changeFullscreen, checkNullish } from "./util"
-import { installDynamicViewportHeight } from "./viewportHeight"
 import { v4 as uuidv4 } from 'uuid';
 import { get } from "svelte/store";
 import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, bootBackupPromptStore } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, bootBackupPromptStore, accountImportBlocking } from "./stores.svelte";
 import { recordDbTransferSize } from "./transferSize";
 import { loadPlugins } from "./plugins/plugins.svelte";
-import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
+import { alertError, alertMd, waitAlert, alertConfirm, alertInput } from "./alert";
 import { characterURLImport } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy } from "./storage/risuSave";
@@ -41,6 +40,17 @@ export async function loadData() {
     if (!loaded) {
         try {
             applyEarlyLanguage()
+            // A started RisuAI account import will replace all data, so the
+            // app shows only its screen until it ends. When the status cannot
+            // be read the boot goes on; the server still refuses every write.
+            try {
+                if ((await forageStorage.getRisuAccountImportStatus()).blocking) {
+                    accountImportBlocking.set(true)
+                    return
+                }
+            } catch (error) {
+                console.warn('[bootstrap] account import status failed:', error)
+            }
             let createdFreshDatabase = false
             {
                 await forageStorage.Init()
@@ -146,11 +156,6 @@ export async function loadData() {
             updateTextThemeAndCSS()
             updateAnimationSpeed()
             updateHeightMode()
-            // Only when no explicit heightMode override is active — an explicit
-            // vh/dvh/svh/... choice must keep sizing exactly as configured.
-            if (!db.heightMode || db.heightMode === 'normal') {
-                installDynamicViewportHeight()
-            }
             updateErrorHandling()
             updateGuisize()
             if (!db.didFirstSetup) {
@@ -215,13 +220,6 @@ export async function loadData() {
             // Installs the return triggers (visibility / online) and runs the
             // first pass. Fire-and-forget — never throws, no-op without jobs.
             initModelJobRecovery()
-            if (import.meta.env.VITE_RISU_TOS === 'TRUE') {
-                alertTOS().then((a) => {
-                    if (a === false) {
-                        location.reload()
-                    }
-                })
-            }
         } catch (error) {
             alertError(error)
         }

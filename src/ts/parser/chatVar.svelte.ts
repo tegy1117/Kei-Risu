@@ -1,6 +1,7 @@
 import { getExecutionContext } from '../process/executionScope'
 import { get } from 'svelte/store'
 import { DBState as liveDBState, selectedCharID } from '../stores.svelte'
+import type { Chat } from '../storage/database.svelte'
 import { parseKeyValue } from '../util'
 
 export function getChatVar(key:string): string {
@@ -12,12 +13,16 @@ export function getChatVar(key:string): string {
     if(!char){
         return 'null'
     }
-    const chat = char.chats[char.chatPage]
+    return getChatVarOf(char.chats[char.chatPage], key, char.defaultVariables)
+}
+
+/** getChatVar for a given chat instead of the open one. */
+export function getChatVarOf(chat:Chat, key:string, defaultVariables?:string): string {
     chat.scriptstate ??= {}
     const state = (chat.scriptstate['$' + key])
     if(state === undefined || state === null){
-        const defaultVariables = parseKeyValue(char.defaultVariables).concat(parseKeyValue(DBState.db.templateDefaultVariables))
-        const findResult = defaultVariables.find((f) => {
+        const defaults = parseKeyValue(defaultVariables).concat(parseKeyValue(liveDBState.db.templateDefaultVariables))
+        const findResult = defaults.find((f) => {
             return f[0] === key
         })
         if(findResult){
@@ -32,8 +37,13 @@ export function setChatVar(key:string, value:string): boolean {
     const context = getExecutionContext()
     if (context && !context.resolve()) return false
     const selectedChar = context?.resolve()?.characterIndex ?? get(selectedCharID)
-    const DBState = { db: context?.db ?? liveDBState.db }
-    const chat = DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage]
+    const db = context?.db ?? liveDBState.db
+    const chat = db.characters[selectedChar].chats[db.characters[selectedChar].chatPage]
+    return setChatVarOf(chat, key, value)
+}
+
+/** setChatVar for a given chat instead of the open one. */
+export function setChatVarOf(chat:Chat, key:string, value:string): boolean {
     chat.scriptstate ??= {}
 
     const stateKey = '$' + key

@@ -1,6 +1,6 @@
 import { lazyFunction, getExecutionContext, bindExecutionContext, withExecutionContext, type ChatExecutionContext } from './executionScope'
 import { asBuffer } from 'src/ts/util';
-import { getChatVar as getChatVarUnscoped, getGlobalChatVar as getGlobalChatVarUnscoped, setChatVar as setChatVarUnscoped } from "../parser/chatVar.svelte";
+import { getChatVar as getChatVarUnscoped, getChatVarOf, getGlobalChatVar as getGlobalChatVarUnscoped, setChatVar as setChatVarUnscoped, setChatVarOf } from "../parser/chatVar.svelte";
 import { hasher, type simpleCharacterArgument, risuChatParser as risuChatParserUnscoped } from "../parser/parser.svelte";
 import { LuaEngine, LuaFactory } from "wasmoon";
 import { getCurrentCharacter as getCurrentCharacterUnscoped, getCurrentChat as getCurrentChatUnscoped, getDatabase as getDatabaseUnscoped, setDatabase, type Chat, type character, type triggerscript } from "../storage/database.svelte";
@@ -8,7 +8,7 @@ import { get } from "svelte/store";
 import { ReloadChatPointer, ReloadGUIPointer, selectedCharID } from "../stores.svelte";
 import { alertSelect, alertError, alertInput, alertNormal, alertConfirm } from "../alert";
 import { HypaProcesser } from "./memory/hypamemory";
-import { generateAIImage } from "./stableDiff";
+import { generateAIImage, type ImageGenerationOptions } from "./stableDiff";
 import { writeInlayImage, getInlayAsset } from "./files/inlays";
 import type { OpenAIChat, MultiModal } from "./index.svelte";
 import { requestChatData as requestChatDataUnscoped, type StreamResponseChunk } from "./request/request";
@@ -122,7 +122,6 @@ export async function runScripted(code:string, arg:{
         await ensureLuaFactory()
     }
     ScriptingEngineState = await getOrCreateEngineState(mode, type);
-    
     return await ScriptingEngineState.mutex.runExclusive(async () => {
         ScriptingEngineState.executionContext = executionContext
         ScriptingEngineState.character = char
@@ -137,7 +136,7 @@ export async function runScripted(code:string, arg:{
                 console.log('Creating new Lua engine for mode:', mode)
                 ScriptingEngineState.engine?.global.close()
                 ScriptingEngineState.code = code
-                ScriptingEngineState.engine = await luaFactory.createEngine({injectObjects: true})
+                ScriptingEngineState.engine = await luaFactory.createEngine({injectObjects: true, enableProxy: false})
                 const luaEngine = ScriptingEngineState.engine
                 const editListeners = new Set<string>()
                 ScriptingEngineState.editListeners = editListeners
@@ -445,11 +444,16 @@ export async function runScripted(code:string, arg:{
                 }
             })
 
-            declareAPI('generateImage', async (id:string, value:string, negValue:string = '') => {
+            declareAPI('generateImage', async (id:string, value:string, negValue:string = '', options?:ImageGenerationOptions) => {
                 if(!ScriptingLowLevelIds.has(id)){
                     return
                 }
-                const gen = await generateAIImage(value, char as character, negValue, 'inlay')
+                const orientation = options?.orientation
+                if(orientation !== undefined && orientation !== 'landscape' && orientation !== 'portrait'){
+                    return 'Error: Image orientation must be landscape or portrait, received ' + orientation
+                }
+
+                const gen = await generateAIImage(value, char as character, negValue, 'inlay', options)
                 if(!gen){
                     return 'Error: Image generation failed'
                 }
@@ -985,7 +989,15 @@ export async function runScripted(code:string, arg:{
                     }
                 }
 
-                const options = parseLuaOptions(optionsStr) as { streaming?: boolean }
+                const options = parseLuaOptions(optionsStr) as { mode?: string, streaming?: boolean }
+                const modes = new Set(['emotion', 'memory', 'otherAx', 'submodel', 'translate'])
+                const mode = options.mode ?? 'otherAx'
+                if (!modes.has(mode)) {
+                    return JSON.stringify({
+                        result: 'Error: Invalid axLLM mode: ' + mode,
+                        success: false
+                    })
+                }
                 const result = await requestChatData({
                     formated: promptbody,
                     bias: {},
@@ -993,7 +1005,7 @@ export async function runScripted(code:string, arg:{
                     forceStreaming: options.streaming === true,
                     noMultiGen: true,
                     moduleId: ScriptingEngineState.moduleId,
-                }, 'otherAx')
+                }, mode as 'emotion' | 'memory' | 'otherAx' | 'submodel' | 'translate')
 
                 if(result.type === 'fail'){
                     return JSON.stringify({
@@ -1155,6 +1167,13 @@ export async function runScripted(code:string, arg:{
                         const func = luaEngine.global.get('onButtonClick')
                         if(func){
                             res = await func(accessKey, data)
+                        }
+                        break
+                    }
+                    case 'onFormSubmit':{
+                        const func = luaEngine.global.get('onFormSubmit')
+                        if(func){
+                            res = await func(accessKey, data, JSON.stringify(meta))
                         }
                         break
                     }
@@ -1532,11 +1551,17 @@ export async function runLuaEditTrigger<T extends string|OpenAIChat[]>(char:char
     }
 }
 
-export async function runLuaButtonTrigger(char:character|simpleCharacterArgument, data:string):Promise<any>{
+export async function runLuaInteractionTrigger(type: 'button'|'form', char: character|simpleCharacterArgument, triggerKey: string, meta?: object, chat: Chat = getCurrentChat()): Promise<any> {
+    const mode = type === 'button' ? 'onButtonClick' : 'onFormSubmit'
     const executionContext = getExecutionContext()
     const getModuleTriggers = bindExecutionContext(executionContext, () => getModuleTriggersUnscoped, true)
     const getToolTriggers = bindExecutionContext(executionContext, () => getToolTriggersUnscoped, true)
     const runScripted = bindExecutionContext(executionContext, () => runScriptedUnscoped, true)
+    // The caller awaits this while the user can open another chat, so every
+    // script here works on, and keeps its variables in, the chat it started on.
+    const defaultVariables = char.type !== 'simple' ? char.defaultVariables : undefined
+    const getVar = (key:string) => getChatVarOf(chat, key, defaultVariables)
+    const setVar = (key:string, value:string) => setChatVarOf(chat, key, value)
 
     let runResult
     try {
@@ -1548,10 +1573,14 @@ export async function runLuaButtonTrigger(char:character|simpleCharacterArgument
         for(let trigger of triggers){
             if(trigger?.effect?.[0]?.type === 'triggerlua'){
                 runResult = await runScripted(trigger.effect[0].code, {
-                    char: char,
+                    char,
+                    chat,
+                    data: triggerKey,
+                    getVar,
+                    setVar,
                     lowLevelAccess: trigger.lowLevelAccess,
-                    mode: 'onButtonClick',
-                    data: data,
+                    meta,
+                    mode,
                     moduleId: trigger.moduleId,
                 })
             }
