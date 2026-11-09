@@ -1,10 +1,8 @@
 import { lazyFunction, getExecutionContext, bindExecutionContext, type ChatExecutionContext } from './executionScope'
 import { get } from "svelte/store";
 import { getChatVar as getChatVarUnscoped, setChatVar as setChatVarUnscoped } from '../parser/chatVar.svelte';
-import {selectedCharID} from '../stores.svelte'
+import { DBState, selectedCharID } from '../stores.svelte'
 import { type Message, type loreBook } from "../storage/database.svelte";
-import { DBState as liveDBState } from '../stores.svelte';
-const DBState = liveDBState;
 import { tokenize } from "../tokenizer";
 import { risuChatParser as risuChatParserUnscoped } from "../parser/parser.svelte";
 import { findCharacterbyId, pickHashRand, selectSingleFile } from "../util";
@@ -117,17 +115,17 @@ export async function loadLoreBookV3Prompt(){
     const getModuleLorebooks = bindExecutionContext(executionContext, () => getModuleLorebooksUnscoped, true)
 
     const context = getExecutionContext()
-    const DBState = { db: context?.db ?? liveDBState.db }
+    const db = context?.db ?? DBState.db
     const selectedID = context?.resolve()?.characterIndex ?? get(selectedCharID)
-    const char = DBState.db.characters[selectedID]
+    const char = db.characters[selectedID]
     const page = char.chatPage
     const characterLore = char.globalLore ?? []
     const chatLore = char.chats[page].localLore ?? []
     const moduleLorebook = getModuleLorebooks()
     const fullLore = safeStructuredClone(characterLore.concat(chatLore).concat(moduleLorebook))
     const currentChat = char.chats[page].message
-    const loreDepth = char.loreSettings?.scanDepth ?? DBState.db.loreBookDepth
-    const loreToken = char.loreSettings?.tokenBudget ?? DBState.db.loreBookToken
+    const loreDepth = char.loreSettings?.scanDepth ?? db.loreBookDepth
+    const loreToken = char.loreSettings?.tokenBudget ?? db.loreBookToken
     const fullWordMatchingSetting = char.loreSettings?.fullWordMatching ?? false
     const chatLength = currentChat.length + 1 //includes first message
     const recursiveScanning = char.loreSettings?.recursiveScanning ?? true
@@ -167,7 +165,7 @@ export async function loadLoreBookV3Prompt(){
             if(msg.role === 'user'){
                 return {
                     source: `message ${i} by user`,
-                    prompt: `\x01{{${DBState.db.username}}}:` + msg.data + '\x01',
+                    prompt: `\x01{{${db.username}}}:` + msg.data + '\x01',
                     data: msg.data
                 }
             }
