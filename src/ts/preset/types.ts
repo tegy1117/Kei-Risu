@@ -251,6 +251,13 @@ export interface ResolvedModelProfileSnapshot {
     recommendedTokenizer?: RegistryTokenizer
 }
 
+export type PdfPromptConversionMode = 'off' | 'standard' | 'quality' | 'max'
+
+export interface PdfPromptConversionConfig {
+    mode: PdfPromptConversionMode
+    recentPlainTextPercent?: number
+}
+
 export interface ModelPreset {
     id: string
     name: string
@@ -315,6 +322,9 @@ export interface ModelPreset {
     // declare the 'vision' capability (e.g. ollama / openai-compatible); profiles
     // that DO declare 'vision' already send images and ignore this.
     imageInput?: boolean
+    // Convert text prompt segments to native-text PDFs at request time. Absent
+    // means off; original chat data and the context budget remain unchanged.
+    pdfPromptConversion?: PdfPromptConversionConfig
     // Fold non-leading system messages into user turns (role + content rewrite via
     // db.systemRoleReplacement/ContentReplacement). For models without a native
     // system role. Maps to the absence of LLMFlags.hasFullSystemPrompt.

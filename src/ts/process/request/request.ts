@@ -37,6 +37,7 @@ import {
 import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
 import { TOOL_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
 import { resolveWireModelId } from "src/ts/preset/adapter/wireInvariants";
+import { PdfPromptConversionError } from "src/ts/preset/adapter/pdfPromptConversion";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./jobFetch";
 import { toLogSource, toRequestKind } from "./logSource";
@@ -1157,7 +1158,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // chat): a re-send would only hit the per-chat guard again, so
             // spending the retry budget here just replaces the real failure
             // text with "busy" (issue #87).
-            noRetry: err instanceof ModelJobBusyError || err instanceof ModelJobConnectionLostError,
+            noRetry: err instanceof ModelJobBusyError || err instanceof ModelJobConnectionLostError || err instanceof PdfPromptConversionError,
         }
     }
 }

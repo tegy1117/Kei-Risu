@@ -4,7 +4,6 @@ import {
     ModelPresetAdapterError,
     extractErrorMessage,
     normalizeFetchError,
-    normalizeHttpStatus,
 } from './error'
 import { prepareAdapterRequest } from './resolveCredential'
 import { parseSseStream } from './sse'
@@ -21,6 +20,7 @@ import type {
     AdapterUsage,
 } from './types'
 import { resolveWireModelId } from './wireInvariants'
+import { convertPdfPromptMessages, normalizePdfHttpError, throwIfPdfResponseError } from './pdfPromptConversion'
 
 interface GeminiPart {
     text?: string
@@ -108,7 +108,7 @@ export async function sendGoogleChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpError(response, prepared)
     }
 
     let raw: unknown
@@ -120,6 +120,7 @@ export async function sendGoogleChatRequest(
         })
     }
 
+    throwIfPdfResponseError(raw, prepared)
     const parsed = parseGeminiResponse(raw)
     // Fire-and-forget cache lifecycle (create/extend/cleanup) off the observed
     // usage; never blocks or fails the response.
@@ -155,7 +156,7 @@ export async function* streamGoogleChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpError(response, prepared)
     }
 
     if (!response.body) {
@@ -181,6 +182,7 @@ export async function* streamGoogleChatRequest(
                 )
             }
             lastRaw = raw
+            throwIfPdfResponseError(raw, prepared)
             collectGeminiStreamParts(raw, echoParts)
             const delta = parseGeminiStreamDelta(raw)
             if (delta) {
@@ -235,7 +237,8 @@ async function prepareGeminiBody(
     const modelId = resolveWireModelId(preset, { vendorName: 'Google Gemini' })
     delete prepared.body.model
 
-    const { system, chat, systemCachePoint } = collectSystemAndChat(options.messages)
+    const messages = convertPdfPromptMessages(options.messages, preset.pdfPromptConversion, options.abortSignal)
+    const { system, chat, systemCachePoint } = collectSystemAndChat(messages)
     const { contents, cacheBoundary } = toGeminiContents(chat)
     // A cachePoint carried only by system messages (cache prompt card /
     // automaticCachePoint landing on the system role) used to be dropped when
@@ -368,6 +371,9 @@ function toGeminiContents(chat: AdapterChatMessage[]): {
 function toUserParts(message: AdapterChatMessage): GeminiPart[] {
     const parts: GeminiPart[] = []
     if (message.content.length > 0) parts.push({ text: message.content })
+    for (const pdf of message.documents ?? []) {
+        parts.push({ inlineData: { mimeType: pdf.mime, data: pdf.base64 } })
+    }
     for (const img of message.images ?? []) {
         parts.push({ inlineData: { mimeType: img.mime ?? 'image/png', data: img.base64 } })
     }
@@ -406,7 +412,7 @@ function parseToolArgs(args: string): unknown {
     }
 }
 
-async function deriveHttpError(response: Response): Promise<ModelPresetAdapterError> {
+async function deriveHttpError(response: Response, prepared: AdapterPreparedRequest): Promise<ModelPresetAdapterError> {
     let bodyText = ''
     try {
         bodyText = await response.text()
@@ -414,8 +420,7 @@ async function deriveHttpError(response: Response): Promise<ModelPresetAdapterEr
         // ignore body read failures
     }
     const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
-    return normalizeHttpStatus(response.status, message)
-        ?? new ModelPresetAdapterError('unknown', message, { status: response.status })
+    return normalizePdfHttpError(response.status, message, prepared)
 }
 
 // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).

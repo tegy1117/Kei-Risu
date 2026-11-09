@@ -9,6 +9,7 @@ export type {
     AdapterError,
     AdapterErrorKind,
     AdapterImagePart,
+    AdapterPdfPart,
     AdapterPreparedRequest,
     AdapterReasoningPart,
     AdapterRequestContext,

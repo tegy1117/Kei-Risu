@@ -3,7 +3,6 @@ import {
     ModelPresetAdapterError,
     extractErrorMessage,
     normalizeFetchError,
-    normalizeHttpStatus,
 } from './error'
 import { prepareAdapterRequest } from './resolveCredential'
 import { parseSseStream } from './sse'
@@ -21,6 +20,7 @@ import type {
     AdapterUsage,
 } from './types'
 import { resolveWireModelId } from './wireInvariants'
+import { configureOpenRouterPdf, convertPdfPromptMessages, normalizePdfHttpError, throwIfPdfResponseError } from './pdfPromptConversion'
 
 interface WireToolCall {
     id: string
@@ -37,6 +37,7 @@ interface WireToolCall {
 type WireContentPart =
     | { type: 'text'; text: string }
     | { type: 'image_url'; image_url: { url: string } }
+    | { type: 'file'; file: { filename: string; file_data: string } }
 
 interface WireMessage {
     role: AdapterChatMessage['role']
@@ -66,7 +67,7 @@ export async function sendChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpError(response, prepared)
     }
 
     let raw: unknown
@@ -78,6 +79,7 @@ export async function sendChatRequest(
         })
     }
 
+    throwIfPdfResponseError(raw, prepared)
     return parseChatCompletion(raw)
 }
 
@@ -101,7 +103,7 @@ export async function* streamChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpError(response, prepared)
     }
 
     if (!response.body) {
@@ -128,6 +130,7 @@ export async function* streamChatRequest(
                 )
             }
             lastRaw = raw
+            throwIfPdfResponseError(raw, prepared)
             collectOpenAiToolFragments(raw, toolFragments)
             collectOpenAiReasoningDetails(raw, reasoningDetails)
             const delta = parseChatStreamDelta(raw)
@@ -200,7 +203,9 @@ async function prepareOpenAiBody(
     // values / schema (not the customBody-merged body), then overwrite the
     // body fields after the shared merge so customBody collisions lose.
     const modelId = resolveWireModelId(preset, { vendorName: 'OpenAI-compatible' })
-    prepared.body.messages = options.messages.map(toWireMessage)
+    const messages = convertPdfPromptMessages(options.messages, preset.pdfPromptConversion, options.abortSignal)
+    prepared.body.messages = messages.map(toWireMessage)
+    configureOpenRouterPdf(prepared, messages)
     prepared.body.model = modelId
     prepared.body.stream = stream
     // Streaming responses carry no usage unless it is requested. Only set when
@@ -256,8 +261,8 @@ function toWireMessage(message: AdapterChatMessage): WireMessage {
         role: message.role,
         // A user turn with images becomes a content-part array; otherwise the
         // plain string (unchanged from text-only behavior).
-        content: message.role === 'user' && message.images && message.images.length > 0
-            ? toContentParts(message.content, message.images)
+        content: message.role === 'user' && (message.images?.length || message.documents?.length)
+            ? toContentParts(message)
             : message.content,
     }
     if (message.name !== undefined) wire.name = message.name
@@ -281,10 +286,13 @@ function toWireMessage(message: AdapterChatMessage): WireMessage {
 // Build the OpenAI multimodal content array: the text part (when non-empty)
 // followed by one image_url part per image. The image_url URL is the `data:` URL
 // reconstructed from the raw base64 + mime (OpenAI accepts data URLs directly).
-function toContentParts(text: string, images: AdapterImagePart[]): WireContentPart[] {
+function toContentParts(message: AdapterChatMessage): WireContentPart[] {
     const parts: WireContentPart[] = []
-    if (text.length > 0) parts.push({ type: 'text', text })
-    for (const img of images) {
+    if (message.content.length > 0) parts.push({ type: 'text', text: message.content })
+    for (const pdf of message.documents ?? []) {
+        parts.push({ type: 'file', file: { filename: pdf.filename, file_data: `data:${pdf.mime};base64,${pdf.base64}` } })
+    }
+    for (const img of message.images ?? []) {
         parts.push({ type: 'image_url', image_url: { url: toDataUrl(img) } })
     }
     return parts
@@ -294,7 +302,7 @@ function toDataUrl(img: AdapterImagePart): string {
     return `data:${img.mime ?? 'image/png'};base64,${img.base64}`
 }
 
-async function deriveHttpError(response: Response): Promise<ModelPresetAdapterError> {
+async function deriveHttpError(response: Response, prepared: AdapterPreparedRequest): Promise<ModelPresetAdapterError> {
     let bodyText = ''
     try {
         bodyText = await response.text()
@@ -302,8 +310,7 @@ async function deriveHttpError(response: Response): Promise<ModelPresetAdapterEr
         // ignore body read failures; status alone is enough to classify
     }
     const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
-    return normalizeHttpStatus(response.status, message)
-        ?? new ModelPresetAdapterError('unknown', message, { status: response.status })
+    return normalizePdfHttpError(response.status, message, prepared)
 }
 
 // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).

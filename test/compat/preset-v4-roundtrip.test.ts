@@ -42,6 +42,7 @@ function buildV4Fixture(): V4Fixture {
             {
                 id: 'preset-openai-1',
                 name: 'OpenAI GPT-4o',
+                pdfPromptConversion: { mode: 'quality', recentPlainTextPercent: 20 },
                 profileSnapshot: {
                     profileId: 'openai:standard',
                     profileVersion: 1,
@@ -91,6 +92,7 @@ function buildV4Fixture(): V4Fixture {
             {
                 id: 'preset-vertex-1',
                 name: 'Vertex Gemini',
+                pdfPromptConversion: { mode: 'max' },
                 profileSnapshot: {
                     profileId: 'vertex-openai:standard',
                     profileVersion: 2,

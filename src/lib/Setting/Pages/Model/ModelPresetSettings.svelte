@@ -10,6 +10,7 @@
     import SchemaFormRenderer from "src/lib/UI/GUI/SchemaFormRenderer.svelte";
     import TextAreaInput from "src/lib/UI/GUI/TextAreaInput.svelte";
     import SelectInput from "src/lib/UI/GUI/SelectInput.svelte";
+    import ShSelect from "src/lib/UI/GUI/ShSelect.svelte";
     import OptionInput from "src/lib/UI/GUI/OptionInput.svelte";
     import NumberInput from "src/lib/UI/GUI/NumberInput.svelte";
     import { tokenizerList } from "src/ts/tokenizer";
@@ -26,6 +27,8 @@
     import { getOfficialRegistry, getPresetUpdateStatus, syncRemoteRegistry } from "src/ts/preset/registry";
     import { buildSeenMap, computeRegistryNotice, noticeCount } from "src/ts/preset/registry/notice";
     import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS } from "src/ts/preset/types";
+    import type { PdfPromptConversionMode } from "src/ts/preset/types";
+    import { resolvePdfRecentPercent } from "src/ts/preset/adapter/pdfPromptConversion";
     import { DEFAULT_TOOL_LOOP_MAX_STEPS, MAX_TOOL_LOOP_MAX_STEPS } from "src/ts/preset/adapter";
     import { onMount } from "svelte";
     import { v4 as uuidv4 } from "uuid";
@@ -66,6 +69,12 @@
         editingId
             ? DBState.db.modelPresets.find(p => p.id === editingId) ?? null
             : null
+    );
+    const pdfMode = $derived(editingPreset?.pdfPromptConversion?.mode ?? 'off');
+    const pdfHelp = $derived(
+        pdfMode === 'standard' ? language.modelPresetPdfStandardHelp :
+        pdfMode === 'quality' ? language.modelPresetPdfQualityHelp :
+        pdfMode === 'max' ? language.modelPresetPdfMaxHelp : language.modelPresetPdfOffHelp
     );
 
     // If the preset being edited disappears (deleted elsewhere), fall back to list.
@@ -263,6 +272,37 @@
                                 </div>
                             </div>
                         {/if}
+                        <div class="flex flex-col gap-2">
+                            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                <div class="flex flex-col gap-0.5 min-w-0">
+                                    <span class="text-sm text-textcolor">{language.modelPresetPdfConversion}</span>
+                                    <span class="text-xs text-textcolor2">{language.modelPresetPdfConversionHelp}</span>
+                                </div>
+                                <ShSelect
+                                    value={pdfMode}
+                                    ariaLabel={language.modelPresetPdfConversion}
+                                    className="w-full sm:w-36 shrink-0"
+                                    onchange={(event) => { editingPreset.pdfPromptConversion = { ...editingPreset.pdfPromptConversion, mode: event.currentTarget.value as PdfPromptConversionMode } }}
+                                >
+                                    <OptionInput value="off">{language.modelPresetPdfOff}</OptionInput>
+                                    <OptionInput value="standard">{language.modelPresetPdfStandard}</OptionInput>
+                                    <OptionInput value="quality">{language.modelPresetPdfQuality}</OptionInput>
+                                    <OptionInput value="max">{language.modelPresetPdfMax}</OptionInput>
+                                </ShSelect>
+                            </div>
+                            <span class="text-xs text-textcolor2">{pdfHelp}</span>
+                            {#if pdfMode === 'quality'}
+                                <div class="flex items-center justify-between gap-3">
+                                    <label for="pdf-recent-percent" class="text-sm text-textcolor">{language.modelPresetPdfRecentPercent}</label>
+                                    <NumberInput
+                                        id="pdf-recent-percent"
+                                        value={resolvePdfRecentPercent(editingPreset.pdfPromptConversion?.recentPlainTextPercent)}
+                                        min={0} max={100} className="w-24 shrink-0"
+                                        onChange={(event) => { editingPreset.pdfPromptConversion = { mode: 'quality', recentPlainTextPercent: resolvePdfRecentPercent(event.currentTarget.valueAsNumber) } }}
+                                    />
+                                </div>
+                            {/if}
+                        </div>
                         {#if showFoldToggles}
                             <div class="flex items-center justify-between gap-3">
                                 <div class="flex flex-col gap-0.5 min-w-0">

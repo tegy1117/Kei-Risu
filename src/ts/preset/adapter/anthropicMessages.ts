@@ -3,7 +3,6 @@ import {
     ModelPresetAdapterError,
     extractErrorMessage,
     normalizeFetchError,
-    normalizeHttpStatus,
 } from './error'
 import { prepareAdapterRequest } from './resolveCredential'
 import { parseSseStream } from './sse'
@@ -20,6 +19,7 @@ import type {
     AdapterUsage,
 } from './types'
 import { resolveWireModelId } from './wireInvariants'
+import { convertPdfPromptMessages, normalizePdfHttpError, throwIfPdfResponseError } from './pdfPromptConversion'
 
 // `anthropic` base provider v2+ supplies `max_tokens: 4096` via `defaultBody`,
 // so freshly-resolved snapshots already carry the value. But presets persisted
@@ -44,6 +44,7 @@ interface AnthropicCacheControl {
 type AnthropicContentBlock = (
     | { type: 'text'; text: string }
     | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+    | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string }; title: string }
     | { type: 'thinking'; thinking: string; signature?: string }
     | { type: 'redacted_thinking'; data: string }
     | { type: 'tool_use'; id: string; name: string; input: unknown }
@@ -81,7 +82,7 @@ export async function sendAnthropicChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpError(response, prepared)
     }
 
     let raw: unknown
@@ -93,6 +94,7 @@ export async function sendAnthropicChatRequest(
         })
     }
 
+    throwIfPdfResponseError(raw, prepared)
     return parseAnthropicMessage(raw)
 }
 
@@ -116,7 +118,7 @@ export async function* streamAnthropicChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpError(response, prepared)
     }
 
     if (!response.body) {
@@ -131,6 +133,9 @@ export async function* streamAnthropicChatRequest(
             if (event.event === 'ping') continue
             if (event.event === 'message_stop') break
             if (event.event === 'error') {
+                let raw: unknown
+                try { raw = JSON.parse(event.data) } catch { /* retain ordinary stream error handling */ }
+                throwIfPdfResponseError(raw, prepared)
                 throw deriveStreamError(event.data)
             }
             if (event.data.length === 0) continue
@@ -145,6 +150,7 @@ export async function* streamAnthropicChatRequest(
                 )
             }
             lastRaw = raw
+            throwIfPdfResponseError(raw, prepared)
             if (isPlainObject(raw)) collectAnthropicStreamBlock(event.event, raw, blocks, partialInputs)
             const delta = parseAnthropicStreamDelta(event.event, raw)
             if (delta) yield delta
@@ -190,7 +196,8 @@ async function prepareAnthropicBody(
     //   - model              → adapter selects the wire model id
     //   - stream             → adapter controls the transport mode
     const modelId = resolveWireModelId(preset, { vendorName: 'Anthropic' })
-    const { system, systemCachePoint, chat } = collectSystemAndChat(options.messages)
+    const messages = convertPdfPromptMessages(options.messages, preset.pdfPromptConversion, options.abortSignal)
+    const { system, systemCachePoint, chat } = collectSystemAndChat(messages)
     const cacheControl: AnthropicCacheControl = options.anthropicCache1h
         ? { type: 'ephemeral', ttl: '1h' }
         : { type: 'ephemeral' }
@@ -356,6 +363,9 @@ function toAnthropicWireMessages(
 // wants the raw base64 + media_type split out of the data URL.
 function toUserBlocks(message: AdapterChatMessage): AnthropicContentBlock[] {
     const blocks: AnthropicContentBlock[] = [{ type: 'text', text: message.content }]
+    for (const pdf of message.documents ?? []) {
+        blocks.push({ type: 'document', title: pdf.filename, source: { type: 'base64', media_type: pdf.mime, data: pdf.base64 } })
+    }
     for (const img of message.images ?? []) {
         blocks.push({
             type: 'image',
@@ -394,7 +404,7 @@ function parseToolArgs(args: string): unknown {
     }
 }
 
-async function deriveHttpError(response: Response): Promise<ModelPresetAdapterError> {
+async function deriveHttpError(response: Response, prepared: AdapterPreparedRequest): Promise<ModelPresetAdapterError> {
     let bodyText = ''
     try {
         bodyText = await response.text()
@@ -402,8 +412,7 @@ async function deriveHttpError(response: Response): Promise<ModelPresetAdapterEr
         // ignore body read failures; status alone is enough to classify
     }
     const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
-    return normalizeHttpStatus(response.status, message)
-        ?? new ModelPresetAdapterError('unknown', message, { status: response.status })
+    return normalizePdfHttpError(response.status, message, prepared)
 }
 
 function deriveStreamError(data: string): ModelPresetAdapterError {

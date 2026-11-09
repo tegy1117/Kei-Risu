@@ -94,7 +94,15 @@ export interface AdapterImagePart {
     mime?: string
 }
 
+export interface AdapterPdfPart {
+    kind: 'pdf'
+    base64: string
+    mime: 'application/pdf'
+    filename: string
+}
+
 export interface AdapterChatMessage {
+    documents?: AdapterPdfPart[]         // generated PDF prompt segments, user turns only
     role: AdapterChatRole
     content: string
     name?: string

@@ -20,6 +20,7 @@
     interface Props {
         value: string | number;
         className?: string;
+        ariaLabel?: string;
         size?: 'sm'|'md'|'lg'|'xl';
         children?: import('svelte').Snippet;
         onchange?: (event: Event & {
@@ -30,6 +31,7 @@
     let {
         value = $bindable(),
         className = "",
+        ariaLabel,
         size = 'md',
         children,
         onchange
@@ -208,6 +210,7 @@
         </div>
         <select
             bind:this={selectEl}
+            aria-label={ariaLabel}
             bind:value
             {onchange}
             class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
@@ -216,7 +219,7 @@
         </select>
     </div>
 {:else}
-    <select bind:this={selectEl} bind:value {onchange} class="sr-only" tabindex={-1}>
+    <select bind:this={selectEl} bind:value {onchange} aria-label={ariaLabel} class="sr-only" tabindex={-1}>
         {@render children?.()}
     </select>
 
@@ -225,6 +228,7 @@
     <div
         bind:this={triggerEl}
         role="combobox"
+        aria-label={ariaLabel}
         aria-controls={listboxId}
         aria-expanded={open ? 'true' : 'false'}
         aria-haspopup="listbox"
