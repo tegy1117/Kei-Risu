@@ -1,7 +1,7 @@
 {
   "name": "kei-risu",
   "private": true,
-  "version": "2026.10.10",
+  "version": "2026.11.10",
   "packageManager": "pnpm@10.34.1",
   "engines": {
     "node": ">=22.12.0"
